@@ -27,3 +27,30 @@ async def test_query_returns_market_evidence_for_industry():
     out = await adapter.query(q)
     assert len(out) >= 1
     assert out[0].source_type == "market_data"
+
+
+@pytest.mark.asyncio
+async def test_resolver_falls_back_to_like(monkeypatch):
+    from explain_agent.adapters.clickhouse_market import IndustryResolver
+
+    mock_engine = MagicMock()
+    mock_conn = MagicMock()
+    mock_engine.begin.return_value.__enter__.return_value = mock_conn
+
+    call_count = {"n": 0}
+
+    def fake_exec(sql, params):
+        call_count["n"] += 1
+        result = MagicMock()
+        if "LIKE" in sql:
+            result.fetchall.return_value = [(99, "300001.SZ")]
+        else:
+            result.fetchall.return_value = []
+        return result
+
+    mock_conn.exec_driver_sql.side_effect = fake_exec
+
+    resolver = IndustryResolver(mock_engine)
+    out = resolver.resolve_industry_symbols_with_codes("光伏")
+    assert out == [(99, "300001.SZ")]
+    assert call_count["n"] >= 4
