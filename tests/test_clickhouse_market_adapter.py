@@ -30,6 +30,37 @@ async def test_query_returns_market_evidence_for_industry():
 
 
 @pytest.mark.asyncio
+async def test_snippet_contains_company_name_and_code():
+    """snippet 不能含 symbol_id 数字 ID, 应为'长电科技(300661)'格式。"""
+    fake_resolver = MagicMock()
+    fake_resolver.resolve_industry_symbols.return_value = [2332, 1057]
+    fake_resolver.resolve_symbol_meta = MagicMock(
+        return_value={2332: ("300661", "长电科技"), 1057: ("002475", "立讯精密")}
+    )
+
+    mock_ch = MagicMock()
+    result_obj = MagicMock()
+    result_obj.result_rows = [
+        (2332, 100.0, 92.52, 1e9),
+        (1057, 50.0, 60.20, 5e8),
+    ]
+    mock_ch.query.return_value = result_obj
+
+    adapter = ClickHouseMarketAdapter(mock_ch, fake_resolver)
+    q = AdapterQuery(
+        keywords=[], time_window=(date(2026, 5, 5), date(2026, 5, 11)),
+        target="半导体",
+    )
+    out = await adapter.query(q)
+
+    assert len(out) == 1
+    snippet = out[0].snippet
+    assert "长电科技(300661)" in snippet
+    assert "立讯精密(002475)" in snippet
+    assert "symbol_id=" not in snippet
+
+
+@pytest.mark.asyncio
 async def test_resolver_falls_back_to_like(monkeypatch):
     from explain_agent.adapters.clickhouse_market import IndustryResolver
 

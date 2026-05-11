@@ -40,6 +40,21 @@ class IndustryResolver:
             rows = conn.exec_driver_sql(sql, params).fetchall()
         return [(r[0], r[1]) for r in rows]
 
+    def resolve_symbol_meta(self, symbol_ids: list[int]) -> dict[int, tuple[str, str]]:
+        """批量查 symbol_id → (code, name)，便于把 symbol_id 翻译成人类可读形式。"""
+        if not symbol_ids:
+            return {}
+        from sqlalchemy import text, bindparam
+        sql = """
+        SELECT symbol_id, COALESCE(code, symbol) AS code, COALESCE(name, symbol) AS name
+        FROM quant_data.stock_symbol
+        WHERE symbol_id IN :ids
+        """
+        stmt = text(sql).bindparams(bindparam("ids", expanding=True))
+        with self.engine.begin() as conn:
+            rows = conn.execute(stmt, {"ids": list(symbol_ids)}).fetchall()
+        return {int(r[0]): (str(r[1]), str(r[2])) for r in rows}
+
 
 class ClickHouseMarketAdapter:
     name = "clickhouse_market"
@@ -79,7 +94,23 @@ class ClickHouseMarketAdapter:
             return []
 
         leaders = rows[:3]
-        leader_snippet = "; ".join(f"symbol_id={r[0]} 涨跌={r[2]:.2f}%" for r in leaders)
+        meta: dict[int, tuple[str, str]] = {}
+        try:
+            raw_meta = self.resolver.resolve_symbol_meta([int(r[0]) for r in leaders])
+            if isinstance(raw_meta, dict):
+                meta = raw_meta
+        except Exception:
+            pass
+        leader_parts = []
+        for r in leaders:
+            sid = int(r[0])
+            entry = meta.get(sid)
+            if entry and isinstance(entry, tuple) and len(entry) == 2:
+                code, name = entry
+            else:
+                code, name = str(sid), f"id={sid}"
+            leader_parts.append(f"{name}({code}) 涨跌={r[2]:.2f}%")
+        leader_snippet = "; ".join(leader_parts)
         return [
             Evidence(
                 id=str(uuid4()),
