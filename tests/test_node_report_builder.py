@@ -120,6 +120,53 @@ async def test_strip_keeps_claims_without_numbers():
 
 
 @pytest.mark.asyncio
+async def test_dim_reports_rewritten_by_strong_llm():
+    """有数据的维度由强模型重写，no_data 维度保持原文。"""
+    fake_llm = MagicMock()
+    fake_llm.chat.side_effect = [
+        json.dumps({"claims": [{"text": "test claim", "evidence_ids": ["e1"]}]}),
+        "[政策维度重写] 见 [e1] 政策利好。",
+    ]
+    state = new_attribution_state("test")
+    state["target"] = "X"
+    state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
+    state["market_facts"] = {"snippet": ""}
+    state["dimension_results"] = {
+        "policy": DimensionResult(
+            evidence=[make_ev("e1", "政策证据")],
+            mini_summary="弱模型版", retry_count=1, no_data=False, confidence="high",
+        ),
+        "technical": DimensionResult(
+            evidence=[], mini_summary="本维度未检索到相关证据",
+            retry_count=10, no_data=True, confidence="low",
+        ),
+    }
+    out = await report_builder_node(state, llm=fake_llm)
+    assert "[政策维度重写]" in out["dimension_reports"]["policy"]
+    assert "[e1]" in out["dimension_reports"]["policy"]
+    assert out["dimension_reports"]["technical"] == "本维度未检索到相关证据"
+
+
+@pytest.mark.asyncio
+async def test_dim_reports_skip_llm_when_no_data():
+    """no_data 维度不应触发任何 strong LLM 调用 (除 narrative)。"""
+    fake_llm = MagicMock()
+    fake_llm.chat.side_effect = [
+        json.dumps({"claims": []}),
+    ]
+    state = new_attribution_state("test")
+    state["target"] = "X"
+    state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
+    state["market_facts"] = {"snippet": ""}
+    state["dimension_results"] = {
+        "d1": DimensionResult(evidence=[], mini_summary="无数据", retry_count=1, no_data=True, confidence="low"),
+        "d2": DimensionResult(evidence=[], mini_summary="无数据", retry_count=1, no_data=True, confidence="low"),
+    }
+    await report_builder_node(state, llm=fake_llm)
+    assert fake_llm.chat.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_narrative_falls_back_when_json_invalid():
     """JSON 解析失败时回退到纯文本 narrative，claims 为空。"""
     fake_llm = MagicMock()

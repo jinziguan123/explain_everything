@@ -5,6 +5,19 @@ from explain_agent.graph.state import AttributionState, Citation, NarrativeClaim
 from explain_agent.llm import LLMClient, get_strong_llm
 
 
+DIM_REPORT_SYSTEM = """你是该维度的资深分析师。基于给定证据池，写一段 200-400 字的维度内归因报告。
+
+要求:
+- 每个关键论点后用 [e_xxx] 标注证据 id (例如: "存储芯片涨价 [e_001] [e_002]")
+- evidence_id 必须来自给定证据池
+- 不出现未在证据中出现的数字或具体描述
+- 论述结构清晰、可读
+- 不预测,不推荐操作
+
+直接输出维度报告文本(不要 JSON, 不要标题, 不要前缀)。
+"""
+
+
 NARRATIVE_SYSTEM = """你是审慎的金融研究员。基于以下六维证据池，写一段 80-150 字的归因叙事。
 
 输出格式 (JSON):
@@ -43,6 +56,33 @@ def _extract_numbers(text: str) -> list[str]:
 
 def _normalize(token: str) -> str:
     return token.replace(" ", "")
+
+
+def _rewrite_dim_report(
+    dim_id: str,
+    dim_result,
+    target: str,
+    market_facts: dict,
+    llm: LLMClient,
+) -> str:
+    """单个维度的强模型重写。no_data 维度直接返回原 mini_summary。"""
+    if dim_result["no_data"] or not dim_result["evidence"]:
+        return dim_result["mini_summary"]
+
+    evidence_dump = [
+        {"id": e.id, "source_type": e.source_type, "snippet": e.snippet[:300]}
+        for e in dim_result["evidence"]
+    ]
+    user = (
+        f"维度: {dim_id}\n"
+        f"标的: {target}\n"
+        f"市场锚点: {market_facts.get('snippet', '')}\n"
+        f"该维度证据池:\n{json.dumps(evidence_dump, ensure_ascii=False)}"
+    )
+    try:
+        return llm.chat(system=DIM_REPORT_SYSTEM, user=user, max_tokens=4000)
+    except Exception:
+        return dim_result["mini_summary"]
 
 
 def _strip_unverified_numbers(
@@ -122,7 +162,10 @@ async def report_builder_node(
         narrative_claims, unverified_drops = _strip_unverified_numbers(narrative_claims, all_evidence)
         narrative = " ".join(c["text"] for c in narrative_claims)
 
-    dim_reports = {dim_id: r["mini_summary"] for dim_id, r in dim_results.items()}
+    dim_reports = {
+        dim_id: _rewrite_dim_report(dim_id, r, state["target"], state["market_facts"], llm)
+        for dim_id, r in dim_results.items()
+    }
 
     citations: list[Citation] = []
     seen_ids: set[str] = set()
