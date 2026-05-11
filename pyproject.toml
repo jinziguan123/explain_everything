@@ -26,6 +26,9 @@ dependencies = [
     "typer>=0.25.1",
 ]
 
+[project.scripts]
+explain-ingest-news = "explain_agent.cli.ingest_news:app"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
