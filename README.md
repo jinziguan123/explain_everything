@@ -62,3 +62,13 @@ docs/plans/            设计文档 / 实施计划
 - [x] 全部单测通过（66 passed，含 persist Phase 2.B 字段回归保护）
 - [x] 端到端 smoke：session `s_869d3239` 跑通，6 维全部有数据（vs 2.A 的 4/6），61 条 citations，3 条带引用 narrative_claims，confidence=low
 
+## Phase 2.C 验收状态
+
+- [x] CLI REPL（prompt_toolkit + 启动列表 + slash command 本地拦截）
+- [x] Followup 链路（inline async + 中等 ~10K 上下文 + 后台异步落盘）
+- [x] Session 管理（`/sessions` `/load` `/clear` `/new` `/help` `/quit`）
+- [x] symbol_id 翻译为"公司名(代码)"格式
+- [x] narrative prompt 鼓励多 source_type 引用
+- [x] 全部单测通过（93 passed，Phase 2.A/2.B 全部回归不破）
+- [ ] 端到端 REPL smoke（用户手动验收，因 main graph 单次需 ~10 min）
+
