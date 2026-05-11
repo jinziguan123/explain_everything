@@ -80,3 +80,37 @@ def test_handle_sessions_prints_empty_message_when_none(monkeypatch):
     handle_sessions(engine=MagicMock(), console=console)
     out = buf.getvalue()
     assert "无历史 session" in out or "no session" in out.lower()
+
+
+def test_handle_load_updates_state(monkeypatch):
+    from explain_agent.cli.repl.commands import handle_load
+    from explain_agent.cli.repl.state import ReplState
+
+    fake_session = {
+        "session_id": "s_abc", "target": "半导体",
+        "narrative": "测试叙事", "dimension_reports": {}, "citations": [],
+    }
+    monkeypatch.setattr(
+        "explain_agent.cli.repl.commands.load_session",
+        lambda engine, sid: fake_session if sid == "s_abc" else None,
+    )
+    state = ReplState()
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
+    handle_load(engine=MagicMock(), console=console, state=state, session_id="s_abc")
+    assert state.current_session_id == "s_abc"
+    assert state.current_session["target"] == "半导体"
+    assert state.followup_history == []
+
+
+def test_handle_load_unknown_session(monkeypatch):
+    from explain_agent.cli.repl.commands import handle_load
+    from explain_agent.cli.repl.state import ReplState
+    monkeypatch.setattr(
+        "explain_agent.cli.repl.commands.load_session", lambda engine, sid: None,
+    )
+    state = ReplState()
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=120)
+    handle_load(engine=MagicMock(), console=console, state=state, session_id="s_nope")
+    assert state.current_session_id is None
+    assert "找不到" in buf.getvalue() or "not found" in buf.getvalue().lower()

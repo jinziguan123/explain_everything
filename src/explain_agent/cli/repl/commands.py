@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from rich.console import Console
 from rich.table import Table
 
-from explain_agent.cli.repl.state import list_recent_sessions
+from explain_agent.cli.repl.state import list_recent_sessions, load_session, ReplState
 
 
 class SlashCommandError(ValueError):
@@ -58,3 +58,20 @@ def handle_sessions(engine, console: Console, limit: int = 10) -> None:
             str(s["followup_count"]),
         )
     console.print(table)
+
+
+def handle_load(engine, console: Console, state: ReplState, session_id: str) -> None:
+    if not session_id:
+        console.print("[red]/load 需要 session_id 参数[/red]")
+        return
+    session = load_session(engine, session_id)
+    if session is None:
+        console.print(f"[red]找不到 session: {session_id}[/red]")
+        return
+    state.current_session_id = session_id
+    state.current_session = session
+    state.followup_history = []
+    console.print(
+        f"[green]✓[/green] 切到 session [bold]{session_id}[/bold] "
+        f"(target=[cyan]{session.get('target')}[/cyan])"
+    )
