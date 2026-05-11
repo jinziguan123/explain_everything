@@ -24,6 +24,21 @@ class IndustryResolver:
                 return [r[0] for r in rows]
         return []
 
+    def resolve_industry_symbols_with_codes(self, industry_name: str) -> list[tuple[int, str]]:
+        for level_col in ("sw_l1", "sw_l2", "sw_l3"):
+            sql = f"""
+            SELECT s.symbol_id, s.symbol
+            FROM quant_data.fr_industry_current ic
+            JOIN quant_data.stock_symbol s
+              ON s.symbol = ic.symbol OR s.code = ic.symbol
+            WHERE ic.{level_col} = %(name)s AND s.is_active = 1
+            """
+            with self.engine.begin() as conn:
+                rows = conn.exec_driver_sql(sql, {"name": industry_name}).fetchall()
+            if rows:
+                return [(r[0], r[1]) for r in rows]
+        return []
+
 
 class ClickHouseMarketAdapter:
     name = "clickhouse_market"
