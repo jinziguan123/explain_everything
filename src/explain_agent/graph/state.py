@@ -25,6 +25,11 @@ class Citation(TypedDict):
     source_type: str
 
 
+class NarrativeClaim(TypedDict):
+    text: str
+    evidence_ids: list[str]
+
+
 class AttributionState(TypedDict, total=False):
     # 输入
     raw_question: str
@@ -53,6 +58,8 @@ class AttributionState(TypedDict, total=False):
 
     # 最终输出
     narrative: str
+    narrative_claims: list[NarrativeClaim]
+    unverified_drops: list[str]
     dimension_reports: dict[str, str]
     citations: list[Citation]
     confidence: Literal["high", "medium", "low"]
@@ -73,6 +80,8 @@ def new_attribution_state(raw_question: str, session_id: str | None = None) -> A
         "subbranch_results": {},
         "needs_subbranch": False,
         "narrative": "",
+        "narrative_claims": [],
+        "unverified_drops": [],
         "dimension_reports": {},
         "citations": [],
         "confidence": "medium",

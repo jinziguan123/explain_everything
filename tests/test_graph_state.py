@@ -38,6 +38,21 @@ def test_subbranch_spec():
     assert spec["name"] == "美国 HBM 制裁"
 
 
+def test_narrative_claim_typeddict():
+    from explain_agent.graph.state import NarrativeClaim
+    c: NarrativeClaim = {
+        "text": "半导体板块上涨 5%",
+        "evidence_ids": ["e_001", "e_007"],
+    }
+    assert c["evidence_ids"] == ["e_001", "e_007"]
+
+
+def test_new_state_has_narrative_claims_and_drops():
+    s = new_attribution_state(raw_question="test")
+    assert s["narrative_claims"] == []
+    assert s["unverified_drops"] == []
+
+
 def test_citation():
     c: Citation = {
         "evidence_id": "e_001",
