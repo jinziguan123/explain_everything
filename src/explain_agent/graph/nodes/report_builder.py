@@ -34,6 +34,54 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
+_NUM_PATTERN = re.compile(r"\d+(?:\.\d+)?\s*(?:%|亿|万|千|百|次|倍|个|台|条)?")
+
+
+def _extract_numbers(text: str) -> list[str]:
+    return _NUM_PATTERN.findall(text)
+
+
+def _normalize(token: str) -> str:
+    return token.replace(" ", "")
+
+
+def _strip_unverified_numbers(
+    claims: list[NarrativeClaim],
+    evidence_pool: list,
+) -> tuple[list[NarrativeClaim], list[str]]:
+    """对每个 claim 检查其包含的数字 token 是否能在引用证据中找到精确匹配。
+    找不到 → 整 claim 删除并加入 unverified_drops。
+    无数字的 claim 直接保留。
+    """
+    evidence_by_id = {e.id: e for e in evidence_pool}
+    kept: list[NarrativeClaim] = []
+    dropped: list[str] = []
+
+    for claim in claims:
+        numbers = _extract_numbers(claim["text"])
+        if not numbers:
+            kept.append(claim)
+            continue
+
+        haystacks: list[str] = []
+        for eid in claim["evidence_ids"]:
+            e = evidence_by_id.get(eid)
+            if e is None:
+                continue
+            haystacks.append(e.snippet or "")
+            if e.raw_payload is not None:
+                haystacks.append(json.dumps(e.raw_payload, ensure_ascii=False, default=str))
+        haystack = _normalize("\n".join(haystacks))
+
+        all_found = all(_normalize(n) in haystack for n in numbers)
+        if all_found:
+            kept.append(claim)
+        else:
+            dropped.append(claim["text"])
+
+    return kept, dropped
+
+
 async def report_builder_node(
     state: AttributionState,
     llm: LLMClient | None = None,
@@ -63,6 +111,7 @@ async def report_builder_node(
     if not data or "claims" not in data:
         narrative = raw
         narrative_claims: list[NarrativeClaim] = []
+        unverified_drops: list[str] = []
     else:
         claims_raw = data.get("claims", [])
         narrative_claims = [
@@ -70,6 +119,7 @@ async def report_builder_node(
             for c in claims_raw
             if c.get("text") and c.get("evidence_ids")
         ]
+        narrative_claims, unverified_drops = _strip_unverified_numbers(narrative_claims, all_evidence)
         narrative = " ".join(c["text"] for c in narrative_claims)
 
     dim_reports = {dim_id: r["mini_summary"] for dim_id, r in dim_results.items()}
@@ -97,6 +147,7 @@ async def report_builder_node(
     return {
         "narrative": narrative,
         "narrative_claims": narrative_claims,
+        "unverified_drops": unverified_drops,
         "dimension_reports": dim_reports,
         "citations": citations,
         "confidence": confidence,
