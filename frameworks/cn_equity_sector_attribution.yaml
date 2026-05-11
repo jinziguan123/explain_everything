@@ -1,0 +1,78 @@
+domain_id: cn_equity_sector_attribution
+display_name: A股板块/主题异动归因
+
+match_patterns:
+  - "为什么.*(板块|主题|概念|行业).*(涨|跌|异动|涨停|大跌)"
+  - "(板块|行业).*怎么了"
+
+dimensions:
+  - id: policy
+    name: 政策/宏观
+    priority: 1
+    data_sources:
+      - news_corpus
+    query_template: "最近 {time_window} 内与 {target} 相关的政策、监管表态、高层讲话"
+    evidence_filter:
+      tag_filter:
+        policy_type: not_null
+      min_relevance: 0.55
+
+  - id: industry_chain
+    name: 产业链/基本面
+    priority: 1
+    data_sources:
+      - mysql_fundamentals
+      - clickhouse_market
+      - news_corpus
+    query_template: "{target} 产业链上下游近期变化：原料、需求、订单、产能、龙头公司动态"
+    needs_market_context: true
+
+  - id: capital_flow
+    name: 资金面
+    priority: 2
+    data_sources:
+      - akshare_capital_flow
+      - clickhouse_market
+    query_template: "{time_window} 内 {target} 资金流向、龙虎榜、ETF 申赎、北向"
+
+  - id: sentiment_event
+    name: 情绪/事件
+    priority: 2
+    data_sources:
+      - news_corpus
+    query_template: "{time_window} 内 {target} 相关的突发新闻、社交热度、关联概念联动"
+    evidence_filter:
+      tag_filter:
+        event_type_in: ["事件", "产业链"]
+
+  - id: international
+    name: 国际映射
+    priority: 3
+    data_sources:
+      - news_corpus
+    query_template: "{time_window} 内海外同行业表现、地缘事件、商品价格对 {target} 的潜在影响"
+    evidence_filter:
+      tag_filter:
+        event_type: 海外
+
+  - id: technical
+    name: 技术面
+    priority: 3
+    data_sources:
+      - clickhouse_market
+    query_template: "{target} 板块及其龙头股的技术形态、量价关系、近 N 日突破/支撑"
+
+worker_config:
+  max_rounds: 10
+  soft_terminate_no_gain_rounds: 2
+  max_concurrency: 3
+
+models:
+  parse: weak
+  intent_classifier: weak
+  query_gen: weak
+  evidence_eval: weak
+  mini_summary: weak
+  synthesizer: strong
+  narrative: strong
+  dimension_report: weak
