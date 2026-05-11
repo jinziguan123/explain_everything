@@ -29,3 +29,14 @@ tests/                 单元测试 + 集成测试
 migrations/mysql/      MySQL schema 迁移脚本
 docs/plans/            设计文档 / 实施计划
 ```
+
+## Phase 1 验收状态
+
+- [x] Qdrant 已启动且 3 个 collection 已创建
+- [x] explain_agent MySQL schema 7 张表已就绪
+- [x] 4 个 P0 Adapter 单测通过：clickhouse_market / mysql_fundamentals / akshare_capital_flow / news_corpus
+- [x] BGE-M3 embedding 本地可跑
+- [x] News 采集 + 标签 + 向量化 pipeline 完整
+- [x] CLI explain-ingest-news 可执行
+- [x] 端到端集成测试通过：4 个 Adapter 中 ≥3 个能返回真实 Evidence
+
