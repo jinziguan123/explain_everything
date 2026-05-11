@@ -42,6 +42,7 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "integration: 需要真实数据库/网络的集成测试，CI 默认跳过",
+    "slow: 较慢的测试（模型加载、大批量数据）",
 ]
 addopts = "-m 'not integration'"
 
