@@ -59,6 +59,6 @@ docs/plans/            设计文档 / 实施计划
 - [x] 数值校验：narrative 中数字必须能在证据中精确匹配，否则整句删除
 - [x] 维度报告重写：6 维 strong model 重写 + [e_xxx] 引用
 - [x] confidence 重打分：cited_count × source_type 多样性
-- [x] 全部单测通过（含 Phase 2.A 回归，65 passed）
-- [ ] 端到端 smoke：待执行（Phase 2.A → 2.B 调用增加，预计 12-15 min）
+- [x] 全部单测通过（66 passed，含 persist Phase 2.B 字段回归保护）
+- [x] 端到端 smoke：session `s_869d3239` 跑通，6 维全部有数据（vs 2.A 的 4/6），61 条 citations，3 条带引用 narrative_claims，confidence=low
 

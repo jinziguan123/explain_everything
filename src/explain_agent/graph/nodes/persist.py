@@ -40,6 +40,9 @@ async def persist_node(state: AttributionState, engine) -> dict:
         },
         "dimension_reports": state.get("dimension_reports", {}),
         "citations": state.get("citations", []),
+        "narrative": state.get("narrative", ""),
+        "narrative_claims": state.get("narrative_claims", []),
+        "unverified_drops": state.get("unverified_drops", []),
     }
 
     with engine.begin() as conn:
