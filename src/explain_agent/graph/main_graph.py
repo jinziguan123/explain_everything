@@ -1,3 +1,6 @@
+import time
+from typing import Awaitable, Callable
+
 from langgraph.graph import StateGraph, END
 
 from explain_agent.graph.state import AttributionState
@@ -12,14 +15,35 @@ from explain_agent.graph.nodes.persist import persist_node
 from explain_agent.graph.framework_loader import load_framework
 
 
+NodeEvent = Callable[..., None]
+
+
 def build_main_graph(
     market_adapter,
     worker_factory,
     weak_llm,
     strong_llm,
     engine,
+    on_node_event: NodeEvent | None = None,
 ):
     g = StateGraph(AttributionState)
+
+    def _trace(name: str, fn: Callable[..., Awaitable[dict]]):
+        if on_node_event is None:
+            return fn
+
+        async def traced(state):
+            on_node_event("start", name)
+            t0 = time.perf_counter()
+            try:
+                out = await fn(state)
+                on_node_event("end", name, time.perf_counter() - t0)
+                return out
+            except Exception as e:
+                on_node_event("error", name, time.perf_counter() - t0, repr(e))
+                raise
+
+        return traced
 
     async def _parse(state):
         return await parse_question_node(state, llm=weak_llm)
@@ -48,15 +72,15 @@ def build_main_graph(
     async def _persist(state):
         return await persist_node(state, engine=engine)
 
-    g.add_node("parse", _parse)
-    g.add_node("router", _router)
-    g.add_node("load_framework", _load_fw)
-    g.add_node("market_facts", _facts)
-    g.add_node("fan_out", _fan_out)
-    g.add_node("synth", _synth)
-    g.add_node("dynamic_sub", _sub)
-    g.add_node("report", _report)
-    g.add_node("persist", _persist)
+    g.add_node("parse", _trace("parse", _parse))
+    g.add_node("router", _trace("router", _router))
+    g.add_node("load_framework", _trace("load_framework", _load_fw))
+    g.add_node("market_facts", _trace("market_facts", _facts))
+    g.add_node("fan_out", _trace("fan_out", _fan_out))
+    g.add_node("synth", _trace("synth", _synth))
+    g.add_node("dynamic_sub", _trace("dynamic_sub", _sub))
+    g.add_node("report", _trace("report", _report))
+    g.add_node("persist", _trace("persist", _persist))
 
     g.set_entry_point("parse")
     g.add_edge("parse", "router")

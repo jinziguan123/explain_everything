@@ -1,7 +1,8 @@
 import json
 import re
+import time
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Callable
 
 from explain_agent.core.types import AdapterQuery, Evidence
 from explain_agent.graph.state import DimensionResult
@@ -40,11 +41,13 @@ def _extract_json(text: str) -> dict | None:
 
 class DimensionWorker:
     def __init__(self, dimension_config: dict, worker_config: dict,
-                 llm: LLMClient, adapter_registry: dict[str, Any]):
+                 llm: LLMClient, adapter_registry: dict[str, Any],
+                 on_done: Callable[..., None] | None = None):
         self.dim = dimension_config
         self.cfg = worker_config
         self.llm = llm
         self.registry = adapter_registry
+        self.on_done = on_done
 
     async def run(
         self,
@@ -55,6 +58,7 @@ class DimensionWorker:
         max_rounds = self.cfg.get("max_rounds", 10)
         soft_terminate = self.cfg.get("soft_terminate_no_gain_rounds", 2)
 
+        t0 = time.perf_counter()
         all_evidence: list[Evidence] = []
         rounds = 0
         no_gain_count = 0
@@ -77,17 +81,35 @@ class DimensionWorker:
                 break
 
         if not all_evidence:
-            return DimensionResult(
+            result = DimensionResult(
                 evidence=[], mini_summary="本维度未检索到相关证据",
                 retry_count=rounds, no_data=True, confidence="low",
             )
+            self._emit_done(t0, result)
+            return result
 
         summary = self._summarize(all_evidence, target, market_facts)
         confidence = self._estimate_confidence(all_evidence)
-        return DimensionResult(
+        result = DimensionResult(
             evidence=all_evidence, mini_summary=summary,
             retry_count=rounds, no_data=False, confidence=confidence,
         )
+        self._emit_done(t0, result)
+        return result
+
+    def _emit_done(self, t0: float, result: DimensionResult) -> None:
+        if self.on_done is None:
+            return
+        try:
+            self.on_done(
+                dim_id=self.dim.get("id", ""),
+                duration=time.perf_counter() - t0,
+                no_data=result["no_data"],
+                retry_count=result["retry_count"],
+                evidence_count=len(result["evidence"]),
+            )
+        except Exception:
+            pass
 
     def _gen_keywords(
         self, target: str, time_window: tuple[date, date],

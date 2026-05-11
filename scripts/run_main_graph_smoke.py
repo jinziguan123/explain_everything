@@ -40,13 +40,31 @@ def main(question: str = "为什么半导体板块今天涨"):
     weak = get_weak_llm()
     strong = get_strong_llm()
 
+    def on_dim_done(dim_id, duration, no_data, retry_count, evidence_count):
+        flag = "[red]no_data[/red]" if no_data else f"[green]ok[/green] ev={evidence_count}"
+        console.print(
+            f"  └─ {flag} [bold]{dim_id}[/bold] "
+            f"[dim]rounds={retry_count} ({duration:.1f}s)[/dim]"
+        )
+
     def worker_factory(dimension_config, worker_config):
         return DimensionWorker(
             dimension_config=dimension_config,
             worker_config=worker_config,
             llm=weak,
             adapter_registry=registry,
+            on_done=on_dim_done,
         )
+
+    def on_node_event(event, name, *args):
+        if event == "start":
+            console.print(f"[dim]▶[/dim] [bold]{name}[/bold] ...")
+        elif event == "end":
+            dur = args[0]
+            console.print(f"[green]✓[/green] [bold]{name}[/bold] [dim]({dur:.1f}s)[/dim]")
+        elif event == "error":
+            dur, err = args
+            console.print(f"[red]✗[/red] [bold]{name}[/bold] [dim]({dur:.1f}s)[/dim] {err}")
 
     graph = build_main_graph(
         market_adapter=market,
@@ -54,6 +72,7 @@ def main(question: str = "为什么半导体板块今天涨"):
         weak_llm=weak,
         strong_llm=strong,
         engine=explain_engine,
+        on_node_event=on_node_event,
     )
 
     state = new_attribution_state(question)
