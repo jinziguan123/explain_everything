@@ -36,7 +36,18 @@ async def test_main_graph_compiles_and_runs_with_mocks():
     fake_strong_llm = MagicMock()
     fake_strong_llm.chat.side_effect = [
         json.dumps({"needs_subbranch": False, "subbranches": []}),
-        "强模型生成的叙事段",
+        json.dumps({
+            "claims": [
+                {"text": "测试叙事甲", "evidence_ids": ["e1"]},
+                {"text": "测试叙事乙", "evidence_ids": ["e1"]},
+            ],
+        }),
+        "维度甲重写报告 [e1]",
+        "维度乙重写报告 [e1]",
+        "维度丙重写报告 [e1]",
+        "维度丁重写报告 [e1]",
+        "维度戊重写报告 [e1]",
+        "维度己重写报告 [e1]",
     ]
 
     mock_engine = MagicMock()
@@ -59,3 +70,6 @@ async def test_main_graph_compiles_and_runs_with_mocks():
     assert len(result["dimension_results"]) == 6
     assert "narrative" in result
     assert result["confidence"] in ("high", "medium", "low")
+    assert len(result["narrative_claims"]) >= 1
+    assert all(c["evidence_ids"] for c in result["narrative_claims"])
+    assert all("维度" in v and "重写" in v for v in result["dimension_reports"].values())
