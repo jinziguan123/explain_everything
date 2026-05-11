@@ -38,3 +38,10 @@ dev = [
     "pytest-mock>=3.15.1",
     "ruff>=0.15.12",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: 需要真实数据库/网络的集成测试，CI 默认跳过",
+]
+addopts = "-m 'not integration'"
+
