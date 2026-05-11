@@ -58,6 +58,30 @@ def _normalize(token: str) -> str:
     return token.replace(" ", "")
 
 
+def _estimate_overall_confidence(
+    dim_results: dict,
+    narrative_claims: list[NarrativeClaim],
+) -> str:
+    cited_ids: set[str] = set()
+    for c in narrative_claims:
+        cited_ids.update(c["evidence_ids"])
+
+    source_types: set[str] = set()
+    for r in dim_results.values():
+        for e in r["evidence"]:
+            if e.id in cited_ids:
+                source_types.add(e.source_type)
+
+    cited_count = len(cited_ids)
+    type_count = len(source_types)
+
+    if cited_count >= 8 and type_count >= 3:
+        return "high"
+    if cited_count >= 4 and type_count >= 2:
+        return "medium"
+    return "low"
+
+
 def _rewrite_dim_report(
     dim_id: str,
     dim_result,
@@ -179,13 +203,7 @@ async def report_builder_node(
                 snapshot_id=e.snapshot_id, source_type=e.source_type,
             ))
 
-    high_count = sum(1 for r in dim_results.values() if r["confidence"] == "high")
-    if high_count >= 3:
-        confidence = "high"
-    elif high_count >= 1:
-        confidence = "medium"
-    else:
-        confidence = "low"
+    confidence = _estimate_overall_confidence(dim_results, narrative_claims)
 
     return {
         "narrative": narrative,

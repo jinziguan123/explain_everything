@@ -167,6 +167,90 @@ async def test_dim_reports_skip_llm_when_no_data():
 
 
 @pytest.mark.asyncio
+async def test_confidence_high_with_diverse_sources():
+    """≥8 个被引用 evidence 且 source_type 多样性 ≥3 → high。"""
+    fake_llm = MagicMock()
+    eids = [f"e{i}" for i in range(10)]
+    chinese_words = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛"]
+    fake_llm.chat.side_effect = [
+        json.dumps({"claims": [{"text": chinese_words[i], "evidence_ids": eids[i:i+2]} for i in range(8)]}),
+        "policy dim report",
+        "industry_chain dim report",
+        "capital_flow dim report",
+    ]
+    state = new_attribution_state("test")
+    state["target"] = "X"
+    state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
+    state["market_facts"] = {"snippet": ""}
+    state["dimension_results"] = {
+        "policy": DimensionResult(
+            evidence=[make_ev(eids[i], source_type="news") for i in range(4)],
+            mini_summary="", retry_count=1, no_data=False, confidence="high",
+        ),
+        "industry_chain": DimensionResult(
+            evidence=[make_ev(eids[i], source_type="market_data") for i in range(4, 7)],
+            mini_summary="", retry_count=1, no_data=False, confidence="high",
+        ),
+        "capital_flow": DimensionResult(
+            evidence=[make_ev(eids[i], source_type="capital_flow") for i in range(7, 10)],
+            mini_summary="", retry_count=1, no_data=False, confidence="medium",
+        ),
+    }
+    out = await report_builder_node(state, llm=fake_llm)
+    assert out["confidence"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_confidence_low_with_few_citations():
+    """被引用 evidence 数 < 4 → low。"""
+    fake_llm = MagicMock()
+    fake_llm.chat.side_effect = [
+        json.dumps({"claims": [{"text": "单一声明", "evidence_ids": ["e1"]}]}),
+        "policy dim report",
+    ]
+    state = new_attribution_state("test")
+    state["target"] = "X"
+    state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
+    state["market_facts"] = {"snippet": ""}
+    state["dimension_results"] = {
+        "policy": DimensionResult(
+            evidence=[make_ev("e1", source_type="news")],
+            mini_summary="", retry_count=1, no_data=False, confidence="high",
+        ),
+    }
+    out = await report_builder_node(state, llm=fake_llm)
+    assert out["confidence"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_confidence_medium_with_4_citations_2_sources():
+    """4 个 evidence，2 种 source_type → medium。"""
+    fake_llm = MagicMock()
+    eids = [f"e{i}" for i in range(4)]
+    fake_llm.chat.side_effect = [
+        json.dumps({"claims": [{"text": "整体叙事", "evidence_ids": eids}]}),
+        "policy dim report",
+        "industry_chain dim report",
+    ]
+    state = new_attribution_state("test")
+    state["target"] = "X"
+    state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
+    state["market_facts"] = {"snippet": ""}
+    state["dimension_results"] = {
+        "policy": DimensionResult(
+            evidence=[make_ev("e0", source_type="news"), make_ev("e1", source_type="news")],
+            mini_summary="", retry_count=1, no_data=False, confidence="high",
+        ),
+        "industry_chain": DimensionResult(
+            evidence=[make_ev("e2", source_type="market_data"), make_ev("e3", source_type="market_data")],
+            mini_summary="", retry_count=1, no_data=False, confidence="high",
+        ),
+    }
+    out = await report_builder_node(state, llm=fake_llm)
+    assert out["confidence"] == "medium"
+
+
+@pytest.mark.asyncio
 async def test_narrative_falls_back_when_json_invalid():
     """JSON 解析失败时回退到纯文本 narrative，claims 为空。"""
     fake_llm = MagicMock()
