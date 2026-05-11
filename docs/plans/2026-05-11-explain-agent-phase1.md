@@ -6,7 +6,7 @@
 
 **Architecture:** Python + uv 管理依赖。数据层复用现有 ClickHouse (`quant_data`) 和 MySQL (`quant_data`)，新增 `explain_agent` schema 存归因相关表。向量检索用 Qdrant（用户已启动）+ BGE-M3 embedding（本地 CPU 跑）。Adapter 全部实现 `DataAdapter` Protocol，便于上层统一调用。所有外部 API 调用通过 mock 单测覆盖核心转换逻辑，再用一次性手动集成验证打通真实数据。
 
-**Tech Stack:** Python 3.11+、uv、pydantic-settings、SQLAlchemy（MySQL）、clickhouse-connect、qdrant-client、akshare、sentence-transformers (BGE-M3)、pytest、anthropic SDK（弱模型 tagger 用 Haiku）
+**Tech Stack:** Python 3.11+、uv、pydantic-settings、SQLAlchemy（MySQL）、clickhouse-connect、qdrant-client、akshare、sentence-transformers (BGE-M3)、pytest、LLM 双协议（anthropic SDK + openai SDK，由配置决定）
 
 **Phase 1 不做的：** LangGraph 编排、维度 worker、报告生成、CLI 入口。这些是 Phase 2 的事。
 
@@ -31,13 +31,14 @@
 | 9 | `akshare_capital_flow` Adapter | 50 min |
 | 10 | BGE-M3 Embedding 封装 | 40 min |
 | 11 | News Crawler (akshare) | 60 min |
-| 12 | News Tagger (Claude Haiku) | 50 min |
+| 11.5 | LLM Client 抽象层（anthropic + openai 双协议） | 40 min |
+| 12 | News Tagger（通过 LLMClient 调弱模型） | 40 min |
 | 13 | News Indexing Pipeline (写 MySQL + Qdrant) | 40 min |
 | 14 | `news_corpus` Adapter（向量检索） | 40 min |
 | 15 | 90 天历史回填 CLI | 30 min |
 | 16 | Phase 1 端到端验收 | 30 min |
 
-**合计：~10 小时纯开发，预计 1 周内可完成（含调试/合规处理时间）。**
+**合计：~10.5 小时纯开发，预计 1 周内可完成（含调试/合规处理时间）。**
 
 ---
 
@@ -75,7 +76,7 @@ uv add \
   qdrant-client \
   akshare \
   sentence-transformers \
-  anthropic \
+  anthropic openai \
   httpx tenacity \
   python-dotenv \
   rich typer
@@ -132,10 +133,26 @@ QDRANT_HOST=
 QDRANT_PORT=6333
 QDRANT_API_KEY=
 
-# LLM 模型
-ANTHROPIC_API_KEY=
-WEAK_MODEL=claude-haiku-4-5-20251001
-STRONG_MODEL=claude-opus-4-7
+# ============================================================
+# LLM 配置：每个模型独立 protocol + base_url + api_key + model
+#   - protocol = anthropic | openai
+#   - anthropic 协议: 用 Anthropic 官方 SDK，base_url 通常填根域名
+#       (如 https://api.anthropic.com)，SDK 自动加 /v1/messages
+#   - openai 协议: 用 OpenAI SDK（所有兼容服务都走这个），
+#       base_url 通常带 /v1 后缀 (如 https://api.deepseek.com/v1)
+# ============================================================
+
+# 弱模型（query gen / evidence eval / mini summary / news tagger）
+WEAK_LLM_PROTOCOL=openai
+WEAK_LLM_BASE_URL=https://api.deepseek.com/v1
+WEAK_LLM_API_KEY=
+WEAK_LLM_MODEL=deepseek-chat
+
+# 强模型（synthesizer / narrative / followup_answer）
+STRONG_LLM_PROTOCOL=anthropic
+STRONG_LLM_BASE_URL=https://api.anthropic.com
+STRONG_LLM_API_KEY=
+STRONG_LLM_MODEL=claude-opus-4-7
 
 # 本地路径
 SNAPSHOT_DIR=./data/snapshots
@@ -161,7 +178,7 @@ uv run pytest
 
 **Step 7: 验证安装**
 
-Run: `uv sync && uv run python -c "import akshare, qdrant_client, anthropic, sentence_transformers; print('OK')"`
+Run: `uv sync && uv run python -c "import akshare, qdrant_client, anthropic, openai, sentence_transformers; print('OK')"`
 
 Expected: 打印 `OK`，无 import error
 
@@ -191,31 +208,10 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 `tests/test_config.py`：
 
 ```python
-import os
 from explain_agent.config import Settings
 
 
-def test_settings_loads_from_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("MYSQL_HOST", "1.2.3.4")
-    monkeypatch.setenv("MYSQL_PORT", "3306")
-    monkeypatch.setenv("MYSQL_USER", "u")
-    monkeypatch.setenv("MYSQL_PASSWORD", "p")
-    monkeypatch.setenv("CLICKHOUSE_HOST", "5.6.7.8")
-    monkeypatch.setenv("CLICKHOUSE_USER", "u")
-    monkeypatch.setenv("CLICKHOUSE_PASSWORD", "p")
-    monkeypatch.setenv("QDRANT_HOST", "9.10.11.12")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-
-    s = Settings()
-    assert s.mysql_host == "1.2.3.4"
-    assert s.mysql_port == 3306
-    assert s.clickhouse_host == "5.6.7.8"
-    assert s.qdrant_host == "9.10.11.12"
-    assert s.weak_model == "claude-haiku-4-5-20251001"
-    assert s.strong_model == "claude-opus-4-7"
-
-
-def test_mysql_url_built_correctly(monkeypatch):
+def _set_min_env(monkeypatch):
     monkeypatch.setenv("MYSQL_HOST", "h")
     monkeypatch.setenv("MYSQL_USER", "u")
     monkeypatch.setenv("MYSQL_PASSWORD", "p")
@@ -223,11 +219,45 @@ def test_mysql_url_built_correctly(monkeypatch):
     monkeypatch.setenv("CLICKHOUSE_USER", "u")
     monkeypatch.setenv("CLICKHOUSE_PASSWORD", "p")
     monkeypatch.setenv("QDRANT_HOST", "h")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("WEAK_LLM_PROTOCOL", "openai")
+    monkeypatch.setenv("WEAK_LLM_BASE_URL", "https://api.deepseek.com/v1")
+    monkeypatch.setenv("WEAK_LLM_API_KEY", "sk-weak")
+    monkeypatch.setenv("WEAK_LLM_MODEL", "deepseek-chat")
+    monkeypatch.setenv("STRONG_LLM_PROTOCOL", "anthropic")
+    monkeypatch.setenv("STRONG_LLM_BASE_URL", "https://api.anthropic.com")
+    monkeypatch.setenv("STRONG_LLM_API_KEY", "sk-strong")
+    monkeypatch.setenv("STRONG_LLM_MODEL", "claude-opus-4-7")
 
+
+def test_settings_loads_from_env(monkeypatch):
+    _set_min_env(monkeypatch)
+    monkeypatch.setenv("MYSQL_HOST", "1.2.3.4")
+    monkeypatch.setenv("CLICKHOUSE_HOST", "5.6.7.8")
+    monkeypatch.setenv("QDRANT_HOST", "9.10.11.12")
+
+    s = Settings()
+    assert s.mysql_host == "1.2.3.4"
+    assert s.clickhouse_host == "5.6.7.8"
+    assert s.qdrant_host == "9.10.11.12"
+    assert s.weak_llm.protocol == "openai"
+    assert s.weak_llm.model == "deepseek-chat"
+    assert s.strong_llm.protocol == "anthropic"
+    assert s.strong_llm.model == "claude-opus-4-7"
+
+
+def test_mysql_url_built_correctly(monkeypatch):
+    _set_min_env(monkeypatch)
     s = Settings()
     url = s.mysql_explain_url()
     assert url.startswith("mysql+pymysql://u:p@h:3306/explain_agent")
+
+
+def test_invalid_llm_protocol_raises(monkeypatch):
+    _set_min_env(monkeypatch)
+    monkeypatch.setenv("WEAK_LLM_PROTOCOL", "ollama")
+    import pytest
+    with pytest.raises(Exception):
+        Settings()
 ```
 
 **Step 2: 跑测试确认失败**
@@ -241,8 +271,19 @@ Expected: ImportError（config 模块不存在）
 
 ```python
 from pathlib import Path
-from pydantic import Field
+from typing import Literal
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+LLMProtocol = Literal["anthropic", "openai"]
+
+
+class LLMConfig(BaseModel):
+    protocol: LLMProtocol
+    base_url: str
+    api_key: str
+    model: str
 
 
 class Settings(BaseSettings):
@@ -250,6 +291,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        env_nested_delimiter="__",  # 允许 WEAK_LLM__MODEL 嵌套；同时支持下面的 alias 模式
     )
 
     mysql_host: str
@@ -269,13 +311,38 @@ class Settings(BaseSettings):
     qdrant_port: int = 6333
     qdrant_api_key: str | None = None
 
-    anthropic_api_key: str
-    weak_model: str = "claude-haiku-4-5-20251001"
-    strong_model: str = "claude-opus-4-7"
+    # LLM: 平铺读取再组装，避免 pydantic-settings 嵌套配置的歧义
+    weak_llm_protocol: LLMProtocol
+    weak_llm_base_url: str
+    weak_llm_api_key: str
+    weak_llm_model: str
+
+    strong_llm_protocol: LLMProtocol
+    strong_llm_base_url: str
+    strong_llm_api_key: str
+    strong_llm_model: str
 
     snapshot_dir: Path = Path("./data/snapshots")
     embedding_cache_dir: Path = Path("./data/embeddings_cache")
     log_dir: Path = Path("./logs")
+
+    @property
+    def weak_llm(self) -> LLMConfig:
+        return LLMConfig(
+            protocol=self.weak_llm_protocol,
+            base_url=self.weak_llm_base_url,
+            api_key=self.weak_llm_api_key,
+            model=self.weak_llm_model,
+        )
+
+    @property
+    def strong_llm(self) -> LLMConfig:
+        return LLMConfig(
+            protocol=self.strong_llm_protocol,
+            base_url=self.strong_llm_base_url,
+            api_key=self.strong_llm_api_key,
+            model=self.strong_llm_model,
+        )
 
     def mysql_quant_url(self) -> str:
         return f"mysql+pymysql://{self.mysql_user}:{self.mysql_password}@{self.mysql_host}:{self.mysql_port}/{self.mysql_quant_db}?charset=utf8mb4"
@@ -297,7 +364,7 @@ def get_settings() -> Settings:
 **Step 4: 跑测试确认通过**
 
 Run: `uv run pytest tests/test_config.py -v`
-Expected: 2 passed
+Expected: 3 passed
 
 **Step 5: Commit**
 
@@ -305,7 +372,7 @@ Expected: 2 passed
 git add src/explain_agent/config.py tests/test_config.py
 git commit -m "配置加载层 (pydantic-settings)
 
-提供类型安全的 Settings 单例，覆盖 MySQL/CH/Qdrant/Anthropic 配置。"
+LLM 抽象为 protocol+base_url+api_key+model，支持 anthropic 与 openai 兼容协议混搭。"
 ```
 
 ---
@@ -1536,34 +1603,196 @@ git commit -m "新增 akshare 新闻采集器
 
 ---
 
+## Task 11.5: LLM Client 抽象层
+
+**目标：** 提供统一的 LLM 调用接口 `LLMClient.chat(system, user, max_tokens) -> str`，背后可以是 Anthropic SDK 或 OpenAI 兼容 SDK，由 `LLMConfig.protocol` 决定。
+
+**Files:**
+- Create: `src/explain_agent/llm/__init__.py`
+- Create: `src/explain_agent/llm/client.py`
+- Create: `tests/test_llm_client.py`
+
+**Step 1: 写测试**
+
+`tests/test_llm_client.py`：
+
+```python
+from unittest.mock import MagicMock, patch
+from explain_agent.config import LLMConfig
+from explain_agent.llm.client import make_llm_client, AnthropicClient, OpenAIClient
+
+
+def test_make_client_anthropic():
+    cfg = LLMConfig(protocol="anthropic", base_url="https://api.anthropic.com",
+                    api_key="sk", model="claude-opus-4-7")
+    with patch("explain_agent.llm.client.Anthropic") as mock_cls:
+        c = make_llm_client(cfg)
+    assert isinstance(c, AnthropicClient)
+    mock_cls.assert_called_once_with(api_key="sk", base_url="https://api.anthropic.com")
+
+
+def test_make_client_openai():
+    cfg = LLMConfig(protocol="openai", base_url="https://api.deepseek.com/v1",
+                    api_key="sk", model="deepseek-chat")
+    with patch("explain_agent.llm.client.OpenAI") as mock_cls:
+        c = make_llm_client(cfg)
+    assert isinstance(c, OpenAIClient)
+    mock_cls.assert_called_once_with(api_key="sk", base_url="https://api.deepseek.com/v1")
+
+
+def test_anthropic_chat_returns_text():
+    cfg = LLMConfig(protocol="anthropic", base_url="x", api_key="x", model="m")
+    fake_sdk = MagicMock()
+    fake_resp = MagicMock()
+    fake_resp.content = [MagicMock(text="hello")]
+    fake_sdk.messages.create.return_value = fake_resp
+    client = AnthropicClient(cfg, sdk_client=fake_sdk)
+    out = client.chat(system="sys", user="hi", max_tokens=100)
+    assert out == "hello"
+    args, kwargs = fake_sdk.messages.create.call_args
+    assert kwargs["model"] == "m"
+    assert kwargs["system"] == "sys"
+    assert kwargs["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_openai_chat_returns_text():
+    cfg = LLMConfig(protocol="openai", base_url="x", api_key="x", model="m")
+    fake_sdk = MagicMock()
+    fake_resp = MagicMock()
+    fake_resp.choices = [MagicMock(message=MagicMock(content="hi-back"))]
+    fake_sdk.chat.completions.create.return_value = fake_resp
+    client = OpenAIClient(cfg, sdk_client=fake_sdk)
+    out = client.chat(system="sys", user="hi", max_tokens=100)
+    assert out == "hi-back"
+    args, kwargs = fake_sdk.chat.completions.create.call_args
+    assert kwargs["model"] == "m"
+    assert kwargs["messages"][0] == {"role": "system", "content": "sys"}
+    assert kwargs["messages"][1] == {"role": "user", "content": "hi"}
+```
+
+**Step 2: 跑测试确认失败**
+
+Run: `uv run pytest tests/test_llm_client.py -v`
+Expected: ImportError
+
+**Step 3: 实现 `src/explain_agent/llm/client.py`**
+
+```python
+from typing import Protocol
+from anthropic import Anthropic
+from openai import OpenAI
+from explain_agent.config import LLMConfig
+
+
+class LLMClient(Protocol):
+    cfg: LLMConfig
+    def chat(self, system: str, user: str, max_tokens: int = 1024) -> str: ...
+
+
+class AnthropicClient:
+    def __init__(self, cfg: LLMConfig, sdk_client=None):
+        self.cfg = cfg
+        self.sdk = sdk_client or Anthropic(api_key=cfg.api_key, base_url=cfg.base_url)
+
+    def chat(self, system: str, user: str, max_tokens: int = 1024) -> str:
+        resp = self.sdk.messages.create(
+            model=self.cfg.model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return resp.content[0].text
+
+
+class OpenAIClient:
+    def __init__(self, cfg: LLMConfig, sdk_client=None):
+        self.cfg = cfg
+        self.sdk = sdk_client or OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
+
+    def chat(self, system: str, user: str, max_tokens: int = 1024) -> str:
+        resp = self.sdk.chat.completions.create(
+            model=self.cfg.model,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        return resp.choices[0].message.content or ""
+
+
+def make_llm_client(cfg: LLMConfig) -> LLMClient:
+    if cfg.protocol == "anthropic":
+        return AnthropicClient(cfg)
+    if cfg.protocol == "openai":
+        return OpenAIClient(cfg)
+    raise ValueError(f"unknown protocol: {cfg.protocol}")
+```
+
+**Step 4: 实现 `src/explain_agent/llm/__init__.py`**
+
+```python
+from functools import lru_cache
+from explain_agent.config import get_settings
+from explain_agent.llm.client import LLMClient, make_llm_client
+
+
+@lru_cache
+def get_weak_llm() -> LLMClient:
+    return make_llm_client(get_settings().weak_llm)
+
+
+@lru_cache
+def get_strong_llm() -> LLMClient:
+    return make_llm_client(get_settings().strong_llm)
+
+
+__all__ = ["LLMClient", "make_llm_client", "get_weak_llm", "get_strong_llm"]
+```
+
+**Step 5: 跑测试**
+
+Run: `uv run pytest tests/test_llm_client.py -v`
+Expected: 4 passed
+
+**Step 6: Commit**
+
+```bash
+git add src/explain_agent/llm/ tests/test_llm_client.py
+git commit -m "新增 LLM Client 抽象层
+
+统一 LLMClient.chat 接口，背后按 protocol 路由到 Anthropic SDK 或 OpenAI SDK。
+所有上层模块通过 get_weak_llm/get_strong_llm 拿 client，不直接依赖 SDK。"
+```
+
+---
+
 ## Task 12: News Tagger（弱模型）
 
-**目标：** 用 Claude Haiku 给每条新闻打"行业/概念/政策类型"等标签，便于检索过滤。
+**目标：** 用弱模型 LLM 给每条新闻打"行业/概念/政策类型"等标签，便于检索过滤。
 
 **Files:**
 - Create: `src/explain_agent/ingest/tagger.py`
 - Create: `tests/test_tagger.py`
 
-**Step 1: 写测试（mock anthropic 调用）**
+**Step 1: 写测试（mock LLMClient）**
 
 ```python
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from explain_agent.ingest.tagger import NewsTagger
 
 
 def test_tagger_parses_llm_json():
-    fake_resp = MagicMock()
-    fake_resp.content = [MagicMock(text=json.dumps({
+    fake_llm = MagicMock()
+    fake_llm.chat.return_value = json.dumps({
         "industries": ["半导体"],
         "concepts": ["国产替代", "HBM"],
         "policy_type": None,
         "event_type": "产业链",
-    }))]
-    fake_client = MagicMock()
-    fake_client.messages.create.return_value = fake_resp
+    })
 
-    tagger = NewsTagger(client=fake_client, model="claude-haiku-4-5-20251001")
+    tagger = NewsTagger(llm=fake_llm)
     tags = tagger.tag(title="美国扩大对华芯片出口管制", content="...")
     assert "半导体" in tags["industries"]
     assert "国产替代" in tags["concepts"]
@@ -1571,14 +1800,10 @@ def test_tagger_parses_llm_json():
 
 
 def test_tagger_handles_invalid_json():
-    fake_resp = MagicMock()
-    fake_resp.content = [MagicMock(text="抱歉我不能回答")]
-    fake_client = MagicMock()
-    fake_client.messages.create.return_value = fake_resp
-
-    tagger = NewsTagger(client=fake_client, model="claude-haiku-4-5-20251001")
+    fake_llm = MagicMock()
+    fake_llm.chat.return_value = "抱歉我不能回答"
+    tagger = NewsTagger(llm=fake_llm)
     tags = tagger.tag(title="标题", content="内容")
-    # 失败时返回空标签，不抛异常
     assert tags == {"industries": [], "concepts": [], "policy_type": None, "event_type": None}
 ```
 
@@ -1586,8 +1811,7 @@ def test_tagger_handles_invalid_json():
 
 ```python
 import json
-from anthropic import Anthropic
-from explain_agent.config import get_settings
+from explain_agent.llm import LLMClient, get_weak_llm
 
 
 SYSTEM_PROMPT = """你是金融新闻分类标注器。读完新闻后，输出 JSON：
@@ -1604,22 +1828,14 @@ _EMPTY = {"industries": [], "concepts": [], "policy_type": None, "event_type": N
 
 
 class NewsTagger:
-    def __init__(self, client: Anthropic | None = None, model: str | None = None):
-        s = get_settings()
-        self.client = client or Anthropic(api_key=s.anthropic_api_key)
-        self.model = model or s.weak_model
+    def __init__(self, llm: LLMClient | None = None):
+        self.llm = llm or get_weak_llm()
 
     def tag(self, title: str, content: str) -> dict:
-        prompt = f"标题: {title}\n正文: {content[:1500]}"
+        user = f"标题: {title}\n正文: {content[:1500]}"
         try:
-            resp = self.client.messages.create(
-                model=self.model,
-                max_tokens=300,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = resp.content[0].text.strip()
-            data = json.loads(text)
+            raw = self.llm.chat(system=SYSTEM_PROMPT, user=user, max_tokens=300)
+            data = json.loads(raw.strip())
         except Exception:
             return dict(_EMPTY)
         return {
@@ -1639,8 +1855,9 @@ Expected: 2 passed
 
 ```bash
 git add src/explain_agent/ingest/tagger.py tests/test_tagger.py
-git commit -m "新增新闻标签器 (Claude Haiku)
+git commit -m "新增新闻标签器 (弱模型)
 
+通过 LLMClient 抽象调用弱模型，protocol 由 .env 决定（anthropic 或 openai 兼容）。
 输出 industries/concepts/policy_type/event_type 四类标签，
 失败时优雅降级到空标签不阻塞流水线。"
 ```
