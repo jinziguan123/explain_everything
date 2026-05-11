@@ -250,6 +250,14 @@ async def test_confidence_medium_with_4_citations_2_sources():
     assert out["confidence"] == "medium"
 
 
+def test_narrative_system_prompt_encourages_multi_source():
+    """NARRATIVE_SYSTEM 必须显式提醒 LLM 鼓励多 source_type 引用。"""
+    from explain_agent.graph.nodes.report_builder import NARRATIVE_SYSTEM
+    assert "source_type" in NARRATIVE_SYSTEM
+    for stype in ("news", "market_data", "capital_flow"):
+        assert stype in NARRATIVE_SYSTEM
+
+
 @pytest.mark.asyncio
 async def test_narrative_falls_back_when_json_invalid():
     """JSON 解析失败时回退到纯文本 narrative，claims 为空。"""

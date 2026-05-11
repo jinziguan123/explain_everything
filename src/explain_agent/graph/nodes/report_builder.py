@@ -50,6 +50,8 @@ NARRATIVE_SYSTEM = """你是审慎的金融研究员。基于以下六维证据�
 - 不出现数据(涨跌幅/金额/百分比)若该数据未在引用证据中出现
 - 不预测/推荐操作
 - 整体长度 80-150 字
+- 鼓励：claims 引用的 evidence 来自不同 source_type（news / market_data /
+  capital_flow / policy 等），多源印证比单源更可信
 只输出 JSON。
 """
 
