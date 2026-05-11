@@ -2,6 +2,8 @@ from datetime import datetime
 from uuid import uuid4
 import akshare as ak
 import pandas as pd
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 from explain_agent.core.types import AdapterQuery, Evidence
 
 
@@ -11,9 +13,23 @@ class AkshareCapitalFlowAdapter:
     async def query(self, q: AdapterQuery) -> list[Evidence]:
         return self._industry_main_flow(q)
 
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=0.5, min=0.5, max=2),
+        retry=retry_if_exception_type(ConnectionError),
+        reraise=False,
+    )
+    def _fetch_df(self, target: str) -> pd.DataFrame | None:
+        try:
+            return ak.stock_sector_fund_flow_hist(symbol=target)
+        except ConnectionError:
+            raise
+        except Exception:
+            return None
+
     def _industry_main_flow(self, q: AdapterQuery) -> list[Evidence]:
         try:
-            df: pd.DataFrame = ak.stock_sector_fund_flow_hist(symbol=q.target)
+            df = self._fetch_df(q.target)
         except Exception:
             return []
         if df is None or df.empty:
