@@ -51,3 +51,14 @@ docs/plans/            设计文档 / 实施计划
 - [x] main_graph 集成测试通过（mock 节点）
 - [x] 真实端到端 smoke：能对"为什么半导体板块今天涨"输出 6 维归因报告
 
+## Phase 2.B 验收状态
+
+- [x] 数据兜底：parse "今天" → 5 天窗口；DimensionWorker 单日空时扩到 7 天；akshare 重试
+- [x] State schema 扩展：NarrativeClaim、narrative_claims、unverified_drops
+- [x] 强模型叙事：JSON 输出 + 每 claim 挂 evidence_ids
+- [x] 数值校验：narrative 中数字必须能在证据中精确匹配，否则整句删除
+- [x] 维度报告重写：6 维 strong model 重写 + [e_xxx] 引用
+- [x] confidence 重打分：cited_count × source_type 多样性
+- [x] 全部单测通过（含 Phase 2.A 回归，65 passed）
+- [ ] 端到端 smoke：待执行（Phase 2.A → 2.B 调用增加，预计 12-15 min）
+

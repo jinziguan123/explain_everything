@@ -67,6 +67,19 @@ def main(question: str = "为什么半导体板块今天涨"):
 
     console.print(f"\n[bold yellow]Narrative:[/bold yellow]\n{result.get('narrative')}")
 
+    claims = result.get("narrative_claims", [])
+    console.print(f"\n[bold]Narrative claims ({len(claims)} 条):[/bold]")
+    for i, c in enumerate(claims, 1):
+        console.print(f"  {i}. [cyan]{c['text']}[/cyan]  → {c['evidence_ids']}")
+
+    drops = result.get("unverified_drops", [])
+    if drops:
+        console.print(f"\n[bold red]Unverified drops ({len(drops)} 条):[/bold red]")
+        for d in drops:
+            console.print(f"  - {d}")
+    else:
+        console.print("\n[dim]Unverified drops: 0 (强模型守规矩或无数字声明)[/dim]")
+
     console.print("\n[bold yellow]Dimension Reports:[/bold yellow]")
     for dim_id, summary in result.get("dimension_reports", {}).items():
         console.print(f"\n[bold]▎ {dim_id}[/bold]")
