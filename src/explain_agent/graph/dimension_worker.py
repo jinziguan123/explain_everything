@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from explain_agent.core.types import AdapterQuery, Evidence
@@ -105,6 +105,15 @@ class DimensionWorker:
         return data.get("keywords", [target])[:5] if data else [target]
 
     async def _fetch_all_sources(
+        self, keywords: list[str], target: str, time_window: tuple[date, date],
+    ) -> list[Evidence]:
+        out = await self._fetch_once(keywords, target, time_window)
+        if not out and (time_window[1] - time_window[0]).days <= 3:
+            expanded = (time_window[1] - timedelta(days=6), time_window[1])
+            out = await self._fetch_once(keywords, target, expanded)
+        return out
+
+    async def _fetch_once(
         self, keywords: list[str], target: str, time_window: tuple[date, date],
     ) -> list[Evidence]:
         out: list[Evidence] = []

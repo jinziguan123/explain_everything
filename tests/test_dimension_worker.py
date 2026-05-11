@@ -67,6 +67,44 @@ async def test_worker_marks_no_data_when_adapter_always_empty():
 
 
 @pytest.mark.asyncio
+async def test_worker_auto_expands_window_on_empty():
+    """单日窗口查空时自动扩到 7 天再试。"""
+    fake_llm = MagicMock()
+    fake_llm.chat.side_effect = [
+        json.dumps({"keywords": ["k1"]}),
+        json.dumps({"sufficient": True, "relevant_ids": ["e1"]}),
+        "summary",
+    ]
+
+    call_windows = []
+
+    async def adapter_query(q):
+        call_windows.append((q.time_window[0], q.time_window[1]))
+        if (q.time_window[1] - q.time_window[0]).days <= 3:
+            return []
+        return [make_evidence("e1")]
+
+    mock_adapter = MagicMock()
+    mock_adapter.query = adapter_query
+
+    worker = DimensionWorker(
+        dimension_config={"id": "x", "name": "X", "data_sources": ["news_corpus"],
+                          "query_template": "t"},
+        worker_config={"max_rounds": 1, "soft_terminate_no_gain_rounds": 99},
+        llm=fake_llm, adapter_registry={"news_corpus": mock_adapter},
+    )
+    result = await worker.run(
+        target="X",
+        time_window=(date(2026, 5, 11), date(2026, 5, 11)),
+        market_facts={},
+    )
+    assert len(call_windows) >= 2
+    expanded = call_windows[-1]
+    assert (expanded[1] - expanded[0]).days >= 6
+    assert result["no_data"] is False
+
+
+@pytest.mark.asyncio
 async def test_worker_respects_max_rounds():
     fake_llm = MagicMock()
     fake_llm.chat.side_effect = [
