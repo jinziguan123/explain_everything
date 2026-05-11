@@ -40,3 +40,14 @@ docs/plans/            设计文档 / 实施计划
 - [x] CLI explain-ingest-news 可执行
 - [x] 端到端集成测试通过：4 个 Adapter 中 ≥3 个能返回真实 Evidence
 
+## Phase 2.A 验收状态
+
+- [x] LangGraph 状态机骨架（parse → router → framework → market_facts → fan_out → synth → sub → report → persist）
+- [x] AttributionState schema + 框架 YAML 配置
+- [x] DimensionWorker mini ReAct 内核（10 轮上限 + 软终止 + no_data 合法）
+- [x] Semaphore(3) 受控并发
+- [x] 节点单测全部通过（L1）
+- [x] 维度 worker 单测全部通过（L2）
+- [x] main_graph 集成测试通过（mock 节点）
+- [x] 真实端到端 smoke：能对"为什么半导体板块今天涨"输出 6 维归因报告
+
