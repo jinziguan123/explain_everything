@@ -20,6 +20,7 @@ console = Console()
 
 
 def main(question: str = "为什么半导体板块今天涨"):
+    console.print("[dim]初始化 DB / embedder ...[/dim]")
     quant_engine = get_engine("quant")
     explain_engine = get_engine("explain")
     resolver = IndustryResolver(quant_engine)
@@ -27,8 +28,11 @@ def main(question: str = "为什么半导体板块今天涨"):
     market = ClickHouseMarketAdapter(ch_client(), resolver)
     fund = MySQLFundamentalsAdapter(quant_engine, resolver)
     flow = AkshareCapitalFlowAdapter()
+    embedder = get_embedder()
+    embedder.embed(["warm up"])
+    console.print("[dim]✓ embedder warm-up[/dim]")
     news = NewsCorpusAdapter(
-        qdrant=get_qdrant_client(), embedder=get_embedder(), engine=explain_engine,
+        qdrant=get_qdrant_client(), embedder=embedder, engine=explain_engine,
     )
     registry = {
         "clickhouse_market": market,
@@ -47,6 +51,15 @@ def main(question: str = "为什么半导体板块今天涨"):
             f"[dim]rounds={retry_count} ({duration:.1f}s)[/dim]"
         )
 
+    def on_dim_round(dim_id, round_idx, max_rounds, keywords, new_count,
+                     total_count, duration, reason):
+        kw_preview = ",".join(keywords) if keywords else "-"
+        console.print(
+            f"    [dim cyan]·[/dim cyan] [bold]{dim_id}[/bold] "
+            f"[dim]round {round_idx}/{max_rounds}[/dim] kw=[{kw_preview}] "
+            f"new={new_count} total={total_count} [dim]({duration:.1f}s, {reason})[/dim]"
+        )
+
     def worker_factory(dimension_config, worker_config):
         return DimensionWorker(
             dimension_config=dimension_config,
@@ -54,6 +67,7 @@ def main(question: str = "为什么半导体板块今天涨"):
             llm=weak,
             adapter_registry=registry,
             on_done=on_dim_done,
+            on_round=on_dim_round,
         )
 
     def on_node_event(event, name, *args):

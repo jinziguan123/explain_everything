@@ -18,9 +18,14 @@ QUERY_GEN_SYSTEM = """你是金融归因 agent 的查询关键词生成器。
 
 EVAL_SYSTEM = """你是证据评估器。判断当前已有证据是否足够回答该维度的问题。
 
+判定标准（满足任一即返回 sufficient=true）：
+- 已有 ≥3 条与该维度直接相关的证据
+- 已有 ≥1 条核心证据可直接支撑结论（例如：政策维度有明确文件、资金面维度有具体净流入数据）
+- 当前证据已覆盖该维度的主要面向，进一步检索的边际收益较低
+
+只在证据明显不足且方向不清时才返回 sufficient=false。
+
 输出 JSON: {"sufficient": true|false, "relevant_ids": ["id1", ...]}
-- sufficient=true 表示证据已经能支撑该维度的归因
-- relevant_ids 是相关证据的 id 列表（其余视为噪声）
 只输出 JSON。
 """
 
@@ -42,12 +47,14 @@ def _extract_json(text: str) -> dict | None:
 class DimensionWorker:
     def __init__(self, dimension_config: dict, worker_config: dict,
                  llm: LLMClient, adapter_registry: dict[str, Any],
-                 on_done: Callable[..., None] | None = None):
+                 on_done: Callable[..., None] | None = None,
+                 on_round: Callable[..., None] | None = None):
         self.dim = dimension_config
         self.cfg = worker_config
         self.llm = llm
         self.registry = adapter_registry
         self.on_done = on_done
+        self.on_round = on_round
 
     async def run(
         self,
@@ -65,6 +72,7 @@ class DimensionWorker:
 
         for round_idx in range(1, max_rounds + 1):
             rounds = round_idx
+            round_t0 = time.perf_counter()
             keywords = self._gen_keywords(target, time_window, market_facts, all_evidence)
             new_ev = await self._fetch_all_sources(keywords, target, time_window)
             new_ids = {e.id for e in new_ev} - {e.id for e in all_evidence}
@@ -72,12 +80,19 @@ class DimensionWorker:
 
             if not new_ids:
                 no_gain_count += 1
+                self._emit_round(round_idx, max_rounds, keywords, len(new_ids),
+                                 len(all_evidence), time.perf_counter() - round_t0,
+                                 reason="no_gain")
                 if no_gain_count >= soft_terminate:
                     break
                 continue
             no_gain_count = 0
 
-            if self._is_sufficient(all_evidence, target):
+            sufficient = self._is_sufficient(all_evidence, target)
+            self._emit_round(round_idx, max_rounds, keywords, len(new_ids),
+                             len(all_evidence), time.perf_counter() - round_t0,
+                             reason="sufficient" if sufficient else "continue")
+            if sufficient:
                 break
 
         if not all_evidence:
@@ -96,6 +111,25 @@ class DimensionWorker:
         )
         self._emit_done(t0, result)
         return result
+
+    def _emit_round(self, round_idx: int, max_rounds: int, keywords: list,
+                    new_count: int, total_count: int, duration: float,
+                    reason: str) -> None:
+        if self.on_round is None:
+            return
+        try:
+            self.on_round(
+                dim_id=self.dim.get("id", ""),
+                round_idx=round_idx,
+                max_rounds=max_rounds,
+                keywords=keywords[:3],
+                new_count=new_count,
+                total_count=total_count,
+                duration=duration,
+                reason=reason,
+            )
+        except Exception:
+            pass
 
     def _emit_done(self, t0: float, result: DimensionResult) -> None:
         if self.on_done is None:

@@ -1,8 +1,25 @@
 import json
 import re
+import time
 
 from explain_agent.graph.state import AttributionState, Citation, NarrativeClaim
 from explain_agent.llm import LLMClient, get_strong_llm
+
+
+def _call_with_retry(
+    llm: LLMClient, system: str, user: str, max_tokens: int = 4000,
+    attempts: int = 3, backoff: float = 2.0,
+) -> str:
+    """对 LLM 调用做 attempts 次重试（指数退避），全部失败时返回 ''。"""
+    last_err: Exception | None = None
+    for i in range(attempts):
+        try:
+            return llm.chat(system=system, user=user, max_tokens=max_tokens)
+        except Exception as e:
+            last_err = e
+            if i < attempts - 1:
+                time.sleep(backoff ** i)
+    return ""
 
 
 DIM_REPORT_SYSTEM = """你是该维度的资深分析师。基于给定证据池，写一段 200-400 字的维度内归因报告。
@@ -103,10 +120,8 @@ def _rewrite_dim_report(
         f"市场锚点: {market_facts.get('snippet', '')}\n"
         f"该维度证据池:\n{json.dumps(evidence_dump, ensure_ascii=False)}"
     )
-    try:
-        return llm.chat(system=DIM_REPORT_SYSTEM, user=user, max_tokens=4000)
-    except Exception:
-        return dim_result["mini_summary"]
+    out = _call_with_retry(llm, DIM_REPORT_SYSTEM, user, max_tokens=4000)
+    return out if out else dim_result["mini_summary"]
 
 
 def _strip_unverified_numbers(
@@ -169,7 +184,7 @@ async def report_builder_node(
         f"市场锚点: {state['market_facts'].get('snippet', '')}\n"
         f"证据池:\n{json.dumps(evidence_dump, ensure_ascii=False)}"
     )
-    raw = llm.chat(system=NARRATIVE_SYSTEM, user=user, max_tokens=4000)
+    raw = _call_with_retry(llm, NARRATIVE_SYSTEM, user, max_tokens=4000)
     data = _extract_json(raw)
 
     if not data or "claims" not in data:
