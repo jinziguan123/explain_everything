@@ -1,4 +1,7 @@
-from explain_agent.config import Settings
+import pytest
+from pydantic import ValidationError
+
+from explain_agent.config import Settings, get_settings
 
 
 def _set_min_env(monkeypatch):
@@ -45,6 +48,22 @@ def test_mysql_url_built_correctly(monkeypatch):
 def test_invalid_llm_protocol_raises(monkeypatch):
     _set_min_env(monkeypatch)
     monkeypatch.setenv("WEAK_LLM_PROTOCOL", "ollama")
-    import pytest
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Settings()
+
+
+def test_get_settings_returns_singleton(monkeypatch):
+    _set_min_env(monkeypatch)
+    s1 = get_settings()
+    s2 = get_settings()
+    assert s1 is s2
+
+
+def test_get_settings_cache_clear_reloads(monkeypatch):
+    _set_min_env(monkeypatch)
+    s1 = get_settings()
+    get_settings.cache_clear()
+    monkeypatch.setenv("MYSQL_HOST", "different.host")
+    s2 = get_settings()
+    assert s1 is not s2
+    assert s2.mysql_host == "different.host"

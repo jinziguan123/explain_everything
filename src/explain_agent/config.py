@@ -1,3 +1,4 @@
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -85,11 +86,6 @@ class Settings(BaseSettings):
         )
 
 
-_settings: Settings | None = None
-
-
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    global _settings
-    if _settings is None:
-        _settings = Settings()
-    return _settings
+    return Settings()
