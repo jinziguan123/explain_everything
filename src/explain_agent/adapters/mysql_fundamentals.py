@@ -42,7 +42,7 @@ class MySQLFundamentalsAdapter:
         avg_roe = sum(valid_roe) / len(valid_roe) if valid_roe else 0
         avg_np_margin = sum(valid_np) / len(valid_np) if valid_np else 0
         top3 = rows[:3]
-        top_snippet = "; ".join(f"{r[0]} ROE={r[1]}" for r in top3)
+        top_snippet = "; ".join(f"{r[0]} ROE={float(r[1])*100:.2f}%" for r in top3)
         return [
             Evidence(
                 id=str(uuid4()),
@@ -50,7 +50,7 @@ class MySQLFundamentalsAdapter:
                 source_type="market_data",
                 snippet=(
                     f"{q.target} 行业近期基本面快照（{len(rows)} 家公司）："
-                    f"平均 ROE {avg_roe:.2f}%、平均净利率 {avg_np_margin:.2%}；"
+                    f"平均 ROE {float(avg_roe)*100:.2f}%、平均净利率 {float(avg_np_margin)*100:.2f}%；"
                     f"ROE Top 3: {top_snippet}"
                 ),
                 raw_payload={"rows": [list(r) for r in rows]},
