@@ -15,6 +15,7 @@ dependencies = [
     "httpx>=0.28.1",
     "langgraph>=1.1.10",
     "openai>=2.36.0",
+    "prompt-toolkit>=3.0.52",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.1",
     "pymysql>=1.1.3",
@@ -30,6 +31,7 @@ dependencies = [
 
 [project.scripts]
 explain-ingest-news = "explain_agent.cli.ingest_news:app"
+explain = "explain_agent.cli.repl.loop:main"
 
 [build-system]
 requires = ["hatchling"]
