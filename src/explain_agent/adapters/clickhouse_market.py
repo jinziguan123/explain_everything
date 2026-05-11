@@ -10,16 +10,19 @@ class IndustryResolver:
         self.engine = engine
 
     def resolve_industry_symbols(self, industry_name: str) -> list[int]:
-        sql = """
-        SELECT s.symbol_id
-        FROM quant_data.fr_industry_current ic
-        JOIN quant_data.stock_symbol s
-          ON s.symbol = ic.symbol OR s.code = ic.symbol
-        WHERE ic.industry_l1 = %(name)s AND s.is_active = 1
-        """
-        with self.engine.begin() as conn:
-            rows = conn.exec_driver_sql(sql, {"name": industry_name}).fetchall()
-        return [r[0] for r in rows]
+        for level_col in ("sw_l1", "sw_l2", "sw_l3"):
+            sql = f"""
+            SELECT s.symbol_id
+            FROM quant_data.fr_industry_current ic
+            JOIN quant_data.stock_symbol s
+              ON s.symbol = ic.symbol OR s.code = ic.symbol
+            WHERE ic.{level_col} = %(name)s AND s.is_active = 1
+            """
+            with self.engine.begin() as conn:
+                rows = conn.exec_driver_sql(sql, {"name": industry_name}).fetchall()
+            if rows:
+                return [r[0] for r in rows]
+        return []
 
 
 class ClickHouseMarketAdapter:
