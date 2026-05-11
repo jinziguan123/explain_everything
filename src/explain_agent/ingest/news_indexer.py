@@ -48,7 +48,7 @@ class NewsIndexer:
                 conn.exec_driver_sql(
                     """
                     INSERT INTO explain_agent.explain_news_corpus
-                      (news_id, url_hash, source, url, title, content, published_at, tags_json, is_indexed)
+                      (news_id, url_hash, source, url, title, content, published_at, tags, is_indexed)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1)
                     """,
                     (
