@@ -75,3 +75,32 @@ def handle_load(engine, console: Console, state: ReplState, session_id: str) -> 
         f"[green]✓[/green] 切到 session [bold]{session_id}[/bold] "
         f"(target=[cyan]{session.get('target')}[/cyan])"
     )
+
+
+class ReplExit(SystemExit):
+    """正常退出 REPL 的哨兵异常"""
+
+
+def handle_clear(console: Console, state: ReplState) -> None:
+    state.followup_history = []
+    console.print("[dim]✓ 已清空追问历史（当前 session 保留）[/dim]")
+
+
+def handle_help(console: Console) -> None:
+    console.print(
+        """[bold]命令列表:[/bold]
+  [cyan]/new[/cyan] [问题]       开启新 session, 走完整 6 维归因
+  [cyan]/sessions[/cyan]         列最近 10 个 session
+  [cyan]/load[/cyan] [session_id] 切换到指定 session 继续追问
+  [cyan]/clear[/cyan]            清空当前 session 的追问历史
+  [cyan]/help[/cyan]             显示此帮助
+  [cyan]/quit[/cyan] / [cyan]/exit[/cyan]       退出 REPL (或 Ctrl+D)
+
+直接输入文字, 默认作为当前 session 的追问;
+当前无 session 时, 自动作为新问题 (/new)"""
+    )
+
+
+def handle_quit(console: Console) -> None:
+    console.print("[dim]bye.[/dim]")
+    raise ReplExit(0)

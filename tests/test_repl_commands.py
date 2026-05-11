@@ -114,3 +114,37 @@ def test_handle_load_unknown_session(monkeypatch):
     handle_load(engine=MagicMock(), console=console, state=state, session_id="s_nope")
     assert state.current_session_id is None
     assert "找不到" in buf.getvalue() or "not found" in buf.getvalue().lower()
+
+
+def test_handle_clear_resets_followup_history():
+    from explain_agent.cli.repl.commands import handle_clear
+    from explain_agent.cli.repl.state import ReplState
+
+    state = ReplState()
+    state.current_session_id = "s_abc"
+    state.current_session = {"target": "半导体"}
+    state.followup_history = [{"question": "q", "answer": "a"}]
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=120)
+    handle_clear(console=console, state=state)
+    assert state.followup_history == []
+    assert state.current_session_id == "s_abc"
+
+
+def test_handle_help_prints_command_list():
+    from explain_agent.cli.repl.commands import handle_help
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=120)
+    handle_help(console=console)
+    out = buf.getvalue()
+    for cmd in ["/new", "/sessions", "/load", "/clear", "/help", "/quit"]:
+        assert cmd in out
+
+
+def test_handle_quit_raises_sentinel():
+    from explain_agent.cli.repl.commands import handle_quit, ReplExit
+
+    with pytest.raises(ReplExit):
+        handle_quit(console=Console(file=io.StringIO(), force_terminal=False, width=120))
