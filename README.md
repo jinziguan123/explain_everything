@@ -170,6 +170,25 @@ docs/plans/            设计文档 / 实施计划
 - [x] 全部单测通过（115 passed，含 Phase 2.A/2.B/2.C 回归）
 - [x] 端到端 smoke：session `s_17f25967`，2 条 connection_threads，70 条 web snapshot
 
+## Phase 2.D-3 验收状态
+
+Corpus 自动化 + 研报 evidence。lazy_ingest 让 agent 不再依赖手动 ingest；行业/宏观研报填补 dormant 表，让 policy / industry_chain / international 三维多一个权威源。
+
+- [x] `lazy_ingest_node` corpus 自动保鲜（MAX(fetched_at) < now-3h 触发, 60s 超时, 异常静默 fallback）
+- [x] `EastmoneyResearchCrawler` 直接调东财底层 reportapi (qType=1 行业 + qType=2 宏观)
+- [x] `ResearchIndexer` + Qdrant research_v1 collection + snapshot_id=NULL（研报不落 snapshot）
+- [x] `ResearchCorpusAdapter` 向量检索 + MySQL 补全 title/机构/行业 → Evidence(source_type="research")
+- [x] `explain-ingest-research` CLI 手动 batch 入口（首次跑落地 200 条研报）
+- [x] framework YAML 三维（policy / industry_chain / international）加 research_corpus
+- [x] main_graph 拓扑：load_framework → lazy_ingest → market_facts
+- [x] 全部单测通过（143 passed, Phase 2.A-2.D-2 全部回归不破）
+- [x] 端到端 smoke：session `s_1beeb6fb`
+  - lazy_ingest 触发拉 47s（上次 ingest > 3h）
+  - **92 条 research_corpus evidence 真实进入归因**：policy 52 / industry_chain 20 / international 20
+  - 总耗时 7.7 min（含 lazy_ingest 47s + policy 187s 10 轮）
+  - connection_threads 3 条（含 web search 拉的真实存储扩产数据）
+  - narrative_claims 3 条 + Citations 166 条
+
 ## Phase 2.D-2 验收状态
 
 性能 + 漂移率标注闭环 + REPL 可观测性。fan_out 真并发 + strong LLM 链路并发将单次耗时从 13min 压到 5.8min（减半）。
