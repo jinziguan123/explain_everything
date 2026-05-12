@@ -12,6 +12,7 @@ dimensions:
     data_sources:
       - news_corpus
       - web_search
+      - research_corpus
     query_template: "最近 {time_window} 内与 {target} 相关的政策、监管表态、高层讲话"
     evidence_filter:
       tag_filter:
@@ -25,6 +26,7 @@ dimensions:
       - mysql_fundamentals
       - clickhouse_market
       - news_corpus
+      - research_corpus
     query_template: "{target} 产业链上下游近期变化：原料、需求、订单、产能、龙头公司动态"
     needs_market_context: true
 
@@ -53,6 +55,7 @@ dimensions:
     data_sources:
       - news_corpus
       - web_search
+      - research_corpus
     query_template: "{time_window} 内海外同行业表现、地缘事件、商品价格对 {target} 的潜在影响"
     evidence_filter:
       tag_filter:

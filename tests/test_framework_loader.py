@@ -39,3 +39,21 @@ models:
 """, encoding="utf-8")
     fw = load_framework("test", search_paths=[tmp_path])
     assert fw["domain_id"] == "test"
+
+
+def test_policy_dim_includes_research_corpus():
+    fw = load_framework("cn_equity_sector_attribution")
+    policy = next(d for d in fw["dimensions"] if d["id"] == "policy")
+    assert "research_corpus" in policy["data_sources"]
+
+
+def test_industry_chain_dim_includes_research_corpus():
+    fw = load_framework("cn_equity_sector_attribution")
+    ic = next(d for d in fw["dimensions"] if d["id"] == "industry_chain")
+    assert "research_corpus" in ic["data_sources"]
+
+
+def test_international_dim_includes_research_corpus():
+    fw = load_framework("cn_equity_sector_attribution")
+    intl = next(d for d in fw["dimensions"] if d["id"] == "international")
+    assert "research_corpus" in intl["data_sources"]
