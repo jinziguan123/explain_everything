@@ -19,7 +19,7 @@ def make_ev(id: str, snippet: str = "snip") -> Evidence:
 async def test_proposes_threads_and_runs_local_search():
     """强模型提议 1 个本地议题，触发本地检索。"""
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({
             "threads": [
                 {
@@ -33,7 +33,7 @@ async def test_proposes_threads_and_runs_local_search():
             ],
         }),
         "存储芯片产能扩张主要表现在 [e2] ...",
-    ]
+    ])
     fake_news_adapter = MagicMock()
     fake_news_adapter.query = AsyncMock(return_value=[make_ev("e2", "存储扩产新闻")])
     fake_web_adapter = MagicMock()
@@ -67,7 +67,7 @@ async def test_proposes_threads_and_runs_local_search():
 async def test_filters_low_confidence_and_overlap():
     """confidence<3 与 overlap_with_main_dims=True 的议题被砍。"""
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({
             "threads": [
                 {"title": "A", "hypothesis": "", "need_web_search": False,
@@ -79,7 +79,7 @@ async def test_filters_low_confidence_and_overlap():
             ],
         }),
         "C 议题回答",
-    ]
+    ])
     fake_news_adapter = MagicMock()
     fake_news_adapter.query = AsyncMock(return_value=[make_ev("ec")])
     state = new_attribution_state("test")
@@ -98,7 +98,7 @@ async def test_filters_low_confidence_and_overlap():
 @pytest.mark.asyncio
 async def test_triggers_web_search_when_flagged():
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({
             "threads": [
                 {"title": "BIS 制裁", "hypothesis": "需要最新外部新闻",
@@ -107,7 +107,7 @@ async def test_triggers_web_search_when_flagged():
             ],
         }),
         "BIS 制裁最新进展 [ew1] ...",
-    ]
+    ])
     fake_news = MagicMock()
     fake_news.query = AsyncMock(return_value=[])
     fake_web = MagicMock()
@@ -139,7 +139,7 @@ async def test_caps_at_three_threads():
             for i in range(5)
         ]
     }
-    fake_llm.chat.side_effect = [json.dumps(threads_proposal)] + ["回答"] * 3
+    fake_llm.achat = AsyncMock(side_effect=[json.dumps(threads_proposal)] + ["回答"] * 3)
     fake_news = MagicMock()
     fake_news.query = AsyncMock(return_value=[make_ev("e")])
 
@@ -158,7 +158,7 @@ async def test_caps_at_three_threads():
 @pytest.mark.asyncio
 async def test_returns_empty_when_json_invalid():
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = "not json"
+    fake_llm.achat = AsyncMock(return_value="not json")
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))

@@ -78,7 +78,7 @@ async def connection_explorer_node(
         f"证据池(节选): {json.dumps(evidence_dump, ensure_ascii=False)}"
     )
     try:
-        raw = llm.chat(system=PROPOSE_SYSTEM, user=user, max_tokens=2000)
+        raw = await llm.achat(system=PROPOSE_SYSTEM, user=user, max_tokens=2000)
     except Exception:
         return {"connection_threads": []}
     data = _extract_json(raw)
@@ -144,7 +144,7 @@ async def connection_explorer_node(
             f"证据池: {json.dumps(ev_dump, ensure_ascii=False)}"
         )
         try:
-            content = llm.chat(system=ANSWER_SYSTEM, user=ans_user, max_tokens=2000)
+            content = await llm.achat(system=ANSWER_SYSTEM, user=ans_user, max_tokens=2000)
         except Exception:
             continue
 
