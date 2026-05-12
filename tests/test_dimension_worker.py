@@ -17,11 +17,11 @@ def make_evidence(id: str, score: float = 0.8) -> Evidence:
 @pytest.mark.asyncio
 async def test_worker_terminates_when_evidence_sufficient():
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({"keywords": ["半导体", "涨停"]}),
         json.dumps({"sufficient": True, "relevant_ids": ["e1", "e2"]}),
         "本维度共找到 2 条政策类证据,主因是 ...",
-    ]
+    ])
     mock_adapter = MagicMock()
     mock_adapter.query = AsyncMock(return_value=[make_evidence("e1"), make_evidence("e2")])
     registry = {"news_corpus": mock_adapter}
@@ -48,7 +48,7 @@ async def test_worker_terminates_when_evidence_sufficient():
 @pytest.mark.asyncio
 async def test_worker_marks_no_data_when_adapter_always_empty():
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = json.dumps({"keywords": ["x"]})
+    fake_llm.achat = AsyncMock(return_value=json.dumps({"keywords": ["x"]}))
     mock_adapter = MagicMock()
     mock_adapter.query = AsyncMock(return_value=[])
 
@@ -70,11 +70,11 @@ async def test_worker_marks_no_data_when_adapter_always_empty():
 async def test_worker_auto_expands_window_on_empty():
     """单日窗口查空时自动扩到 7 天再试。"""
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({"keywords": ["k1"]}),
         json.dumps({"sufficient": True, "relevant_ids": ["e1"]}),
         "summary",
-    ]
+    ])
 
     call_windows = []
 
@@ -107,10 +107,10 @@ async def test_worker_auto_expands_window_on_empty():
 @pytest.mark.asyncio
 async def test_worker_respects_max_rounds():
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({"keywords": [f"k{i}"]}) if i % 2 == 0 else json.dumps({"sufficient": False})
         for i in range(20)
-    ]
+    ])
     mock_adapter = MagicMock()
     mock_adapter.query = AsyncMock(return_value=[make_evidence("e_x")])
 

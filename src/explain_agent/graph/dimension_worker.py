@@ -73,7 +73,7 @@ class DimensionWorker:
         for round_idx in range(1, max_rounds + 1):
             rounds = round_idx
             round_t0 = time.perf_counter()
-            keywords = self._gen_keywords(target, time_window, market_facts, all_evidence)
+            keywords = await self._gen_keywords(target, time_window, market_facts, all_evidence)
             new_ev = await self._fetch_all_sources(keywords, target, time_window)
             new_ids = {e.id for e in new_ev} - {e.id for e in all_evidence}
             all_evidence.extend([e for e in new_ev if e.id in new_ids])
@@ -88,7 +88,7 @@ class DimensionWorker:
                 continue
             no_gain_count = 0
 
-            sufficient = self._is_sufficient(all_evidence, target)
+            sufficient = await self._is_sufficient(all_evidence, target)
             self._emit_round(round_idx, max_rounds, keywords, len(new_ids),
                              len(all_evidence), time.perf_counter() - round_t0,
                              reason="sufficient" if sufficient else "continue")
@@ -103,7 +103,7 @@ class DimensionWorker:
             self._emit_done(t0, result)
             return result
 
-        summary = self._summarize(all_evidence, target, market_facts)
+        summary = await self._summarize(all_evidence, target, market_facts)
         confidence = self._estimate_confidence(all_evidence)
         result = DimensionResult(
             evidence=all_evidence, mini_summary=summary,
@@ -145,7 +145,7 @@ class DimensionWorker:
         except Exception:
             pass
 
-    def _gen_keywords(
+    async def _gen_keywords(
         self, target: str, time_window: tuple[date, date],
         market_facts: dict, existing: list[Evidence],
     ) -> list[str]:
@@ -156,7 +156,7 @@ class DimensionWorker:
             f"市场锚点: {market_facts.get('snippet', '')}\n"
             f"已有证据(最近 5 条): {existing_titles or '无'}"
         )
-        raw = self.llm.chat(system=QUERY_GEN_SYSTEM, user=user, max_tokens=2000)
+        raw = await self.llm.achat(system=QUERY_GEN_SYSTEM, user=user, max_tokens=2000)
         data = _extract_json(raw)
         return data.get("keywords", [target])[:5] if data else [target]
 
@@ -186,20 +186,20 @@ class DimensionWorker:
                 continue
         return out
 
-    def _is_sufficient(self, evidence: list[Evidence], target: str) -> bool:
+    async def _is_sufficient(self, evidence: list[Evidence], target: str) -> bool:
         snippets = "\n".join(f"id={e.id}: {e.snippet[:200]}" for e in evidence[:20])
         user = f"维度: {self.dim['name']}\n标的: {target}\n证据:\n{snippets}"
-        raw = self.llm.chat(system=EVAL_SYSTEM, user=user, max_tokens=2000)
+        raw = await self.llm.achat(system=EVAL_SYSTEM, user=user, max_tokens=2000)
         data = _extract_json(raw)
         return bool(data and data.get("sufficient", False))
 
-    def _summarize(self, evidence: list[Evidence], target: str, market_facts: dict) -> str:
+    async def _summarize(self, evidence: list[Evidence], target: str, market_facts: dict) -> str:
         snippets = "\n".join(f"id={e.id}: {e.snippet[:300]}" for e in evidence)
         user = (
             f"维度: {self.dim['name']}\n标的: {target}\n"
             f"市场锚点: {market_facts.get('snippet', '')}\n证据:\n{snippets}"
         )
-        return self.llm.chat(system=SUMMARY_SYSTEM, user=user, max_tokens=2000)
+        return await self.llm.achat(system=SUMMARY_SYSTEM, user=user, max_tokens=2000)
 
     def _estimate_confidence(self, evidence: list[Evidence]) -> str:
         n = len(evidence)
