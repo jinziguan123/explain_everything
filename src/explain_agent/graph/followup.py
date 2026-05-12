@@ -58,7 +58,7 @@ async def run_followup(
 ) -> dict:
     user = _build_followup_prompt(session, history, question)
     try:
-        answer = llm.chat(system=FOLLOWUP_SYSTEM, user=user, max_tokens=2000)
+        answer = await llm.achat(system=FOLLOWUP_SYSTEM, user=user, max_tokens=2000)
     except Exception as e:
         answer = f"（追问失败：{e!s}。请重试或换问法）"
         return {"answer": answer, "session_id": session["session_id"]}

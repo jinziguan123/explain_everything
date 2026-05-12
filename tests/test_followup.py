@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from explain_agent.graph.followup import run_followup, _build_followup_prompt
@@ -10,7 +10,7 @@ from explain_agent.graph.followup import run_followup, _build_followup_prompt
 @pytest.mark.asyncio
 async def test_run_followup_returns_answer_and_triggers_persist(monkeypatch):
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = "政策面主要是 ..."
+    fake_llm.achat = AsyncMock(return_value="政策面主要是 ...")
 
     persisted = []
 
@@ -50,7 +50,7 @@ async def test_run_followup_returns_answer_and_triggers_persist(monkeypatch):
 @pytest.mark.asyncio
 async def test_followup_falls_back_when_llm_raises(monkeypatch):
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = RuntimeError("network down")
+    fake_llm.achat = AsyncMock(side_effect=RuntimeError("network down"))
 
     async def noop(*args, **kwargs):
         pass
