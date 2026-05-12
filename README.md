@@ -5,12 +5,83 @@ A 股板块/主题异动归因 AI agent。
 - [设计文档](docs/plans/2026-05-11-explain-agent-design.md)
 - [Phase 1 实施计划](docs/plans/2026-05-11-explain-agent-phase1.md)
 
-## 快速开始
+## 如何启动这个项目
+
+### 0. 前置基础设施
+
+需要先准备好以下外部服务：
+
+| 服务 | 用途 | 必需 |
+|---|---|---|
+| MySQL 8.0+ | `quant_data` 库（行情/基本面，已有）+ `explain_agent` 库（agent 运行态） | 是 |
+| ClickHouse | 日线行情 / 板块涨跌幅（复用 `quant_data` 库） | 是 |
+| Qdrant 1.x | 新闻 / 政策 / 研报 embedding 向量库 | 是 |
+| 强模型 API（Claude / DeepSeek 等） | synthesizer / narrative / followup_answer | 是 |
+| 弱模型 API（DeepSeek 等） | query gen / evidence eval / mini summary | 是 |
+| Tavily API | connection_explorer 与三个时效维度的 web search | 否（可选） |
+
+### 1. 安装依赖与配置
 
 ```bash
 uv sync
-cp .env.example .env  # 填写真实凭证
+cp .env.example .env
+# 编辑 .env 填入真实凭证：
+#   MYSQL_* / CLICKHOUSE_* / QDRANT_*
+#   WEAK_LLM_* / STRONG_LLM_*
+#   TAVILY_API_KEY=tvly-xxx  (可选，注册 https://tavily.com 拿免费 1000/月)
+```
+
+### 2. 初始化存储
+
+```bash
+# MySQL schema（创建 explain_agent 库 + 7 张表）
+uv run python scripts/run_migrations.py
+
+# Qdrant 三个 collection（news_v1 / policy_v1 / research_v1）
+uv run python -c "from explain_agent.db.qdrant_init import ensure_collections; print(ensure_collections())"
+```
+
+### 3. 数据准备：采集新闻语料
+
+```bash
+# 默认拉 18 个行业关键词，每个最多 200 条
+uv run explain-ingest-news
+
+# 或指定关键词文件
+uv run explain-ingest-news --keywords-file my_keywords.txt --limit-per-kw 100
+```
+
+> 当前 ingest CLI 暂未注入 `SnapshotStore`，新爬新闻不会自动落 snapshot；待 Phase 2.D-2 补齐。Tavily web search 与历史 snapshot 不受影响。
+
+### 4. 运行
+
+**交互式 REPL（推荐日常使用）：**
+
+```bash
+uv run explain
+# explain> 为什么半导体板块今天涨
+# explain> /sessions          # 查看历史
+# explain> /load s_xxx        # 加载历史 session 进入追问模式
+# explain> /clear             # 清空当前 session 进入新一轮
+# explain> /help              # 查看所有 slash 命令
+# explain> /quit
+```
+
+**端到端 smoke（一次性跑完整链路 + 详细追踪）：**
+
+```bash
+PYTHONUNBUFFERED=1 uv run python -u scripts/run_main_graph_smoke.py "为什么半导体板块今天涨"
+# 单次约 8-12 分钟，输出 6 维归因 + 延伸思考 + 全部 evidence/citation
+```
+
+### 5. 测试
+
+```bash
+# 默认排除 integration 标记，~6 秒跑完
 uv run pytest
+
+# 含集成测试（需真实 DB 凭证）
+uv run pytest -m ""
 ```
 
 ## 项目结构
