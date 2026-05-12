@@ -62,4 +62,6 @@ def load_session(engine, session_id: str) -> dict | None:
         "dimension_reports": tree.get("dimension_reports", {}),
         "citations": tree.get("citations", []),
         "market_facts": tree.get("market_facts", {}),
+        "connection_threads": tree.get("connection_threads", []),
+        "connection_section": tree.get("connection_section", ""),
     }
