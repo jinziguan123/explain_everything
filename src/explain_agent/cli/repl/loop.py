@@ -146,16 +146,44 @@ def _build_environment() -> ReplEnvironment:
     weak = get_weak_llm()
     strong = get_strong_llm()
 
+    def on_dim_done(dim_id, duration, no_data, retry_count, evidence_count):
+        flag = "[red]no_data[/red]" if no_data else f"[green]ok[/green] ev={evidence_count}"
+        console.print(
+            f"  └─ {flag} [bold]{dim_id}[/bold] "
+            f"[dim]rounds={retry_count} ({duration:.1f}s)[/dim]"
+        )
+
+    def on_dim_round(dim_id, round_idx, max_rounds, keywords, new_count,
+                     total_count, duration, reason):
+        kw_preview = ",".join(keywords) if keywords else "-"
+        console.print(
+            f"    [dim cyan]·[/dim cyan] [bold]{dim_id}[/bold] "
+            f"[dim]round {round_idx}/{max_rounds}[/dim] kw=[{kw_preview}] "
+            f"new={new_count} total={total_count} [dim]({duration:.1f}s, {reason})[/dim]"
+        )
+
+    def on_node_event(event, name, *args):
+        if event == "start":
+            console.print(f"[dim]▶[/dim] [bold]{name}[/bold] ...")
+        elif event == "end":
+            dur = args[0]
+            console.print(f"[green]✓[/green] [bold]{name}[/bold] [dim]({dur:.1f}s)[/dim]")
+        elif event == "error":
+            dur, err = args
+            console.print(f"[red]✗[/red] [bold]{name}[/bold] [dim]({dur:.1f}s)[/dim] {err}")
+
     def worker_factory(dimension_config, worker_config):
         return DimensionWorker(
             dimension_config=dimension_config, worker_config=worker_config,
             llm=weak, adapter_registry=registry,
+            on_done=on_dim_done, on_round=on_dim_round,
         )
     graph = build_main_graph(
         market_adapter=registry["clickhouse_market"],
         worker_factory=worker_factory,
         weak_llm=weak, strong_llm=strong, engine=explain_engine,
         adapter_registry=registry,
+        on_node_event=on_node_event,
     )
 
     async def _run_main_graph(question: str) -> dict:
