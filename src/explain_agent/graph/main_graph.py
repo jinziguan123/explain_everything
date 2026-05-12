@@ -10,6 +10,7 @@ from explain_agent.graph.nodes.fetch_market_facts import fetch_market_facts_node
 from explain_agent.graph.nodes.fan_out_dimensions import fan_out_dimensions_node
 from explain_agent.graph.nodes.synthesizer import synthesizer_node
 from explain_agent.graph.nodes.dynamic_subbranches import dynamic_subbranches_node
+from explain_agent.graph.nodes.connection_explorer import connection_explorer_node
 from explain_agent.graph.nodes.report_builder import report_builder_node
 from explain_agent.graph.nodes.persist import persist_node
 from explain_agent.graph.framework_loader import load_framework
@@ -24,6 +25,7 @@ def build_main_graph(
     weak_llm,
     strong_llm,
     engine,
+    adapter_registry: dict | None = None,
     on_node_event: NodeEvent | None = None,
 ):
     g = StateGraph(AttributionState)
@@ -66,6 +68,13 @@ def build_main_graph(
     async def _sub(state):
         return await dynamic_subbranches_node(state, worker_factory=worker_factory)
 
+    async def _connection(state):
+        if adapter_registry is None:
+            return {"connection_threads": []}
+        return await connection_explorer_node(
+            state, llm=strong_llm, adapter_registry=adapter_registry,
+        )
+
     async def _report(state):
         return await report_builder_node(state, llm=strong_llm)
 
@@ -79,6 +88,7 @@ def build_main_graph(
     g.add_node("fan_out", _trace("fan_out", _fan_out))
     g.add_node("synth", _trace("synth", _synth))
     g.add_node("dynamic_sub", _trace("dynamic_sub", _sub))
+    g.add_node("connection_explorer", _trace("connection_explorer", _connection))
     g.add_node("report", _trace("report", _report))
     g.add_node("persist", _trace("persist", _persist))
 
@@ -89,7 +99,8 @@ def build_main_graph(
     g.add_edge("market_facts", "fan_out")
     g.add_edge("fan_out", "synth")
     g.add_edge("synth", "dynamic_sub")
-    g.add_edge("dynamic_sub", "report")
+    g.add_edge("dynamic_sub", "connection_explorer")
+    g.add_edge("connection_explorer", "report")
     g.add_edge("report", "persist")
     g.add_edge("persist", END)
 
