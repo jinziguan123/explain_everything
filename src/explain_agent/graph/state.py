@@ -80,6 +80,10 @@ class AttributionState(TypedDict, total=False):
     total_cost: float
     errors: list[str]
 
+    # lazy ingest（Phase 2.D-3 新增, 可选字段）
+    lazy_ingest_count: int
+    lazy_ingest_skipped: bool
+
 
 def new_attribution_state(raw_question: str, session_id: str | None = None) -> AttributionState:
     return {

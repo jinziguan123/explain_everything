@@ -80,3 +80,18 @@ def test_connection_thread_typeddict():
 def test_new_state_has_connection_threads():
     s = new_attribution_state(raw_question="test")
     assert s["connection_threads"] == []
+
+
+def test_attribution_state_supports_lazy_ingest_fields():
+    """lazy_ingest_count / lazy_ingest_skipped 是 AttributionState 合法字段。"""
+    from explain_agent.graph.state import AttributionState
+    s: AttributionState = new_attribution_state(raw_question="test")
+    s["lazy_ingest_count"] = 5
+    s["lazy_ingest_skipped"] = False
+    assert s["lazy_ingest_count"] == 5
+    assert s["lazy_ingest_skipped"] is False
+
+    # 默认 new_attribution_state 不放这两个字段（保持"未跑过"的状态）
+    s2 = new_attribution_state(raw_question="test2")
+    assert "lazy_ingest_count" not in s2
+    assert "lazy_ingest_skipped" not in s2
