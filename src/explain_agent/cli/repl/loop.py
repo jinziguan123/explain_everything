@@ -70,6 +70,17 @@ async def _run_main(state: ReplState, env: ReplEnvironment, question: str) -> No
     state.current_session = load_session(env.engine, state.current_session_id)
     state.followup_history = []
 
+    env.console.print(f"\n[bold yellow]Narrative:[/bold yellow]\n{result.get('narrative', '')}")
+    env.console.print(f"\n[bold]Confidence:[/bold] {result.get('confidence')}")
+    dim_reports = result.get("dimension_reports", {})
+    if dim_reports:
+        env.console.print("\n[bold yellow]Dimension Reports:[/bold yellow]")
+        for dim_id, report in dim_reports.items():
+            env.console.print(f"\n[bold]▎ {dim_id}[/bold]")
+            env.console.print(report[:600])
+    if result.get("connection_section"):
+        env.console.print(f"\n[bold magenta]{result['connection_section']}[/bold magenta]")
+
 
 async def _run_followup(state: ReplState, env: ReplEnvironment, question: str) -> None:
     out = await env.run_followup(
@@ -87,6 +98,8 @@ def _build_environment() -> ReplEnvironment:
     from explain_agent.adapters.mysql_fundamentals import MySQLFundamentalsAdapter
     from explain_agent.adapters.akshare_capital_flow import AkshareCapitalFlowAdapter
     from explain_agent.adapters.news_corpus import NewsCorpusAdapter
+    from explain_agent.adapters.web_search import WebSearchAdapter
+    from explain_agent.config import get_settings
     from explain_agent.db.clickhouse import get_client as ch_client
     from explain_agent.db.mysql import get_engine
     from explain_agent.db.qdrant import get_qdrant_client
@@ -96,6 +109,7 @@ def _build_environment() -> ReplEnvironment:
     from explain_agent.graph.state import new_attribution_state
     from explain_agent.graph.followup import run_followup
     from explain_agent.llm import get_strong_llm, get_weak_llm
+    from explain_agent.storage.snapshot import SnapshotStore
 
     console = Console()
     console.print("[dim]初始化 DB / embedder ...[/dim]")
@@ -112,6 +126,17 @@ def _build_environment() -> ReplEnvironment:
             qdrant=get_qdrant_client(), embedder=embedder, engine=explain_engine,
         ),
     }
+
+    settings = get_settings()
+    snapshot_store = SnapshotStore(base_dir=settings.snapshot_dir, engine=explain_engine)
+    if settings.tavily_api_key:
+        from tavily import TavilyClient
+        tavily = TavilyClient(api_key=settings.tavily_api_key)
+        registry["web_search"] = WebSearchAdapter(tavily, snapshot_store)
+        console.print("[dim]✓ web_search adapter (Tavily) 已注入[/dim]")
+    else:
+        console.print("[yellow]⚠ TAVILY_API_KEY 未设置，web_search 链路被跳过[/yellow]")
+
     weak = get_weak_llm()
     strong = get_strong_llm()
 
@@ -124,6 +149,7 @@ def _build_environment() -> ReplEnvironment:
         market_adapter=registry["clickhouse_market"],
         worker_factory=worker_factory,
         weak_llm=weak, strong_llm=strong, engine=explain_engine,
+        adapter_registry=registry,
     )
 
     async def _run_main_graph(question: str) -> dict:

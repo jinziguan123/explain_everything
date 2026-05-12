@@ -72,3 +72,17 @@ docs/plans/            设计文档 / 实施计划
 - [x] 全部单测通过（93 passed，Phase 2.A/2.B 全部回归不破）
 - [ ] 端到端 REPL smoke（用户手动验收，因 main graph 单次需 ~10 min）
 
+## Phase 2.D-1 验收状态
+
+- [x] SnapshotStore（本地磁盘 + MySQL 指针）
+- [x] WebSearchAdapter（Tavily 封装，可选启用）
+- [x] ingest pipeline 集成 snapshot（新爬即存，不回填历史）
+- [x] framework YAML 三个时效维度加 web_search
+- [x] connection_explorer 节点（≤3 延伸议题 + 强模型自决 web）
+- [x] State schema 扩展（ConnectionThread / connection_threads / connection_section）
+- [x] report_builder 渲染"延伸思考"段落
+- [x] persist tree_json 补 connection_threads + connection_section
+- [x] main_graph 拓扑：dynamic_sub → connection_explorer → report
+- [x] 全部单测通过（115 passed，含 Phase 2.A/2.B/2.C 回归）
+- [ ] 端到端 smoke：手动用户验收（需要 TAVILY_API_KEY）
+

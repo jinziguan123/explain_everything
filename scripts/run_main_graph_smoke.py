@@ -6,6 +6,8 @@ from explain_agent.adapters.clickhouse_market import ClickHouseMarketAdapter, In
 from explain_agent.adapters.mysql_fundamentals import MySQLFundamentalsAdapter
 from explain_agent.adapters.akshare_capital_flow import AkshareCapitalFlowAdapter
 from explain_agent.adapters.news_corpus import NewsCorpusAdapter
+from explain_agent.adapters.web_search import WebSearchAdapter
+from explain_agent.config import get_settings
 from explain_agent.db.clickhouse import get_client as ch_client
 from explain_agent.db.mysql import get_engine
 from explain_agent.db.qdrant import get_qdrant_client
@@ -14,6 +16,7 @@ from explain_agent.graph.dimension_worker import DimensionWorker
 from explain_agent.graph.main_graph import build_main_graph
 from explain_agent.graph.state import new_attribution_state
 from explain_agent.llm import get_strong_llm, get_weak_llm
+from explain_agent.storage.snapshot import SnapshotStore
 
 
 console = Console()
@@ -40,6 +43,16 @@ def main(question: str = "为什么半导体板块今天涨"):
         "akshare_capital_flow": flow,
         "news_corpus": news,
     }
+
+    settings = get_settings()
+    snapshot_store = SnapshotStore(base_dir=settings.snapshot_dir, engine=explain_engine)
+    if settings.tavily_api_key:
+        from tavily import TavilyClient
+        tavily = TavilyClient(api_key=settings.tavily_api_key)
+        registry["web_search"] = WebSearchAdapter(tavily, snapshot_store)
+        console.print("[dim]✓ web_search adapter (Tavily) 已注入[/dim]")
+    else:
+        console.print("[yellow]⚠ TAVILY_API_KEY 未设置，web_search 链路被跳过[/yellow]")
 
     weak = get_weak_llm()
     strong = get_strong_llm()
@@ -86,6 +99,7 @@ def main(question: str = "为什么半导体板块今天涨"):
         weak_llm=weak,
         strong_llm=strong,
         engine=explain_engine,
+        adapter_registry=registry,
         on_node_event=on_node_event,
     )
 
@@ -123,6 +137,19 @@ def main(question: str = "为什么半导体板块今天涨"):
         for name, r in result["subbranch_results"].items():
             console.print(f"\n[bold]▎ 子分支: {name}[/bold]")
             console.print(r["mini_summary"][:500])
+
+    threads = result.get("connection_threads", [])
+    console.print(f"\n[bold magenta]Connection Threads ({len(threads)} 条):[/bold magenta]")
+    for t in threads:
+        console.print(
+            f"  ▎ [cyan]{t['title']}[/cyan]  "
+            f"[dim]source={t['source']}, confidence={t['confidence']}, "
+            f"evidence={len(t['evidence_ids'])} 条[/dim]"
+        )
+        console.print(f"    {t['content'][:300]}")
+
+    if result.get("connection_section"):
+        console.print(f"\n[bold magenta]{result['connection_section']}[/bold magenta]")
 
     console.print(f"\n[bold]Citations:[/bold] {len(result.get('citations', []))} 条")
     console.print(f"[bold]Session ID:[/bold] {result.get('session_id')}")
