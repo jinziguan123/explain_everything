@@ -2,8 +2,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+load_dotenv(override=False)
 
 
 LLMProtocol = Literal["anthropic", "openai"]

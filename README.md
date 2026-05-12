@@ -84,6 +84,18 @@ uv run pytest
 uv run pytest -m ""
 ```
 
+### 故障排查
+
+**首次启动卡在 BGE-M3 下载（`SSL: UNEXPECTED_EOF` / `Cannot send a request`）：**
+HuggingFace 在国内不稳定。在 `.env` 加一行启用镜像：
+
+```
+HF_ENDPOINT=https://hf-mirror.com
+```
+
+模型下载到本地 HF cache 后即可离线复用。镜像配置由 `config.py` 启动时
+通过 `dotenv.load_dotenv()` 推送到 `os.environ`，无需手动 `export`。
+
 ## 项目结构
 
 ```
