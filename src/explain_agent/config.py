@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     qdrant_host: str
     qdrant_port: int = 6333
     qdrant_api_key: str | None = None
+    tavily_api_key: str | None = None
 
     weak_llm_protocol: LLMProtocol
     weak_llm_base_url: str
