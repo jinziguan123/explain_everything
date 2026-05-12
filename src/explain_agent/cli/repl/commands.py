@@ -167,3 +167,56 @@ def handle_annotate(engine, console: Console, state: ReplState, prompt_fn=input)
 
     summary = f"完成。session {session_id}: {counts['green']} 🟢 / {counts['yellow']} 🟡 / {counts['red']} 🔴"
     console.print(f"\n{summary}")
+
+
+def handle_stats(engine, console: Console) -> None:
+    with engine.connect() as conn:
+        rows = conn.exec_driver_sql(
+            """
+            SELECT label, COUNT(*) AS cnt
+            FROM explain_agent.explain_annotation
+            GROUP BY label
+            """
+        ).fetchall()
+        if not rows:
+            console.print("[dim]explain_annotation 无标注数据。先 /annotate 一些 session。[/dim]")
+            return
+        counts = {r[0]: r[1] for r in rows}
+        total = sum(counts.values())
+        session_count = conn.exec_driver_sql(
+            "SELECT COUNT(DISTINCT session_id) FROM explain_agent.explain_annotation"
+        ).fetchone()[0]
+        recent_reds = conn.exec_driver_sql(
+            """
+            SELECT session_id, thread_title FROM explain_agent.explain_annotation
+            WHERE label='red' ORDER BY created_at DESC LIMIT 5
+            """
+        ).fetchall()
+
+    green = counts.get("green", 0)
+    yellow = counts.get("yellow", 0)
+    red = counts.get("red", 0)
+    green_pct = green / total * 100
+    yellow_pct = yellow / total * 100
+    red_pct = red / total * 100
+
+    console.print(f"\n▎ Connection threads 漂移率统计 (基于 {total} 个已标注 thread):")
+    console.print()
+    console.print(f"  🟢 真知灼见     {green:>3}   {green_pct:5.1f}%")
+    console.print(f"  🟡 合理但平庸   {yellow:>3}   {yellow_pct:5.1f}%")
+    console.print(f"  🔴 漂移         {red:>3}   {red_pct:5.1f}%")
+    console.print()
+    console.print(f"  涉及 session 数: {session_count}")
+
+    if recent_reds:
+        console.print(f"  最近 {len(recent_reds)} 个标记的 🔴 议题:")
+        for sid, title in recent_reds:
+            console.print(f"    - {sid}: \"{title}\"")
+
+    console.print()
+    if red_pct < 20:
+        console.print("[green]判断: 🔴 < 20% → Phase 3-A 接受度高, 不必启动 3-B (学科正交度地图)[/green]")
+    elif red_pct < 30:
+        console.print("[yellow]判断: 🔴 在 20-30% 之间 → Phase 3-A 可用但有改进空间, 暂不启动 3-B[/yellow]")
+    else:
+        console.print("[red]判断: 🔴 ≥ 30% → 启动 Phase 3-B (学科正交度地图引导发散)[/red]")

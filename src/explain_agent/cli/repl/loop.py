@@ -62,6 +62,9 @@ async def _run_slash(state: ReplState, env: ReplEnvironment, cmd: SlashCommand) 
     elif cmd.name == "annotate":
         from explain_agent.cli.repl.commands import handle_annotate
         handle_annotate(engine=env.engine, console=env.console, state=state)
+    elif cmd.name == "stats":
+        from explain_agent.cli.repl.commands import handle_stats
+        handle_stats(engine=env.engine, console=env.console)
 
 
 async def _run_main(state: ReplState, env: ReplEnvironment, question: str) -> None:

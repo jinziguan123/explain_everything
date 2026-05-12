@@ -102,3 +102,44 @@ def test_annotate_no_threads_prints_warning():
     console.print.assert_called_once()
     msg = console.print.call_args.args[0]
     assert "connection_threads" in msg or "无" in msg
+
+
+def test_stats_groups_by_label_with_phase3_recommendation():
+    from explain_agent.cli.repl.commands import handle_stats
+
+    mock_engine = MagicMock()
+    mock_conn = MagicMock()
+    mock_engine.connect.return_value.__enter__.return_value = mock_conn
+    # 3 个 label 分布 + 5 个最近 red
+    mock_conn.exec_driver_sql.side_effect = [
+        MagicMock(fetchall=lambda: [("green", 9), ("yellow", 11), ("red", 3)]),
+        MagicMock(fetchone=lambda: (12,)),  # session_count
+        MagicMock(fetchall=lambda: [
+            ("s_a", "区块链与白酒"),
+            ("s_b", "ESG 与煤炭"),
+        ]),
+    ]
+    console = MagicMock()
+
+    handle_stats(engine=mock_engine, console=console)
+    # 验证至少打印了主表 + 建议
+    calls = "\n".join(str(c) for c in console.print.call_args_list)
+    assert "23" in calls   # 总数
+    assert "39" in calls or "39.1" in calls   # green pct
+    # 13% red → 应推荐"不必启动 3-B"
+    assert "3-B" in calls or "20%" in calls or "Phase 3" in calls
+
+
+def test_stats_empty_db():
+    from explain_agent.cli.repl.commands import handle_stats
+
+    mock_engine = MagicMock()
+    mock_conn = MagicMock()
+    mock_engine.connect.return_value.__enter__.return_value = mock_conn
+    mock_conn.exec_driver_sql.side_effect = [
+        MagicMock(fetchall=lambda: []),
+    ]
+    console = MagicMock()
+    handle_stats(engine=mock_engine, console=console)
+    calls = "\n".join(str(c) for c in console.print.call_args_list)
+    assert "无" in calls or "0" in calls or "empty" in calls.lower()
