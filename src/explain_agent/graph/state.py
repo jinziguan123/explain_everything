@@ -30,6 +30,15 @@ class NarrativeClaim(TypedDict):
     evidence_ids: list[str]
 
 
+class ConnectionThread(TypedDict):
+    title: str
+    hypothesis: str
+    content: str
+    evidence_ids: list[str]
+    source: Literal["local", "web", "mixed"]
+    confidence: int  # 1-5
+
+
 class AttributionState(TypedDict, total=False):
     # 输入
     raw_question: str
@@ -60,7 +69,9 @@ class AttributionState(TypedDict, total=False):
     narrative: str
     narrative_claims: list[NarrativeClaim]
     unverified_drops: list[str]
+    connection_threads: list[ConnectionThread]
     dimension_reports: dict[str, str]
+    connection_section: str
     citations: list[Citation]
     confidence: Literal["high", "medium", "low"]
 
@@ -82,7 +93,9 @@ def new_attribution_state(raw_question: str, session_id: str | None = None) -> A
         "narrative": "",
         "narrative_claims": [],
         "unverified_drops": [],
+        "connection_threads": [],
         "dimension_reports": {},
+        "connection_section": "",
         "citations": [],
         "confidence": "medium",
         "llm_calls": {},

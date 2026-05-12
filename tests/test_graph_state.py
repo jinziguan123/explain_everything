@@ -61,3 +61,22 @@ def test_citation():
         "source_type": "news",
     }
     assert c["evidence_id"] == "e_001"
+
+
+def test_connection_thread_typeddict():
+    from explain_agent.graph.state import ConnectionThread
+    t: ConnectionThread = {
+        "title": "美国 BIS 制裁 HBM 进展",
+        "hypothesis": "证据反复出现 HBM 但未被 6 维覆盖",
+        "content": "本周 BIS 发布...",
+        "evidence_ids": ["e1"],
+        "source": "web",
+        "confidence": 4,
+    }
+    assert t["source"] == "web"
+    assert t["confidence"] == 4
+
+
+def test_new_state_has_connection_threads():
+    s = new_attribution_state(raw_question="test")
+    assert s["connection_threads"] == []
