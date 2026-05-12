@@ -51,7 +51,8 @@ uv run explain-ingest-news
 uv run explain-ingest-news --keywords-file my_keywords.txt --limit-per-kw 100
 ```
 
-> 当前 ingest CLI 暂未注入 `SnapshotStore`，新爬新闻不会自动落 snapshot；待 Phase 2.D-2 补齐。Tavily web search 与历史 snapshot 不受影响。
+> 新爬新闻会自动经 trafilatura 抽取正文 → SnapshotStore 落盘 +
+> `explain_snapshot_blob` 指针表，与 Tavily web search 链路统一存储。
 
 ### 4. 运行
 
