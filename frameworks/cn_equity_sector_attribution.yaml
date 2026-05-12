@@ -11,6 +11,7 @@ dimensions:
     priority: 1
     data_sources:
       - news_corpus
+      - web_search
     query_template: "最近 {time_window} 内与 {target} 相关的政策、监管表态、高层讲话"
     evidence_filter:
       tag_filter:
@@ -40,6 +41,7 @@ dimensions:
     priority: 2
     data_sources:
       - news_corpus
+      - web_search
     query_template: "{time_window} 内 {target} 相关的突发新闻、社交热度、关联概念联动"
     evidence_filter:
       tag_filter:
@@ -50,6 +52,7 @@ dimensions:
     priority: 3
     data_sources:
       - news_corpus
+      - web_search
     query_template: "{time_window} 内海外同行业表现、地缘事件、商品价格对 {target} 的潜在影响"
     evidence_filter:
       tag_filter:
