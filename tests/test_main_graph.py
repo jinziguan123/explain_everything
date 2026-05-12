@@ -26,12 +26,12 @@ async def test_main_graph_compiles_and_runs_with_mocks():
     fake_worker_factory = MagicMock(return_value=fake_worker)
 
     fake_weak_llm = MagicMock()
-    fake_weak_llm.chat.side_effect = lambda **kwargs: json.dumps({
+    fake_weak_llm.achat = AsyncMock(side_effect=lambda **kwargs: json.dumps({
         "target": "半导体",
         "time_window_start": "2026-05-05",
         "time_window_end": "2026-05-12",
         "intent": "up",
-    })
+    }))
 
     fake_strong_llm = MagicMock()
     fake_strong_llm.chat.side_effect = [

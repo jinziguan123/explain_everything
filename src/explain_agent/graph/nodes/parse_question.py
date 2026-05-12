@@ -42,7 +42,7 @@ async def parse_question_node(
     today = state["asked_at"].date()
     user = f"今天: {today}\n用户输入: {state['raw_question']}"
 
-    raw = llm.chat(system=SYSTEM, user=user, max_tokens=2000)
+    raw = await llm.achat(system=SYSTEM, user=user, max_tokens=2000)
     data = _extract_json(raw)
     if data is None:
         return {
