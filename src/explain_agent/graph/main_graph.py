@@ -13,6 +13,7 @@ from explain_agent.graph.nodes.dynamic_subbranches import dynamic_subbranches_no
 from explain_agent.graph.nodes.connection_explorer import connection_explorer_node
 from explain_agent.graph.nodes.report_builder import report_builder_node
 from explain_agent.graph.nodes.persist import persist_node
+from explain_agent.graph.nodes.lazy_ingest import lazy_ingest_node
 from explain_agent.graph.framework_loader import load_framework
 
 
@@ -26,6 +27,8 @@ def build_main_graph(
     strong_llm,
     engine,
     adapter_registry: dict | None = None,
+    news_crawler=None,
+    news_indexer=None,
     on_node_event: NodeEvent | None = None,
 ):
     g = StateGraph(AttributionState)
@@ -56,6 +59,9 @@ def build_main_graph(
     async def _load_fw(state):
         return {"framework": load_framework(state["domain_id"])}
 
+    async def _lazy_ingest(state):
+        return await lazy_ingest_node(state, news_crawler=news_crawler, news_indexer=news_indexer)
+
     async def _facts(state):
         return await fetch_market_facts_node(state, market_adapter=market_adapter)
 
@@ -84,6 +90,7 @@ def build_main_graph(
     g.add_node("parse", _trace("parse", _parse))
     g.add_node("router", _trace("router", _router))
     g.add_node("load_framework", _trace("load_framework", _load_fw))
+    g.add_node("lazy_ingest", _trace("lazy_ingest", _lazy_ingest))
     g.add_node("market_facts", _trace("market_facts", _facts))
     g.add_node("fan_out", _trace("fan_out", _fan_out))
     g.add_node("synth", _trace("synth", _synth))
@@ -95,7 +102,8 @@ def build_main_graph(
     g.set_entry_point("parse")
     g.add_edge("parse", "router")
     g.add_edge("router", "load_framework")
-    g.add_edge("load_framework", "market_facts")
+    g.add_edge("load_framework", "lazy_ingest")
+    g.add_edge("lazy_ingest", "market_facts")
     g.add_edge("market_facts", "fan_out")
     g.add_edge("fan_out", "synth")
     g.add_edge("synth", "dynamic_sub")

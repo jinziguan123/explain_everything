@@ -74,3 +74,4 @@ async def test_main_graph_compiles_and_runs_with_mocks():
     assert all(c["evidence_ids"] for c in result["narrative_claims"])
     assert all("维度" in v and "重写" in v for v in result["dimension_reports"].values())
     assert result.get("connection_threads") == []
+    assert "lazy_ingest_count" not in result
