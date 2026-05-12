@@ -10,7 +10,7 @@ def test_load_cn_equity_framework():
     assert dim_ids == {"policy", "industry_chain", "capital_flow",
                        "sentiment_event", "international", "technical"}
     assert fw["worker_config"]["max_rounds"] == 10
-    assert fw["worker_config"]["max_concurrency"] == 3
+    assert fw["worker_config"]["max_concurrency"] == 6
 
 
 def test_load_unknown_domain_raises():

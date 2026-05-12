@@ -68,7 +68,7 @@ dimensions:
 worker_config:
   max_rounds: 10
   soft_terminate_no_gain_rounds: 2
-  max_concurrency: 3
+  max_concurrency: 6
 
 models:
   parse: weak

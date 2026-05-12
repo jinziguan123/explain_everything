@@ -12,7 +12,7 @@ async def fan_out_dimensions_node(
     framework = state["framework"]
     dims = framework["dimensions"]
     worker_cfg = framework["worker_config"]
-    sem = asyncio.Semaphore(worker_cfg.get("max_concurrency", 3))
+    sem = asyncio.Semaphore(worker_cfg.get("max_concurrency", 6))
 
     async def run_one(dim_cfg: dict) -> tuple[str, DimensionResult]:
         async with sem:
@@ -24,5 +24,17 @@ async def fan_out_dimensions_node(
             )
             return dim_cfg["id"], r
 
-    results = await asyncio.gather(*[run_one(d) for d in dims], return_exceptions=False)
+    results_or_errors = await asyncio.gather(
+        *[run_one(d) for d in dims], return_exceptions=True
+    )
+
+    results: list[tuple[str, DimensionResult]] = []
+    for dim_cfg, r in zip(dims, results_or_errors):
+        if isinstance(r, BaseException):
+            results.append((dim_cfg["id"], DimensionResult(
+                evidence=[], mini_summary=f"维度 worker 失败: {r!r}",
+                retry_count=0, no_data=True, confidence="low",
+            )))
+        else:
+            results.append(r)
     return {"dimension_results": dict(results)}
