@@ -2,12 +2,14 @@ import typer
 from rich.console import Console
 from rich.progress import track
 
+from explain_agent.config import get_settings
 from explain_agent.db.mysql import get_engine
 from explain_agent.db.qdrant import get_qdrant_client
 from explain_agent.embedding.bge_m3 import get_embedder
 from explain_agent.ingest.news_crawler import AkshareNewsCrawler
 from explain_agent.ingest.news_indexer import NewsIndexer
 from explain_agent.ingest.tagger import NewsTagger
+from explain_agent.storage.snapshot import SnapshotStore
 
 app = typer.Typer()
 console = Console()
@@ -37,11 +39,15 @@ def main(
     tagger = NewsTagger()
     embedder = get_embedder()
     qdrant = get_qdrant_client()
+    settings = get_settings()
+    explain_engine = get_engine("explain")
+    snapshot_store = SnapshotStore(base_dir=settings.snapshot_dir, engine=explain_engine)
     indexer = NewsIndexer(
-        engine=get_engine("explain"),
+        engine=explain_engine,
         tagger=tagger,
         embedder=embedder,
         qdrant=qdrant,
+        snapshot_store=snapshot_store,
     )
 
     total = 0
