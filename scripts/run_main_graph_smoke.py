@@ -7,6 +7,7 @@ from explain_agent.adapters.mysql_fundamentals import MySQLFundamentalsAdapter
 from explain_agent.adapters.akshare_capital_flow import AkshareCapitalFlowAdapter
 from explain_agent.adapters.news_corpus import NewsCorpusAdapter
 from explain_agent.adapters.web_search import WebSearchAdapter
+from explain_agent.adapters.research_corpus import ResearchCorpusAdapter
 from explain_agent.config import get_settings
 from explain_agent.db.clickhouse import get_client as ch_client
 from explain_agent.db.mysql import get_engine
@@ -15,6 +16,9 @@ from explain_agent.embedding.bge_m3 import get_embedder
 from explain_agent.graph.dimension_worker import DimensionWorker
 from explain_agent.graph.main_graph import build_main_graph
 from explain_agent.graph.state import new_attribution_state
+from explain_agent.ingest.news_crawler import AkshareNewsCrawler
+from explain_agent.ingest.news_indexer import NewsIndexer
+from explain_agent.ingest.tagger import NewsTagger
 from explain_agent.llm import get_strong_llm, get_weak_llm
 from explain_agent.storage.snapshot import SnapshotStore
 
@@ -43,9 +47,20 @@ def main(question: str = "为什么半导体板块今天涨"):
         "akshare_capital_flow": flow,
         "news_corpus": news,
     }
+    registry["research_corpus"] = ResearchCorpusAdapter(
+        qdrant=get_qdrant_client(), embedder=embedder, engine=explain_engine,
+    )
 
     settings = get_settings()
     snapshot_store = SnapshotStore(base_dir=settings.snapshot_dir, engine=explain_engine)
+    news_crawler = AkshareNewsCrawler()
+    news_indexer = NewsIndexer(
+        engine=explain_engine,
+        tagger=NewsTagger(),
+        embedder=embedder,
+        qdrant=get_qdrant_client(),
+        snapshot_store=snapshot_store,
+    )
     if settings.tavily_api_key:
         from tavily import TavilyClient
         tavily = TavilyClient(api_key=settings.tavily_api_key)
@@ -100,6 +115,8 @@ def main(question: str = "为什么半导体板块今天涨"):
         strong_llm=strong,
         engine=explain_engine,
         adapter_registry=registry,
+        news_crawler=news_crawler,
+        news_indexer=news_indexer,
         on_node_event=on_node_event,
     )
 
