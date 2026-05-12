@@ -168,5 +168,24 @@ docs/plans/            设计文档 / 实施计划
 - [x] persist tree_json 补 connection_threads + connection_section
 - [x] main_graph 拓扑：dynamic_sub → connection_explorer → report
 - [x] 全部单测通过（115 passed，含 Phase 2.A/2.B/2.C 回归）
-- [ ] 端到端 smoke：手动用户验收（需要 TAVILY_API_KEY）
+- [x] 端到端 smoke：session `s_17f25967`，2 条 connection_threads，70 条 web snapshot
+
+## Phase 2.D-2 验收状态
+
+性能 + 漂移率标注闭环 + REPL 可观测性。fan_out 真并发 + strong LLM 链路并发将单次耗时从 13min 压到 5.8min（减半）。
+
+- [x] LLMClient 双 API（sync `chat` + async `achat`，AsyncAnthropic / AsyncOpenAI lazy 创建）
+- [x] 9 处 graph 链路 chat → await achat（dimension_worker / parse / synth / followup / connection_explorer / report_builder）
+- [x] fan_out `return_exceptions=True` + 异常隔离 + max_concurrency=6
+- [x] fan_out 真并发护栏单测 `test_fan_out_runs_dimensions_concurrently`（0.5s 远小于串行 3s）
+- [x] strong LLM 链路并发：report_builder narrative + 6 维 dim_reports 并发、connection_explorer N 个 thread 并发
+- [x] strong LLM 并发护栏单测：`test_dim_reports_run_concurrently` + `test_connection_explorer_processes_threads_concurrently`
+- [x] `/annotate` + `/stats` 漂移率标注闭环（`explain_annotation` 表 + UNIQUE thread_index）
+- [x] REPL 进度可观测（接上 on_node_event / on_done / on_round 回调）
+- [x] 全部单测通过（127 passed，Phase 2.A/2.B/2.C/2.D-1 全部回归不破）
+- [x] 端到端 smoke：session `s_b6c55c02`，**总耗时 5.8 min（vs 2.D-1 的 13 min）**
+  - fan_out 142s（policy 偶然跑 7 轮；典型场景 < 90s）
+  - report 56s（vs 2.D-1 的 146s，-62%）
+  - connection_explorer 59s（vs 2.D-1 的 117s，-50%）
+  - 3 条 connection_threads，109 条 citations
 
