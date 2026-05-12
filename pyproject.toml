@@ -33,6 +33,7 @@ dependencies = [
 
 [project.scripts]
 explain-ingest-news = "explain_agent.cli.ingest_news:app"
+explain-ingest-research = "explain_agent.cli.ingest_research:app"
 explain = "explain_agent.cli.repl.loop:main"
 
 [build-system]
