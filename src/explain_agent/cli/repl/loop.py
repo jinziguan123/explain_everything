@@ -59,6 +59,9 @@ async def _run_slash(state: ReplState, env: ReplEnvironment, cmd: SlashCommand) 
         handle_help(console=env.console)
     elif cmd.name == "quit":
         handle_quit(console=env.console)
+    elif cmd.name == "annotate":
+        from explain_agent.cli.repl.commands import handle_annotate
+        handle_annotate(engine=env.engine, console=env.console, state=state)
 
 
 async def _run_main(state: ReplState, env: ReplEnvironment, question: str) -> None:

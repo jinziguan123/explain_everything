@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import uuid4
 
 from rich.console import Console
 from rich.table import Table
@@ -17,7 +18,7 @@ class SlashCommand:
 
 
 _ALIASES = {"exit": "quit"}
-_KNOWN = {"new", "sessions", "load", "clear", "help", "quit"}
+_KNOWN = {"new", "sessions", "load", "clear", "help", "quit", "annotate", "stats"}
 
 
 def parse_slash_command(raw: str) -> SlashCommand:
@@ -104,3 +105,65 @@ def handle_help(console: Console) -> None:
 def handle_quit(console: Console) -> None:
     console.print("[dim]bye.[/dim]")
     raise ReplExit(0)
+
+
+_LABEL_MAP = {"g": "green", "y": "yellow", "r": "red"}
+
+
+def handle_annotate(engine, console: Console, state: ReplState, prompt_fn=input) -> None:
+    if state.current_session is None:
+        console.print("[red]当前没有 active session, 用 /load <id> 或先跑一个新问题[/red]")
+        return
+    threads = state.current_session.get("connection_threads") or []
+    if not threads:
+        console.print("[yellow]当前 session 无 connection_threads, 无需标注[/yellow]")
+        return
+
+    session_id = state.current_session_id
+    with engine.begin() as conn:
+        rows = conn.exec_driver_sql(
+            "SELECT thread_index FROM explain_agent.explain_annotation WHERE session_id = %s",
+            (session_id,),
+        ).fetchall()
+        annotated_indices = {r[0] for r in rows}
+
+    console.print(f"\n▎ 当前 session: [bold]{session_id}[/bold]")
+    console.print(f"▎ Connection threads ({len(threads)} 条):\n")
+
+    counts = {"green": 0, "yellow": 0, "red": 0}
+
+    for idx, t in enumerate(threads):
+        if idx in annotated_indices:
+            console.print(f"[{idx+1}/{len(threads)}] {t.get('title', '')}  [dim](已标注, 跳过)[/dim]")
+            continue
+        console.print(f"\n[{idx+1}/{len(threads)}] [cyan]{t.get('title', '')}[/cyan]")
+        console.print(f"      source={t.get('source')}, confidence={t.get('confidence')}")
+        console.print(f"      内容: {(t.get('content') or '')[:200]}")
+        label_raw = prompt_fn("      标签? (g=🟢真知灼见 / y=🟡合理但平庸 / r=🔴漂移 / s=skip): ").strip().lower()
+        if label_raw == "s" or label_raw == "":
+            console.print("      [dim]skip[/dim]")
+            continue
+        label = _LABEL_MAP.get(label_raw)
+        if label is None:
+            console.print(f"      [red]非法标签 {label_raw!r}, skip[/red]")
+            continue
+        note = prompt_fn("      备注 (回车跳过): ").strip() or None
+
+        annotation_id = f"ann_{uuid4().hex[:16]}"
+        try:
+            with engine.begin() as conn:
+                conn.exec_driver_sql(
+                    """
+                    INSERT INTO explain_agent.explain_annotation
+                      (annotation_id, session_id, thread_index, thread_title, label, note)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (annotation_id, session_id, idx, t.get("title", ""), label, note),
+                )
+            counts[label] += 1
+            console.print("      [green]✓ 已标记[/green]")
+        except Exception as e:
+            console.print(f"      [red]标注落库失败: {e!r}[/red]")
+
+    summary = f"完成。session {session_id}: {counts['green']} 🟢 / {counts['yellow']} 🟡 / {counts['red']} 🔴"
+    console.print(f"\n{summary}")
