@@ -101,6 +101,20 @@ def _estimate_overall_confidence(
     return "low"
 
 
+def _render_connection_section(threads: list) -> str:
+    if not threads:
+        return ""
+    parts: list[str] = ["## 延伸思考"]
+    for t in threads:
+        title = t.get("title", "")
+        content = t.get("content", "")
+        source = t.get("source", "local")
+        conf = t.get("confidence", 0)
+        parts.append(f"\n▎ {title}  [source={source}, confidence={conf}]")
+        parts.append(content)
+    return "\n".join(parts)
+
+
 def _rewrite_dim_report(
     dim_id: str,
     dim_result,
@@ -222,6 +236,9 @@ async def report_builder_node(
 
     confidence = _estimate_overall_confidence(dim_results, narrative_claims)
 
+    threads = state.get("connection_threads") or []
+    connection_section = _render_connection_section(threads)
+
     return {
         "narrative": narrative,
         "narrative_claims": narrative_claims,
@@ -229,4 +246,5 @@ async def report_builder_node(
         "dimension_reports": dim_reports,
         "citations": citations,
         "confidence": confidence,
+        "connection_section": connection_section,
     }

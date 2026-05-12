@@ -272,3 +272,52 @@ async def test_narrative_falls_back_when_json_invalid():
     out = await report_builder_node(state, llm=fake_llm)
     assert out["narrative"] == "no json here, just text"
     assert out["narrative_claims"] == []
+
+
+@pytest.mark.asyncio
+async def test_report_includes_connection_section_when_threads():
+    """connection_threads 非空时 connection_section 含 title 与 content。"""
+    fake_llm = MagicMock()
+    fake_llm.chat.side_effect = [
+        json.dumps({"claims": [{"text": "claim", "evidence_ids": ["e1"]}]}),
+        "policy report",
+    ]
+    state = new_attribution_state("test")
+    state["target"] = "X"
+    state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
+    state["market_facts"] = {"snippet": ""}
+    state["dimension_results"] = {
+        "policy": DimensionResult(
+            evidence=[make_ev("e1")], mini_summary="",
+            retry_count=1, no_data=False, confidence="high",
+        ),
+    }
+    state["connection_threads"] = [
+        {
+            "title": "存储芯片产能",
+            "hypothesis": "未被覆盖",
+            "content": "存储扩产 [e_x]",
+            "evidence_ids": ["e_x"],
+            "source": "local",
+            "confidence": 4,
+        }
+    ]
+    out = await report_builder_node(state, llm=fake_llm)
+    assert "connection_section" in out
+    assert "存储芯片产能" in out["connection_section"]
+    assert "存储扩产" in out["connection_section"]
+
+
+@pytest.mark.asyncio
+async def test_report_connection_section_empty_when_no_threads():
+    fake_llm = MagicMock()
+    fake_llm.chat.return_value = json.dumps({"claims": []})
+    state = new_attribution_state("test")
+    state["target"] = "X"
+    state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
+    state["market_facts"] = {"snippet": ""}
+    state["dimension_results"] = {}
+    state["connection_threads"] = []
+
+    out = await report_builder_node(state, llm=fake_llm)
+    assert out["connection_section"] == ""
