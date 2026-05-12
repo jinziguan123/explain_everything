@@ -169,3 +169,52 @@ async def test_returns_empty_when_json_invalid():
         adapter_registry={"news_corpus": MagicMock(), "web_search": MagicMock()},
     )
     assert out["connection_threads"] == []
+
+
+@pytest.mark.asyncio
+async def test_connection_explorer_processes_threads_concurrently():
+    """多个 thread 的 retrieve+answer 必须并发。"""
+    import asyncio
+    import time
+
+    sleep_per_answer = 0.3
+
+    async def slow_answer(**kw):
+        await asyncio.sleep(sleep_per_answer)
+        system = kw.get("system", "")
+        # PROPOSE_SYSTEM 含 "threads" JSON 输出格式
+        if "threads" in system and "query_keywords" in system:
+            return json.dumps({
+                "threads": [
+                    {"title": f"T{i}", "hypothesis": "h", "need_web_search": False,
+                     "confidence": 5, "overlap_with_main_dims": False, "query_keywords": []}
+                    for i in range(3)
+                ]
+            })
+        return "answer"
+
+    fake_llm = MagicMock()
+    fake_llm.achat = AsyncMock(side_effect=slow_answer)
+    fake_news = MagicMock()
+    fake_news.query = AsyncMock(return_value=[make_ev("e1")])
+
+    state = new_attribution_state("test")
+    state["target"] = "X"
+    state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
+    state["dimension_results"] = {}
+
+    t0 = time.perf_counter()
+    out = await connection_explorer_node(
+        state, llm=fake_llm,
+        adapter_registry={"news_corpus": fake_news, "web_search": MagicMock()},
+    )
+    elapsed = time.perf_counter() - t0
+
+    # propose (0.3) + 3 × answer 并发 (0.3) = 0.6s
+    # 顺序: 0.3 + 3*0.3 = 1.2s
+    # 给 0.9s 宽容上限
+    assert len(out["connection_threads"]) == 3
+    assert elapsed < 0.9, (
+        f"connection_explorer 看起来仍在顺序处理 thread: {elapsed:.2f}s, "
+        f"预期 < 0.9s。"
+    )

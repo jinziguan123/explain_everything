@@ -200,7 +200,21 @@ async def report_builder_node(
         f"市场锚点: {state['market_facts'].get('snippet', '')}\n"
         f"证据池:\n{json.dumps(evidence_dump, ensure_ascii=False)}"
     )
-    raw = await _call_with_retry(llm, NARRATIVE_SYSTEM, user, max_tokens=4000)
+
+    # 并发启动 narrative 与 6 维 dim_reports（strong LLM 链路），把原来 ~30s × 7
+    # 串行的总耗时压到 ~30s（取决于最慢单次调用）。
+    narrative_task = asyncio.create_task(
+        _call_with_retry(llm, NARRATIVE_SYSTEM, user, max_tokens=4000)
+    )
+    dim_ids = list(dim_results.keys())
+    dim_tasks = [
+        asyncio.create_task(_rewrite_dim_report(
+            dim_id, dim_results[dim_id], state["target"], state["market_facts"], llm
+        ))
+        for dim_id in dim_ids
+    ]
+
+    raw = await narrative_task
     data = _extract_json(raw)
 
     if not data or "claims" not in data:
@@ -217,11 +231,14 @@ async def report_builder_node(
         narrative_claims, unverified_drops = _strip_unverified_numbers(narrative_claims, all_evidence)
         narrative = " ".join(c["text"] for c in narrative_claims)
 
+    dim_outs = await asyncio.gather(*dim_tasks, return_exceptions=True)
     dim_reports: dict[str, str] = {}
-    for dim_id, r in dim_results.items():
-        dim_reports[dim_id] = await _rewrite_dim_report(
-            dim_id, r, state["target"], state["market_facts"], llm
-        )
+    for dim_id, out in zip(dim_ids, dim_outs):
+        if isinstance(out, BaseException):
+            # 单维度异常 fallback 到 mini_summary，整体不挂
+            dim_reports[dim_id] = dim_results[dim_id]["mini_summary"]
+        else:
+            dim_reports[dim_id] = out
 
     citations: list[Citation] = []
     seen_ids: set[str] = set()

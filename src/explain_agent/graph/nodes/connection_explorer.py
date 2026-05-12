@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from typing import Any
@@ -95,9 +96,8 @@ async def connection_explorer_node(
     proposals.sort(key=lambda p: int(p.get("confidence", 0)), reverse=True)
     proposals = proposals[:3]
 
-    # 3. 每个 proposal 走检索 + 回答
-    threads: list[ConnectionThread] = []
-    for p in proposals:
+    # 3. 每个 proposal 走检索 + 回答（并发）
+    async def _process_proposal(p: dict) -> ConnectionThread | None:
         keywords = list(p.get("query_keywords") or [])
         need_web = bool(p.get("need_web_search", False))
         source: str = "local"
@@ -132,7 +132,7 @@ async def connection_explorer_node(
             except Exception:
                 evidences = []
         if not evidences:
-            continue
+            return None
 
         ev_dump = [
             {"id": e.id, "source_type": e.source_type, "snippet": (e.snippet or "")[:300]}
@@ -146,17 +146,20 @@ async def connection_explorer_node(
         try:
             content = await llm.achat(system=ANSWER_SYSTEM, user=ans_user, max_tokens=2000)
         except Exception:
-            continue
+            return None
 
-        threads.append(
-            ConnectionThread(
-                title=p.get("title", ""),
-                hypothesis=p.get("hypothesis", ""),
-                content=content,
-                evidence_ids=[e.id for e in evidences],
-                source=source,
-                confidence=int(p.get("confidence", 0)),
-            )
+        return ConnectionThread(
+            title=p.get("title", ""),
+            hypothesis=p.get("hypothesis", ""),
+            content=content,
+            evidence_ids=[e.id for e in evidences],
+            source=source,
+            confidence=int(p.get("confidence", 0)),
         )
+
+    results = await asyncio.gather(
+        *[_process_proposal(p) for p in proposals], return_exceptions=False
+    )
+    threads: list[ConnectionThread] = [t for t in results if t is not None]
 
     return {"connection_threads": threads}

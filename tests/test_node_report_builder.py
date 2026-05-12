@@ -321,3 +321,46 @@ async def test_report_connection_section_empty_when_no_threads():
 
     out = await report_builder_node(state, llm=fake_llm)
     assert out["connection_section"] == ""
+
+
+@pytest.mark.asyncio
+async def test_dim_reports_run_concurrently():
+    """6 维 dim_reports 必须并发, 总耗时 ≈ 单维耗时, 而非 7× 累加。"""
+    import asyncio
+    import time
+
+    sleep_per_call = 0.3
+
+    async def slow_chat(**kw):
+        await asyncio.sleep(sleep_per_call)
+        system = kw.get("system", "")
+        # narrative system 含 "claims" JSON 输出格式
+        if "claims" in system and "evidence_ids" in system:
+            return json.dumps({"claims": [{"text": "claim", "evidence_ids": ["e1"]}]})
+        return "dim report"
+
+    fake_llm = MagicMock()
+    fake_llm.achat = AsyncMock(side_effect=slow_chat)
+    state = new_attribution_state("test")
+    state["target"] = "X"
+    state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
+    state["market_facts"] = {"snippet": ""}
+    state["dimension_results"] = {
+        f"dim_{i}": DimensionResult(
+            evidence=[make_ev(f"e{i}")], mini_summary="",
+            retry_count=1, no_data=False, confidence="high",
+        )
+        for i in range(6)
+    }
+
+    t0 = time.perf_counter()
+    await report_builder_node(state, llm=fake_llm)
+    elapsed = time.perf_counter() - t0
+
+    # 7 次调用（1 narrative + 6 dim）真并发 ≈ 0.3s
+    # 顺序 = 7 * 0.3 = 2.1s
+    # 给 1.0s 宽容上限
+    assert elapsed < 1.0, (
+        f"report_builder 看起来仍在顺序运行: {elapsed:.2f}s, 预期 < 1.0s。"
+        f"检查 narrative + 6 维 dim_reports 是否真并发。"
+    )
