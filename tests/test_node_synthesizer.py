@@ -1,6 +1,6 @@
 import json
 from datetime import date, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 import pytest
 from explain_agent.core.types import Evidence
 from explain_agent.graph.state import new_attribution_state, DimensionResult
@@ -17,10 +17,10 @@ def make_ev(id: str, snippet: str) -> Evidence:
 @pytest.mark.asyncio
 async def test_synthesizer_decides_subbranches():
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = json.dumps({
+    fake_llm.achat = AsyncMock(return_value=json.dumps({
         "needs_subbranch": True,
         "subbranches": [{"name": "HBM 制裁影响", "query_hints": ["BIS", "HBM"]}],
-    })
+    }))
     state = new_attribution_state("test")
     state["target"] = "半导体"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -40,7 +40,7 @@ async def test_synthesizer_decides_subbranches():
 @pytest.mark.asyncio
 async def test_synthesizer_caps_subbranches_at_2():
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = json.dumps({
+    fake_llm.achat = AsyncMock(return_value=json.dumps({
         "needs_subbranch": True,
         "subbranches": [
             {"name": "a", "query_hints": []},
@@ -48,7 +48,7 @@ async def test_synthesizer_caps_subbranches_at_2():
             {"name": "c", "query_hints": []},
             {"name": "d", "query_hints": []},
         ],
-    })
+    }))
     state = new_attribution_state("test")
     state["target"] = "X"
     state["dimension_results"] = {}
@@ -59,7 +59,7 @@ async def test_synthesizer_caps_subbranches_at_2():
 @pytest.mark.asyncio
 async def test_synthesizer_no_subbranches_when_llm_says_no():
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = json.dumps({"needs_subbranch": False, "subbranches": []})
+    fake_llm.achat = AsyncMock(return_value=json.dumps({"needs_subbranch": False, "subbranches": []}))
     state = new_attribution_state("test")
     state["target"] = "X"
     state["dimension_results"] = {}

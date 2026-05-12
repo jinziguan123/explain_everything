@@ -34,8 +34,10 @@ async def test_main_graph_compiles_and_runs_with_mocks():
     }))
 
     fake_strong_llm = MagicMock()
-    fake_strong_llm.chat.side_effect = [
+    fake_strong_llm.achat = AsyncMock(side_effect=[
         json.dumps({"needs_subbranch": False, "subbranches": []}),
+    ])
+    fake_strong_llm.chat.side_effect = [
         json.dumps({
             "claims": [
                 {"text": "测试叙事甲", "evidence_ids": ["e1"]},

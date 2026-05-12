@@ -47,7 +47,7 @@ async def synthesizer_node(
             evidence_dump.append({"dim": dim_id, "id": e.id, "snippet": e.snippet[:300]})
 
     user = f"target: {state['target']}\nevidence:\n{json.dumps(evidence_dump, ensure_ascii=False)}"
-    raw = llm.chat(system=SYSTEM, user=user, max_tokens=4000)
+    raw = await llm.achat(system=SYSTEM, user=user, max_tokens=4000)
     data = _extract_json(raw)
     if not data:
         return {"needs_subbranch": False, "subbranches": []}
