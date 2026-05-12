@@ -35,22 +35,20 @@ async def test_main_graph_compiles_and_runs_with_mocks():
 
     fake_strong_llm = MagicMock()
     fake_strong_llm.achat = AsyncMock(side_effect=[
-        json.dumps({"needs_subbranch": False, "subbranches": []}),
-    ])
-    fake_strong_llm.chat.side_effect = [
-        json.dumps({
+        json.dumps({"needs_subbranch": False, "subbranches": []}),  # synth
+        json.dumps({                                                # narrative_claims
             "claims": [
                 {"text": "测试叙事甲", "evidence_ids": ["e1"]},
                 {"text": "测试叙事乙", "evidence_ids": ["e1"]},
             ],
         }),
-        "维度甲重写报告 [e1]",
+        "维度甲重写报告 [e1]",  # 6 维 dim 重写
         "维度乙重写报告 [e1]",
         "维度丙重写报告 [e1]",
         "维度丁重写报告 [e1]",
         "维度戊重写报告 [e1]",
         "维度己重写报告 [e1]",
-    ]
+    ])
 
     mock_engine = MagicMock()
     mock_conn = MagicMock()

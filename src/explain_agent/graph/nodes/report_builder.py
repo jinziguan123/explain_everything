@@ -1,12 +1,12 @@
+import asyncio
 import json
 import re
-import time
 
 from explain_agent.graph.state import AttributionState, Citation, NarrativeClaim
 from explain_agent.llm import LLMClient, get_strong_llm
 
 
-def _call_with_retry(
+async def _call_with_retry(
     llm: LLMClient, system: str, user: str, max_tokens: int = 4000,
     attempts: int = 3, backoff: float = 2.0,
 ) -> str:
@@ -14,11 +14,11 @@ def _call_with_retry(
     last_err: Exception | None = None
     for i in range(attempts):
         try:
-            return llm.chat(system=system, user=user, max_tokens=max_tokens)
+            return await llm.achat(system=system, user=user, max_tokens=max_tokens)
         except Exception as e:
             last_err = e
             if i < attempts - 1:
-                time.sleep(backoff ** i)
+                await asyncio.sleep(backoff ** i)
     return ""
 
 
@@ -115,7 +115,7 @@ def _render_connection_section(threads: list) -> str:
     return "\n".join(parts)
 
 
-def _rewrite_dim_report(
+async def _rewrite_dim_report(
     dim_id: str,
     dim_result,
     target: str,
@@ -136,7 +136,7 @@ def _rewrite_dim_report(
         f"市场锚点: {market_facts.get('snippet', '')}\n"
         f"该维度证据池:\n{json.dumps(evidence_dump, ensure_ascii=False)}"
     )
-    out = _call_with_retry(llm, DIM_REPORT_SYSTEM, user, max_tokens=4000)
+    out = await _call_with_retry(llm, DIM_REPORT_SYSTEM, user, max_tokens=4000)
     return out if out else dim_result["mini_summary"]
 
 
@@ -200,7 +200,7 @@ async def report_builder_node(
         f"市场锚点: {state['market_facts'].get('snippet', '')}\n"
         f"证据池:\n{json.dumps(evidence_dump, ensure_ascii=False)}"
     )
-    raw = _call_with_retry(llm, NARRATIVE_SYSTEM, user, max_tokens=4000)
+    raw = await _call_with_retry(llm, NARRATIVE_SYSTEM, user, max_tokens=4000)
     data = _extract_json(raw)
 
     if not data or "claims" not in data:
@@ -217,10 +217,11 @@ async def report_builder_node(
         narrative_claims, unverified_drops = _strip_unverified_numbers(narrative_claims, all_evidence)
         narrative = " ".join(c["text"] for c in narrative_claims)
 
-    dim_reports = {
-        dim_id: _rewrite_dim_report(dim_id, r, state["target"], state["market_facts"], llm)
-        for dim_id, r in dim_results.items()
-    }
+    dim_reports: dict[str, str] = {}
+    for dim_id, r in dim_results.items():
+        dim_reports[dim_id] = await _rewrite_dim_report(
+            dim_id, r, state["target"], state["market_facts"], llm
+        )
 
     citations: list[Citation] = []
     seen_ids: set[str] = set()

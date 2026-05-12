@@ -1,6 +1,6 @@
 import json
 from datetime import date, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 import pytest
 from explain_agent.core.types import Evidence
 from explain_agent.graph.state import new_attribution_state, DimensionResult
@@ -18,12 +18,12 @@ def make_ev(id: str, snippet: str = "snip", source_type: str = "news", url: str 
 async def test_narrative_returns_structured_claims():
     """强模型返回 JSON，每个 claim 都有 evidence_ids。"""
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = json.dumps({
+    fake_llm.achat = AsyncMock(return_value=json.dumps({
         "claims": [
             {"text": "半导体板块上涨主因是政策支持。", "evidence_ids": ["e1"]},
             {"text": "存储芯片涨价拉动设备需求。", "evidence_ids": ["e2", "e3"]},
         ],
-    })
+    }))
     state = new_attribution_state("test")
     state["target"] = "半导体"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -50,11 +50,11 @@ async def test_narrative_returns_structured_claims():
 async def test_strip_unverified_numbers_keeps_verified():
     """claim 中的数字在证据中能找到 → 保留。"""
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = json.dumps({
+    fake_llm.achat = AsyncMock(return_value=json.dumps({
         "claims": [
             {"text": "板块涨 5% 受政策推动", "evidence_ids": ["e1"]},
         ],
-    })
+    }))
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -74,12 +74,12 @@ async def test_strip_unverified_numbers_keeps_verified():
 async def test_strip_unverified_numbers_drops_hallucinated():
     """claim 中的数字在证据中找不到 → 整句删除并记 unverified_drops。"""
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = json.dumps({
+    fake_llm.achat = AsyncMock(return_value=json.dumps({
         "claims": [
             {"text": "政策利好推动情绪修复", "evidence_ids": ["e1"]},
             {"text": "成交额放大至 200 亿", "evidence_ids": ["e1"]},
         ],
-    })
+    }))
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -101,9 +101,9 @@ async def test_strip_unverified_numbers_drops_hallucinated():
 async def test_strip_keeps_claims_without_numbers():
     """无数字的 claim 不受校验影响。"""
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = json.dumps({
+    fake_llm.achat = AsyncMock(return_value=json.dumps({
         "claims": [{"text": "市场情绪偏暖", "evidence_ids": ["e1"]}],
-    })
+    }))
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -123,10 +123,10 @@ async def test_strip_keeps_claims_without_numbers():
 async def test_dim_reports_rewritten_by_strong_llm():
     """有数据的维度由强模型重写，no_data 维度保持原文。"""
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({"claims": [{"text": "test claim", "evidence_ids": ["e1"]}]}),
         "[政策维度重写] 见 [e1] 政策利好。",
-    ]
+    ])
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -151,9 +151,9 @@ async def test_dim_reports_rewritten_by_strong_llm():
 async def test_dim_reports_skip_llm_when_no_data():
     """no_data 维度不应触发任何 strong LLM 调用 (除 narrative)。"""
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({"claims": []}),
-    ]
+    ])
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -163,7 +163,7 @@ async def test_dim_reports_skip_llm_when_no_data():
         "d2": DimensionResult(evidence=[], mini_summary="无数据", retry_count=1, no_data=True, confidence="low"),
     }
     await report_builder_node(state, llm=fake_llm)
-    assert fake_llm.chat.call_count == 1
+    assert fake_llm.achat.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -172,12 +172,12 @@ async def test_confidence_high_with_diverse_sources():
     fake_llm = MagicMock()
     eids = [f"e{i}" for i in range(10)]
     chinese_words = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛"]
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({"claims": [{"text": chinese_words[i], "evidence_ids": eids[i:i+2]} for i in range(8)]}),
         "policy dim report",
         "industry_chain dim report",
         "capital_flow dim report",
-    ]
+    ])
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -204,10 +204,10 @@ async def test_confidence_high_with_diverse_sources():
 async def test_confidence_low_with_few_citations():
     """被引用 evidence 数 < 4 → low。"""
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({"claims": [{"text": "单一声明", "evidence_ids": ["e1"]}]}),
         "policy dim report",
-    ]
+    ])
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -227,11 +227,11 @@ async def test_confidence_medium_with_4_citations_2_sources():
     """4 个 evidence，2 种 source_type → medium。"""
     fake_llm = MagicMock()
     eids = [f"e{i}" for i in range(4)]
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({"claims": [{"text": "整体叙事", "evidence_ids": eids}]}),
         "policy dim report",
         "industry_chain dim report",
-    ]
+    ])
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -262,7 +262,7 @@ def test_narrative_system_prompt_encourages_multi_source():
 async def test_narrative_falls_back_when_json_invalid():
     """JSON 解析失败时回退到纯文本 narrative，claims 为空。"""
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = "no json here, just text"
+    fake_llm.achat = AsyncMock(return_value="no json here, just text")
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -278,10 +278,10 @@ async def test_narrative_falls_back_when_json_invalid():
 async def test_report_includes_connection_section_when_threads():
     """connection_threads 非空时 connection_section 含 title 与 content。"""
     fake_llm = MagicMock()
-    fake_llm.chat.side_effect = [
+    fake_llm.achat = AsyncMock(side_effect=[
         json.dumps({"claims": [{"text": "claim", "evidence_ids": ["e1"]}]}),
         "policy report",
-    ]
+    ])
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
@@ -311,7 +311,7 @@ async def test_report_includes_connection_section_when_threads():
 @pytest.mark.asyncio
 async def test_report_connection_section_empty_when_no_threads():
     fake_llm = MagicMock()
-    fake_llm.chat.return_value = json.dumps({"claims": []})
+    fake_llm.achat = AsyncMock(return_value=json.dumps({"claims": []}))
     state = new_attribution_state("test")
     state["target"] = "X"
     state["time_window"] = (date(2026, 5, 5), date(2026, 5, 12))
