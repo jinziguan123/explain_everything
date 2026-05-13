@@ -12,13 +12,22 @@ from explain_engine.schema.nodes import VariableNode
 from explain_engine.schema.state import CognitiveState
 
 
+def _next_p_id_num(kept: list[VariableNode]) -> int:
+    """扫已有 p_NNN node 取 max+1。"""
+    existing = [
+        int(p.id[2:]) for p in kept
+        if p.id.startswith("p_") and p.id[2:].isdigit()
+    ]
+    return (max(existing) + 1) if existing else 1
+
+
 def review_phenomena(
     phenomena: list[VariableNode],
     console: Console | None = None,
 ) -> list[VariableNode]:
     """逐条 keep/edit/drop，末尾允许 add，返回最终保留 list。
 
-    用户加的 phenomena id 用 p_user_NNN 前缀（NNN 从 001 起）。
+    用户加的 phenomena id 用 p_NNN 顺延已存最大 +1，source="user" 标识。
     """
     console = console or Console()
     kept: list[VariableNode] = []
@@ -41,7 +50,6 @@ def review_phenomena(
 
     console.print(f"\n[INFO] 审查完成。当前保留 [bold]{len(kept)}[/bold] 条现象。")
 
-    user_count = 0
     while Confirm.ask("要添加新的现象吗？", default=False):
         new_name_raw = Prompt.ask("新名称")
         new_name = new_name_raw.strip() if new_name_raw else ""
@@ -50,15 +58,16 @@ def review_phenomena(
             break
         new_desc_raw = Prompt.ask("新描述")
         new_desc = new_desc_raw.strip() if new_desc_raw else ""
-        user_count += 1
+        next_p_id = _next_p_id_num(kept)
         kept.append(
             VariableNode(
-                id=f"p_user_{user_count:03d}",
+                id=f"p_{next_p_id:03d}",
                 name=new_name,
                 description=new_desc or new_name,  # 描述空时退回名称
                 abstraction_level=0,
                 confidence=0.7,
                 epistemic="observation",
+                source="user",
             )
         )
 

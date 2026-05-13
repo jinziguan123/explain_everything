@@ -109,8 +109,11 @@ class TestReviewPhenomena:
         assert len(result) == 2
         assert result[1].name == "新现象1"
         assert result[1].description == "描述1"
-        # 用户加的 id 用 p_user_NNN 前缀
-        assert result[1].id.startswith("p_user_")
+        # 用户加的 id 用 p_NNN 顺延 LLM 最大 +1
+        assert result[1].id.startswith("p_")
+        assert result[1].id[2:].isdigit()
+        assert result[1].id == "p_002"
+        assert result[1].source == "user"
 
     def test_add_skipped_when_empty_name(self, mock_prompts):
         phenomena = [_node("p_001")]
@@ -125,7 +128,7 @@ class TestReviewPhenomena:
         assert len(result) == 1
         assert result[0].id == "p_001"
 
-    def test_user_added_phenomena_have_user_prefix(self, mock_prompts):
+    def test_user_added_phenomena_have_sequential_p_ids(self, mock_prompts):
         phenomena = [_node("p_001"), _node("p_002")]
         mock_prompts(
             answers=["k", "k", "u1", "d1", "u2", "d2"],
@@ -135,5 +138,8 @@ class TestReviewPhenomena:
         result = review_phenomena(phenomena)
 
         assert len(result) == 4
-        assert result[2].id == "p_user_001"
-        assert result[3].id == "p_user_002"
+        # 顺延 LLM 最大 p_002 → p_003, p_004
+        assert result[2].id == "p_003"
+        assert result[3].id == "p_004"
+        assert result[2].source == "user"
+        assert result[3].source == "user"
