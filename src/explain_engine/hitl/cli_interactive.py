@@ -27,7 +27,7 @@ def review_phenomena(
         console.print(f"\n[bold cyan][{i}/{len(phenomena)}][/bold cyan] {p.name}")
         console.print(f"       {p.description}", style="dim")
         choice = Prompt.ask(
-            "       [k]eep / [e]dit / [d]rop",
+            r"       \[k]eep / \[e]dit / \[d]rop",
             choices=["k", "e", "d"],
             default="k",
         )
@@ -99,7 +99,7 @@ def review_insights(
 
         while True:
             choice = Prompt.ask(
-                "       [k]eep / [e]dit / [d]rop / [v]iew-full",
+                r"       \[k]eep / \[e]dit / \[d]rop / \[v]iew-full",
                 choices=["k", "e", "d", "v"],
                 default="k",
             )
