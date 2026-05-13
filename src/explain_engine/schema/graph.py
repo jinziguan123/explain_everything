@@ -71,6 +71,23 @@ class ExplanationGraph:
         e = self._edges.pop(edge_id)
         self._g.remove_edge(e.source_node, e.target_node)
 
+    def replace_node(self, node_id: str, new_node: VariableNode) -> None:
+        """原地替换 node 的 metadata（name / description / confidence / source 等）。
+
+        严格要求 new_node.id == node_id（id 不可变）。edges 不动。
+
+        Raises:
+            ValueError: node_id 不存在 OR new_node.id != node_id。
+        """
+        if node_id not in self._nodes:
+            raise ValueError(f"node {node_id} not found")
+        if new_node.id != node_id:
+            raise ValueError(
+                f"id mismatch: cannot replace node {node_id!r} with node id {new_node.id!r}"
+            )
+        self._nodes[node_id] = new_node
+        # _g 不动：节点身份不变，只是 metadata 更新
+
     def coverage_score(self) -> float:
         concretes = [nid for nid, n in self._nodes.items() if n.abstraction_level == 0]
         if not concretes:

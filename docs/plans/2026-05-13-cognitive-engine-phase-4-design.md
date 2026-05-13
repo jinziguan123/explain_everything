@@ -287,14 +287,17 @@ def remove_node(self, node_id: str) -> None:
 
 def remove_edge(self, edge_id: str) -> None:
     """删单 edge。raises if not found."""
+
+def replace_node(self, node_id: str, new_node: VariableNode) -> None:
+    """原地替换 node 的 metadata（id 不可变，edges 不动）。raises if id mismatch or not found."""
 ```
 
 **Phase 4 mutation 语义**：
 - ✅ append node / edge
 - ✅ remove node + cascade incident edges（HITL 2 drop 用）
 - ✅ remove edge（备用，Phase 4 实际不用）
-- ❌ update existing node（HITL 2 edit 在 candidate 进 graph 前修改不算）
-- ❌ update existing edge
+- ✅ replace_node（HITL 2 edit 用，id 不变只换 metadata）
+- ❌ update edge（Phase 5）
 
 ### 6.4 `CognitiveState` 不加字段
 

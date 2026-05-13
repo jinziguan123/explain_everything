@@ -121,10 +121,10 @@ def review_insights(
                 new_name = Prompt.ask("       新名称", default=cand.name)
                 new_desc = Prompt.ask("       新描述", default=cand.description)
                 # 替换 node 的 name/description + 升级 source
-                # NOTE: 私有访问，Phase 4 简化做法（不上升为 public API）
-                state.graph._nodes[cid] = cand.model_copy(
+                updated = cand.model_copy(
                     update={"name": new_name, "description": new_desc, "source": "user"}
                 )
+                state.graph.replace_node(cid, updated)
                 break
             if choice == "v":
                 for e in cov:

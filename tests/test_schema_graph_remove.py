@@ -84,3 +84,43 @@ class TestRemoveEdge:
         g = ExplanationGraph(root_question="q")
         with pytest.raises(ValueError, match="not found"):
             g.remove_edge("nonexistent")
+
+
+class TestReplaceNode:
+    def test_replace_node_basic(self) -> None:
+        g = ExplanationGraph(root_question="q")
+        g.add_node(_node("a", level=1))
+        g.add_node(_node("b"))
+        g.add_edge(_edge("e1", "a", "b"))
+
+        updated = VariableNode(
+            id="a",
+            name="new name",
+            description="new desc",
+            abstraction_level=1,
+            confidence=0.9,
+            epistemic="observation",
+            source="user",
+        )
+        g.replace_node("a", updated)
+
+        assert g.nodes["a"].name == "new name"
+        assert g.nodes["a"].description == "new desc"
+        assert g.nodes["a"].confidence == 0.9
+        assert g.nodes["a"].source == "user"
+        # edges 不动
+        assert "e1" in g.edges
+        assert g._g.has_edge("a", "b")
+
+    def test_replace_node_missing_raises(self) -> None:
+        g = ExplanationGraph(root_question="q")
+        new = _node("x")
+        with pytest.raises(ValueError, match="not found"):
+            g.replace_node("x", new)
+
+    def test_replace_node_id_mismatch_raises(self) -> None:
+        g = ExplanationGraph(root_question="q")
+        g.add_node(_node("a"))
+        wrong_id = _node("b")
+        with pytest.raises(ValueError, match="id mismatch"):
+            g.replace_node("a", wrong_id)
