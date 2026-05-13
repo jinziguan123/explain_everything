@@ -6,6 +6,7 @@ import pytest
 
 from explain_engine.engines.bootstrap import BootstrapOutput, bootstrap_phenomena
 from explain_engine.llm.client import Response
+from explain_engine.llm.errors import SchemaValidationError
 
 
 def _mock_resp(phenomena: list[dict]) -> Response:
@@ -66,7 +67,7 @@ class TestBootstrapPhenomena:
             usage={"input_tokens": 0, "output_tokens": 0},
         ))
 
-        with pytest.raises(ValueError, match="未返回 structured output"):
+        with pytest.raises(SchemaValidationError, match="未返回 structured output"):
             await bootstrap_phenomena("why?", llm)
 
     async def test_passes_schema_to_llm(self):

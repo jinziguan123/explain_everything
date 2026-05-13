@@ -6,6 +6,7 @@
 from pydantic import BaseModel
 
 from explain_engine.llm.client import LLMClient, Message
+from explain_engine.llm.errors import SchemaValidationError
 from explain_engine.llm.prompts._loader import load_prompt
 from explain_engine.schema.nodes import VariableNode
 
@@ -33,7 +34,7 @@ async def bootstrap_phenomena(
     default。截断到 max_count 条。
 
     Raises:
-        ValueError: LLM 未返回 parsed 内容
+        SchemaValidationError: LLM 未返回 parsed 内容
     """
     prompt = load_prompt("variable_extraction")
     messages = [
@@ -49,7 +50,7 @@ async def bootstrap_phenomena(
     ]
     resp = await llm.chat(messages, schema=BootstrapOutput)
     if resp.parsed is None:
-        raise ValueError("LLM 未返回 structured output")
+        raise SchemaValidationError("LLM 未返回 structured output")
 
     raw = BootstrapOutput.model_validate(resp.parsed)
     phenomena = raw.phenomena[:max_count]
