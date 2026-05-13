@@ -110,3 +110,14 @@ class TestSessionStore:
         bad_path.write_text('{"meta": {"session_id": "s_00000000"}, "state": "not a dict"}')
         with pytest.raises(ValueError, match="invalid session dict"):
             store.load("s_00000000")
+
+    def test_save_is_atomic_no_tmp_left(self, tmp_sessions_dir):
+        store = SessionStore(directory=tmp_sessions_dir)
+        session = Session(
+            meta=SessionMeta.new(question="why?"),
+            state=CognitiveState.bootstrap("why?", budget=10),
+        )
+        store.save(session)
+        # 不应该有 .tmp 文件残留
+        tmps = list(tmp_sessions_dir.glob("*.tmp"))
+        assert tmps == [], f"residual tmp files: {tmps}"

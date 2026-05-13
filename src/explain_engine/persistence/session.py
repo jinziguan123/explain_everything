@@ -5,6 +5,7 @@ session_id 格式: s_{8 hex}
 """
 
 import json
+import os
 import re
 import secrets
 import time
@@ -90,7 +91,9 @@ class SessionStore:
     def save(self, session: Session) -> None:
         session.meta.updated_at = time.time()
         p = self._path(session.meta.session_id)
-        p.write_text(json.dumps(session.to_dict(), ensure_ascii=False, indent=2))
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(session.to_dict(), ensure_ascii=False, indent=2))
+        os.replace(tmp, p)
 
     def load(self, session_id: str) -> Session:
         p = self._path(session_id)
