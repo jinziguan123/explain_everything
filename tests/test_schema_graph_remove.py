@@ -35,6 +35,7 @@ class TestRemoveNode:
         g.add_node(_node("a"))
         g.remove_node("a")
         assert "a" not in g.nodes
+        assert "a" not in g._g.nodes
 
     def test_remove_node_cascade_outgoing_edges(self) -> None:
         g = ExplanationGraph(root_question="q")
@@ -45,6 +46,8 @@ class TestRemoveNode:
         assert "a" not in g.nodes
         assert "e1" not in g.edges
         assert "b" in g.nodes
+        assert "a" not in g._g.nodes
+        assert not g._g.has_edge("a", "b")
 
     def test_remove_node_cascade_incoming_edges(self) -> None:
         g = ExplanationGraph(root_question="q")
@@ -55,6 +58,8 @@ class TestRemoveNode:
         assert "b" not in g.nodes
         assert "e1" not in g.edges
         assert "a" in g.nodes
+        assert "b" not in g._g.nodes
+        assert not g._g.has_edge("a", "b")
 
     def test_remove_node_missing_raises(self) -> None:
         g = ExplanationGraph(root_question="q")
@@ -72,6 +77,8 @@ class TestRemoveEdge:
         assert "e1" not in g.edges
         assert "a" in g.nodes
         assert "b" in g.nodes
+        assert not g._g.has_edge("a", "b")
+        assert "a" in g._g.nodes and "b" in g._g.nodes
 
     def test_remove_edge_missing_raises(self) -> None:
         g = ExplanationGraph(root_question="q")
