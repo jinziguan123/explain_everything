@@ -42,6 +42,42 @@ class ExplanationGraph:
         self._edges[edge.id] = edge
         self._g.add_edge(edge.source_node, edge.target_node, edge_id=edge.id)
 
+    def remove_node(self, node_id: str) -> None:
+        """删 node + 所有 incident edges（incoming + outgoing）。
+
+        Raises:
+            ValueError: node_id 不存在。
+        """
+        if node_id not in self._nodes:
+            raise ValueError(f"node {node_id} not found")
+        incident_edge_ids = [
+            eid
+            for eid, e in self._edges.items()
+            if e.source_node == node_id or e.target_node == node_id
+        ]
+        for eid in incident_edge_ids:
+            del self._edges[eid]
+        del self._nodes[node_id]
+        self._g.remove_node(node_id)
+
+    def remove_edge(self, edge_id: str) -> None:
+        """删单 edge，保留两端 node。
+
+        Raises:
+            ValueError: edge_id 不存在。
+        """
+        if edge_id not in self._edges:
+            raise ValueError(f"edge {edge_id} not found")
+        e = self._edges[edge_id]
+        del self._edges[edge_id]
+        # networkx DiGraph 同一对节点之间可能有多 edge_id 记录，但本项目
+        # add_edge 时一对 (source,target) 在 _g 只有一条边，删 _edges 后
+        # 也要把 _g 上的边删掉。
+        if self._g.has_edge(e.source_node, e.target_node):
+            stored_eid = self._g[e.source_node][e.target_node].get("edge_id")
+            if stored_eid == edge_id:
+                self._g.remove_edge(e.source_node, e.target_node)
+
     def compression_score(self) -> float:
         return float(
             sum(
