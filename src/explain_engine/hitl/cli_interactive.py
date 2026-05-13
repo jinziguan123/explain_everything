@@ -5,8 +5,11 @@
 
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
+from rich.table import Table
 
+from explain_engine.schema.edges import RelationEdge
 from explain_engine.schema.nodes import VariableNode
+from explain_engine.schema.state import CognitiveState
 
 
 def review_phenomena(
@@ -60,3 +63,105 @@ def review_phenomena(
         )
 
     return kept
+
+
+def review_insights(
+    state: CognitiveState,
+    gains: dict[str, float],
+    console: Console | None = None,
+) -> None:
+    """HITL 2: 逐候选 keep/edit/drop/view-full。
+
+    Side effects:
+        - drop: state.graph.remove_node(cid) 级联删 edges
+        - edit: 改 candidate node.name/description + source="user"
+        - 完成时: state.insight_candidates 清空
+    """
+    console = console or Console()
+
+    # Step 1: 总览 table
+    _render_insights_table(state, gains, console)
+
+    # Step 2: 逐候选
+    candidates_snapshot = list(state.insight_candidates)
+    for idx, cid in enumerate(candidates_snapshot, start=1):
+        if cid not in state.graph.nodes:
+            continue  # 防御性：已被前一步 drop
+        cand = state.graph.nodes[cid]
+        gain = gains.get(cid, 0.0)
+        cov = _coverage_for(state, cid)
+        console.print(
+            f"\n[bold cyan][{idx}/{len(candidates_snapshot)}][/bold cyan] "
+            f"{cid}  {cand.name}  (gain={gain:.2f})"
+        )
+        console.print(f"       描述: {cand.description}", style="dim")
+        console.print(f"       覆盖 {len(cov)} 条 (默认收起)", style="dim")
+
+        while True:
+            choice = Prompt.ask(
+                "       [k]eep / [e]dit / [d]rop / [v]iew-full",
+                choices=["k", "e", "d", "v"],
+                default="k",
+            )
+            if choice == "k":
+                break
+            if choice == "d":
+                state.graph.remove_node(cid)
+                break
+            if choice == "e":
+                new_name = Prompt.ask("       新名称", default=cand.name)
+                new_desc = Prompt.ask("       新描述", default=cand.description)
+                # 替换 node 的 name/description + 升级 source
+                # NOTE: 私有访问，Phase 4 简化做法（不上升为 public API）
+                state.graph._nodes[cid] = cand.model_copy(
+                    update={"name": new_name, "description": new_desc, "source": "user"}
+                )
+                break
+            if choice == "v":
+                for e in cov:
+                    target = state.graph.nodes[e.target_node]
+                    console.print(
+                        f"         {target.id} {target.name}: {e.mechanism_description}",
+                        style="dim",
+                    )
+                # 回到 prompt 重新选
+
+    state.insight_candidates = []
+    n_kept = sum(1 for n in state.graph.nodes.values() if n.abstraction_level == 1)
+    if n_kept == 0:
+        console.print(
+            "\n[yellow][WARN] 未保留任何 insight，session 标为 done。"
+            "可 explain new 重跑同问题。[/yellow]"
+        )
+    else:
+        console.print(f"\n[green]已保留 {n_kept} 个 insight。[/green]")
+
+
+def _render_insights_table(
+    state: CognitiveState,
+    gains: dict[str, float],
+    console: Console,
+) -> None:
+    table = Table(title="候选 (按 compression_gain 降序)")
+    table.add_column("ID", style="cyan")
+    table.add_column("名称", style="bold")
+    table.add_column("描述", style="dim", max_width=40)
+    table.add_column("Coverage", justify="right")
+    table.add_column("Gain", justify="right", style="green")
+    total = sum(1 for n in state.graph.nodes.values() if n.abstraction_level == 0)
+    for cid in state.insight_candidates:
+        n = state.graph.nodes[cid]
+        cov_count = len(_coverage_for(state, cid))
+        table.add_row(
+            cid, n.name, n.description,
+            f"{cov_count}/{total}", f"{gains.get(cid, 0.0):.2f}",
+        )
+    console.print(table)
+
+
+def _coverage_for(state: CognitiveState, cid: str) -> list[RelationEdge]:
+    """返回该 candidate 的 outgoing manifests_as edges。"""
+    return [
+        e for e in state.graph.edges.values()
+        if e.source_node == cid and e.relation_type == "manifests_as"
+    ]
