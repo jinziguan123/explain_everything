@@ -1,6 +1,5 @@
 """LLMError / SchemaValidationError + provider wrap 测试。"""
 
-import json
 from unittest.mock import AsyncMock
 
 import httpx
@@ -221,8 +220,3 @@ class TestExceptionChainPreserved:
             assert wrapped.__cause__ is original
         else:
             pytest.fail("expected LLMError")
-
-
-# 静态确保 json/httpx 在 lint 下不报 "unused"
-_ = json.dumps
-_ = httpx.URL
