@@ -121,11 +121,13 @@ class TestCliNew:
     def test_new_llm_failure_exits_1(
         self, runner, setup_env, mock_review_phenomena, monkeypatch
     ):
-        """LLM 抛错时 CLI exit 1，不落 session。"""
+        """LLM 抛 LLMError 时 CLI exit 1，不落 session。"""
+        from explain_engine.llm.errors import LLMError
+
         sessions_dir = setup_env
 
         mock_llm = AsyncMock()
-        mock_llm.chat = AsyncMock(side_effect=RuntimeError("API down"))
+        mock_llm.chat = AsyncMock(side_effect=LLMError("API down"))
         monkeypatch.setattr(
             "explain_engine.cli.make_client",
             lambda settings: mock_llm,
@@ -136,5 +138,27 @@ class TestCliNew:
 
         assert result.exit_code == 1
         # 不应该有 session 落地
+        json_files = list(sessions_dir.glob("s_*.json"))
+        assert len(json_files) == 0
+
+    def test_new_schema_failure_exits_2(
+        self, runner, setup_env, mock_review_phenomena, monkeypatch
+    ):
+        """LLM 抛 SchemaValidationError 时 CLI exit 2。"""
+        from explain_engine.llm.errors import SchemaValidationError
+
+        sessions_dir = setup_env
+
+        mock_llm = AsyncMock()
+        mock_llm.chat = AsyncMock(side_effect=SchemaValidationError("missing field"))
+        monkeypatch.setattr(
+            "explain_engine.cli.make_client",
+            lambda settings: mock_llm,
+        )
+        mock_review_phenomena("all")
+
+        result = runner.invoke(app, ["new", "why?"])
+
+        assert result.exit_code == 2
         json_files = list(sessions_dir.glob("s_*.json"))
         assert len(json_files) == 0

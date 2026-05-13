@@ -6,10 +6,17 @@ Structured output 走 response_format={"type": "json_schema", ...}。
 import json
 from typing import Any
 
-from openai import AsyncOpenAI
-from pydantic import BaseModel
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    AsyncOpenAI,
+    RateLimitError,
+)
+from pydantic import BaseModel, ValidationError
 
 from explain_engine.llm.client import Message, Response
+from explain_engine.llm.errors import LLMError, SchemaValidationError
 
 
 class OpenAIClient:
@@ -31,34 +38,41 @@ class OpenAIClient:
         schema: type[BaseModel] | None = None,
         model: str | None = None,
     ) -> Response:
-        call_kwargs: dict[str, Any] = {
-            "model": model or self._default_model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
-        }
-
-        if schema is not None:
-            call_kwargs["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema.__name__,
-                    "schema": schema.model_json_schema(),
-                    "strict": True,
-                },
+        try:
+            call_kwargs: dict[str, Any] = {
+                "model": model or self._default_model,
+                "messages": [{"role": m.role, "content": m.content} for m in messages],
             }
 
-        api_resp = await self._client.chat.completions.create(**call_kwargs)
+            if schema is not None:
+                call_kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema.__name__,
+                        "schema": schema.model_json_schema(),
+                        "strict": True,
+                    },
+                }
 
-        text = api_resp.choices[0].message.content or ""
-        parsed: dict[str, Any] | None = None
-        if schema is not None and text:
-            parsed = json.loads(text)
+            api_resp = await self._client.chat.completions.create(**call_kwargs)
 
-        return Response(
-            text=text,
-            parsed=parsed,
-            model=api_resp.model,
-            usage={
-                "input_tokens": api_resp.usage.prompt_tokens,
-                "output_tokens": api_resp.usage.completion_tokens,
-            },
-        )
+            text = api_resp.choices[0].message.content or ""
+            parsed: dict[str, Any] | None = None
+            if schema is not None and text:
+                parsed = json.loads(text)
+
+            return Response(
+                text=text,
+                parsed=parsed,
+                model=api_resp.model,
+                usage={
+                    "input_tokens": api_resp.usage.prompt_tokens,
+                    "output_tokens": api_resp.usage.completion_tokens,
+                },
+            )
+        except (APIConnectionError, APITimeoutError, RateLimitError, APIError) as exc:
+            raise LLMError(str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise LLMError(f"invalid JSON in response: {exc}") from exc
+        except ValidationError as exc:
+            raise SchemaValidationError(str(exc)) from exc
