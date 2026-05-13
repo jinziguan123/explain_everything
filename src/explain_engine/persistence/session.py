@@ -58,10 +58,13 @@ class Session:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Session":
-        return cls(
-            meta=SessionMeta(**d["meta"]),
-            state=CognitiveState.from_dict(d["state"]),
-        )
+        try:
+            return cls(
+                meta=SessionMeta(**d["meta"]),
+                state=CognitiveState.from_dict(d["state"]),
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ValueError(f"invalid session dict: {exc}") from exc
 
 
 class SessionStore:

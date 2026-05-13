@@ -45,3 +45,7 @@ class TestCognitiveState:
         assert restored.tick == s.tick
         assert restored.budget_remaining == s.budget_remaining
         assert restored.insight_candidates == s.insight_candidates
+
+    def test_from_dict_invalid_raises(self):
+        with pytest.raises(ValueError, match="invalid state dict"):
+            CognitiveState.from_dict({"graph": {}})  # 缺多个必需 key

@@ -48,12 +48,15 @@ class CognitiveState:
 
     @classmethod
     def from_dict(cls, d: dict) -> "CognitiveState":
-        return cls(
-            graph=ExplanationGraph.from_dict(d["graph"]),
-            budget_remaining=d["budget_remaining"],
-            root_question=d["root_question"],
-            active_frontier=list(d.get("active_frontier", [])),
-            insight_candidates=list(d.get("insight_candidates", [])),
-            tick=d.get("tick", 0),
-            last_gain_tick=d.get("last_gain_tick", 0),
-        )
+        try:
+            return cls(
+                graph=ExplanationGraph.from_dict(d["graph"]),
+                budget_remaining=d["budget_remaining"],
+                root_question=d["root_question"],
+                active_frontier=list(d.get("active_frontier", [])),
+                insight_candidates=list(d.get("insight_candidates", [])),
+                tick=d.get("tick", 0),
+                last_gain_tick=d.get("last_gain_tick", 0),
+            )
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"invalid state dict: {exc}") from exc

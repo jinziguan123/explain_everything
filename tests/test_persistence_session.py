@@ -82,3 +82,11 @@ class TestSessionStore:
         loaded = store.load(session.meta.session_id)
         assert loaded.state.tick == 1
         assert loaded.meta.stage == "in_progress"
+
+    def test_load_invalid_json_raises(self, tmp_sessions_dir):
+        store = SessionStore(directory=tmp_sessions_dir)
+        # 写一个非法 session 文件
+        bad_path = tmp_sessions_dir / "s_00000000.json"
+        bad_path.write_text('{"meta": {"session_id": "s_00000000"}, "state": "not a dict"}')
+        with pytest.raises(ValueError, match="invalid session dict"):
+            store.load("s_00000000")
