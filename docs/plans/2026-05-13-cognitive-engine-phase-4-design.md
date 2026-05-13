@@ -499,12 +499,12 @@ tests/
 2. **mechanism scoring 1-5 离散度低**（可能 4/4/4/5/4）— Phase 5 考虑 7 级 or 0-100
 3. **Provider 抽象不正交** — 当前 `LLM_PROVIDER=claude|openai|deepseek` 把"协议"和"供应商"绑死成一个维度。DeepSeek 既能跑 OpenAI 协议（`/v1`）又能跑 Anthropic 协议（`/anthropic`），强行二选一会出问题。Phase 5 重构：用 `(LLM_PROTOCOL ∈ {openai, anthropic}, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL)` 三元组转发，砍掉 provider 概念。3 个 client 合并成 2 个（`AnthropicProtocolClient` + `OpenAIProtocolClient`）。
 4. **Compression coverage 偏低** — Task 4.9 acceptance smoke 中 5 候选 coverage 都是 2/12（spec ≥7/12）。LLM 在 abstract 出来后没有去最大化覆盖，倾向保守。Phase 5 prompt iteration 加 "每个候选覆盖至少 1/3 现象" 软约束。
-3. **DeepSeek 嵌套 schema 解析失败率未知** — Phase 4 不专门处理，smoke 验证后再决定 fallback
-4. **cost**：每次 `explain compress` ≈ 36 次 LLM 调用 — Phase 5 加批量 scoring prompt
-5. **HITL 2 edit 不能改 coverage** — 用户若强烈不同意某 1-2 条 mechanism 只能整 drop。Phase 5 加 fine-grained edit
-6. **0 keep 兜底**：所有候选都被 drop → session done 但 graph 无 insight。Phase 5 加 "重生成更多候选" 路径
-7. **多候选 coverage 重叠**：同一 concrete 被多个 abstract 解释，HITL 2 keep 多个时 graph 上同一 concrete 有多 incoming edge — 这是 feature，但未来 render 时要明确"多重解释" UI
-8. **Phase 4 不删 `compression_score()` 旧方法的影响**：被 `compression_gain` 替代后是死代码，§10 验收要求清理
+5. **DeepSeek 嵌套 schema 解析失败率未知** — Phase 4 不专门处理，smoke 验证后再决定 fallback
+6. **cost**：每次 `explain compress` ≈ 36 次 LLM 调用 — Phase 5 加批量 scoring prompt
+7. **HITL 2 edit 不能改 coverage** — 用户若强烈不同意某 1-2 条 mechanism 只能整 drop。Phase 5 加 fine-grained edit
+8. **0 keep 兜底**：所有候选都被 drop → session done 但 graph 无 insight。Phase 5 加 "重生成更多候选" 路径
+9. **多候选 coverage 重叠**：同一 concrete 被多个 abstract 解释，HITL 2 keep 多个时 graph 上同一 concrete 有多 incoming edge — 这是 feature，但未来 render 时要明确"多重解释" UI
+10. **Phase 4 不删 `compression_score()` 旧方法的影响**：被 `compression_gain` 替代后是死代码，§10 验收要求清理
 
 ---
 
