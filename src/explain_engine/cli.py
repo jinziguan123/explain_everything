@@ -175,10 +175,15 @@ async def _run_compress(session_id: str) -> None:
             store.save(session)
             console.print("[INFO] 中间状态已保存 (stage=insight_pending)。")
         except OSError as exc:
-            console.print(f"[red]保存失败: {exc}[/red]")
+            console.print(
+                f"[red]中间状态保存失败（LLM 调用已消耗，重跑会再次计费）: {exc}[/red]"
+            )
             raise typer.Exit(3) from exc
     else:  # stage == "insight_pending"
         console.print("[INFO] 检测到 stage=insight_pending，跳过 LLM 直接进入审查。")
+        console.print(
+            "[yellow][WARN] gain 信息未持久化（Phase 5 修复），所有候选显示 gain=0.0[/yellow]"
+        )
         # 重入时 gain 信息丢失，简化设为 0.0（Phase 5 持久化 gain）
         gains = {cid: 0.0 for cid in session.state.insight_candidates}
 

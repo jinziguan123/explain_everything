@@ -82,7 +82,7 @@ class TestCompress:
 
         fake_llm = AsyncMock()
         # 1 compression call + 4 scoring calls (2 candidates × 2 edges each)
-        fake_llm.chat.side_effect = [_comp_response()] + [_score_response()] * 10
+        fake_llm.chat.side_effect = [_comp_response()] + [_score_response()] * 4
 
         with patch("explain_engine.cli.make_client", return_value=fake_llm), \
              patch("rich.prompt.Prompt.ask", side_effect=["k", "k"]):

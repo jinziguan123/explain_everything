@@ -7,6 +7,8 @@
 - [需求设计.md](../../需求设计.md)
 - [技术设计v1.md](../../技术设计v1.md)（完整愿景）
 
+> **Phase 4 update**: compression_score 已删除，由 compression_gain 替代（见 2026-05-13-cognitive-engine-phase-4-design.md §4）。本 doc 中所有 compression_score 引用视为 compression_gain。
+
 ---
 
 ## 0. TL;DR
