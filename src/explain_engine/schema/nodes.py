@@ -20,6 +20,10 @@ AbstractionLevel = Literal[0, 1, 2]
 # 1 = mid       (经济压力)
 # 2 = abstract  (长期不确定性)
 
+Source = Literal["llm", "user"]
+# llm  = LLM 生成（默认）
+# user = HITL 用户 add / edit 过的
+
 
 class VariableNode(BaseModel):
     """认知图中的节点。"""
@@ -31,5 +35,6 @@ class VariableNode(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     epistemic: Epistemic
     evidence_ids: list[str] = Field(default_factory=list)
+    source: Source = "llm"
 
     model_config = {"frozen": False}  # MVP 可变，v0.2 可考虑 frozen + new_with()
