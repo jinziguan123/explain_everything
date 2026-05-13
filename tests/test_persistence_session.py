@@ -121,3 +121,19 @@ class TestSessionStore:
         # 不应该有 .tmp 文件残留
         tmps = list(tmp_sessions_dir.glob("*.tmp"))
         assert tmps == [], f"residual tmp files: {tmps}"
+
+    def test_list_skips_corrupted_files(self, tmp_sessions_dir):
+        store = SessionStore(directory=tmp_sessions_dir)
+        # 写一个好 session
+        good = Session(
+            meta=SessionMeta.new(question="good"),
+            state=CognitiveState.bootstrap("good", budget=5),
+        )
+        store.save(good)
+        # 写一个 corrupted 文件 (合法文件名但 JSON 损坏)
+        bad = tmp_sessions_dir / "s_deadbeef.json"
+        bad.write_text("{ corrupted")
+        # list 不应该崩，只返回 good
+        metas = store.list()
+        assert len(metas) == 1
+        assert metas[0].session_id == good.meta.session_id

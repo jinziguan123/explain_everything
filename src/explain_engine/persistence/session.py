@@ -5,6 +5,7 @@ session_id 格式: s_{8 hex}
 """
 
 import json
+import logging
 import os
 import re
 import secrets
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Literal
 
 from explain_engine.schema.state import CognitiveState
+
+logger = logging.getLogger(__name__)
 
 Stage = Literal[
     "bootstrap_pending",   # 等 HITL 1
@@ -104,7 +107,11 @@ class SessionStore:
     def list(self) -> list[SessionMeta]:
         metas: list[SessionMeta] = []
         for p in self.directory.glob("s_*.json"):
-            d = json.loads(p.read_text())
-            metas.append(SessionMeta(**d["meta"]))
+            try:
+                d = json.loads(p.read_text())
+                metas.append(SessionMeta(**d["meta"]))
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+                logger.warning("skipping unreadable session %s: %s", p.name, exc)
+                continue
         metas.sort(key=lambda m: m.created_at, reverse=True)
         return metas
