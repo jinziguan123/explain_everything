@@ -1,21 +1,25 @@
 """Explain Engine CLI 入口。
 
 命令：
-- explain new <question> — Bootstrap + HITL 1 + 落 session（Task 3.5 加）
+- explain new <question> — Bootstrap + HITL 1 + 落 session
 - explain show <session_id> — 显示 session 内容
 - explain list — 列出所有 session
 
 Phase 3 v0.1。
 """
 
+import asyncio
 from datetime import datetime
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from explain_engine.config import Settings
-from explain_engine.persistence.session import SessionStore
+from explain_engine.config import Settings, make_client
+from explain_engine.engines.bootstrap import bootstrap_phenomena
+from explain_engine.hitl.cli_interactive import review_phenomena
+from explain_engine.persistence.session import Session, SessionMeta, SessionStore
+from explain_engine.schema.state import CognitiveState
 
 app = typer.Typer(
     help="Cognitive Engine for explanation-centric reasoning",
@@ -27,6 +31,44 @@ console = Console()
 def _get_store() -> SessionStore:
     settings = Settings()
     return SessionStore(directory=settings.sessions_dir)
+
+
+@app.command()
+def new(
+    question: str = typer.Argument(..., help="为什么 X 问题"),
+) -> None:
+    """启动新 session：Bootstrap + HITL 1 + 落 session。"""
+    asyncio.run(_run_new(question))
+
+
+async def _run_new(question: str) -> None:
+    settings = Settings()
+    llm = make_client(settings)
+
+    console.print(
+        f"\n[INFO] 调 {settings.llm_provider} ({settings.llm_model}) 生现象..."
+    )
+    try:
+        phenomena = await bootstrap_phenomena(question, llm)
+    except Exception as exc:
+        console.print(f"[red]LLM 失败: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    console.print(f"[INFO] 生成 {len(phenomena)} 个现象，请审查。")
+    final_phenomena = review_phenomena(phenomena, console=console)
+
+    # 构造 session
+    state = CognitiveState.bootstrap(question, budget=settings.default_budget)
+    for p in final_phenomena:
+        state.graph.add_node(p)
+    meta = SessionMeta.new(question=question)
+    session = Session(meta=meta, state=state)
+
+    store = _get_store()
+    store.save(session)
+
+    console.print(f"\n[green]Session {meta.session_id} 已保存。[/green]")
+    console.print(f"       下一步：explain show {meta.session_id}")
 
 
 @app.command()
