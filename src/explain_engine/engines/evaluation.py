@@ -70,7 +70,7 @@ async def score_all(state: CognitiveState, llm: LLMClient) -> dict[str, float]:
                 abstract_description=cand.description,
                 concrete_name=concrete.name,
                 concrete_description=concrete.description,
-                mechanism=e.mechanism_description or "",
+                mechanism=e.mechanism_description,
             )
             scores.append(score)
 

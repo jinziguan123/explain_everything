@@ -104,14 +104,36 @@ class TestScoreAll:
     async def test_invalid_score_raises(self) -> None:
         state = _build_state(12, [("c_001", ["p_001", "p_002"])])
         llm = AsyncMock()
-        llm.chat.return_value = Response(
+        bad = Response(
             text="",
             parsed={"score": 99, "rationale": "x"},
             model="test",
             usage={"input_tokens": 0, "output_tokens": 0},
         )
+        llm.chat.side_effect = [bad, bad]
         with pytest.raises(SchemaValidationError):
             await score_all(state, llm)
+        assert llm.chat.await_count == 2
+
+    async def test_retry_succeeds_on_second_attempt(self) -> None:
+        """第一次返坏数据（score=99），retry → 第二次返好数据（score=4）→ 成功。"""
+        state = _build_state(12, [("c_001", ["p_001", "p_002"])])
+        llm = AsyncMock()
+        bad = Response(
+            text="",
+            parsed={"score": 99, "rationale": "x"},
+            model="test",
+            usage={"input_tokens": 0, "output_tokens": 0},
+        )
+        good = _score_resp(4)
+        # edge1: [bad, good]（retry success），edge2: [good]
+        llm.chat.side_effect = [bad, good, good]
+        gains = await score_all(state, llm)
+        # 两 edge 都 score=4 → preservation = 4/5 = 0.8
+        # coverage 2/12 → repr = 2/12
+        # gain = 2/12 × 0.8
+        assert gains["c_001"] == pytest.approx(2 / 12 * 0.8, rel=1e-3)
+        assert llm.chat.await_count == 3
 
     async def test_zero_coverage_skipped(self) -> None:
         """candidate 无 outgoing edge → gain=0（理论上 Compression 已淘汰，但 Evaluation 兜底）"""
