@@ -50,10 +50,13 @@ addopts = "-m 'not integration'"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = [".claude", "docs/plans"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "RUF"]
-ignore = ["E501"]
+# E501: 行长由 line-length=100 控制，更柔性
+# RUF001-003: 中文标点（， 。 ： ）在 docstring/comment 里是 intentional，不算错
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.11"

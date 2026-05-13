@@ -3,11 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from explain_engine.schema.nodes import (
-    AbstractionLevel,
-    Epistemic,
-    VariableNode,
-)
+from explain_engine.schema.nodes import VariableNode
 
 
 class TestVariableNode:

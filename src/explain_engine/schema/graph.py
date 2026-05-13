@@ -1,7 +1,7 @@
 """ExplanationGraph — networkx.DiGraph 包装。"""
 
+from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Mapping
 
 import networkx as nx
 
@@ -83,9 +83,9 @@ class ExplanationGraph:
     def from_dict(cls, d: dict) -> "ExplanationGraph":
         try:
             g = cls(root_question=d["root_question"])
-            for nid, n in d["nodes"].items():
+            for n in d["nodes"].values():
                 g.add_node(VariableNode.model_validate(n))
-            for eid, e in d["edges"].items():
+            for e in d["edges"].values():
                 g.add_edge(RelationEdge.model_validate(e))
             return g
         except (KeyError, ValueError) as exc:
