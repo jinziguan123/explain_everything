@@ -34,7 +34,6 @@ class TestExplanationGraph:
         g = ExplanationGraph(root_question="why?")
         assert g.nodes == {}
         assert g.edges == {}
-        assert g.compression_score() == 0.0
         assert g.coverage_score() == 0.0
 
     def test_add_node(self):
@@ -60,16 +59,6 @@ class TestExplanationGraph:
         g.add_node(_node("n_001"))
         with pytest.raises(ValueError, match="unknown node"):
             g.add_edge(_edge("e_001", "n_001", "n_missing"))
-
-    def test_compression_score_one_abstract_covers_three(self):
-        g = ExplanationGraph(root_question="why?")
-        g.add_node(_node("n_abs", level=2))
-        for i in range(3):
-            cid = f"n_con_{i}"
-            g.add_node(_node(cid))
-            g.add_edge(_edge(f"e_{i}", "n_abs", cid))
-        # 1 个 abstract 覆盖 3 个 concrete = 压缩 3
-        assert g.compression_score() == 3.0
 
     def test_coverage_score_partial(self):
         g = ExplanationGraph(root_question="why?")
@@ -102,17 +91,6 @@ class TestExplanationGraph:
         assert restored.nodes == g.nodes
         assert restored.edges == g.edges
         assert restored.root_question == g.root_question
-
-    def test_compression_score_counts_mid_level_too(self):
-        """abstraction_level=1 (mid) 节点也参与 compression."""
-        g = ExplanationGraph(root_question="why?")
-        g.add_node(_node("n_mid", level=1))
-        g.add_node(_node("n_con_a"))
-        g.add_node(_node("n_con_b"))
-        g.add_edge(_edge("e_1", "n_mid", "n_con_a"))
-        g.add_edge(_edge("e_2", "n_mid", "n_con_b"))
-        # mid 节点应该被 compression 计入
-        assert g.compression_score() == 2.0
 
     def test_nodes_is_read_only(self):
         g = ExplanationGraph(root_question="why?")

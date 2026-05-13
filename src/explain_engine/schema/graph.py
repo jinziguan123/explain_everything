@@ -71,15 +71,6 @@ class ExplanationGraph:
         e = self._edges.pop(edge_id)
         self._g.remove_edge(e.source_node, e.target_node)
 
-    def compression_score(self) -> float:
-        return float(
-            sum(
-                self._g.out_degree(nid)
-                for nid, node in self._nodes.items()
-                if node.abstraction_level >= 1
-            )
-        )
-
     def coverage_score(self) -> float:
         concretes = [nid for nid, n in self._nodes.items() if n.abstraction_level == 0]
         if not concretes:

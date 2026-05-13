@@ -4,8 +4,9 @@
 - explain new <question> — Bootstrap + HITL 1 + 落 session
 - explain show <session_id> — 显示 session 内容
 - explain list — 列出所有 session
+- explain compress <session_id> — Compression + Evaluation + HITL 2
 
-Phase 3 v0.1。
+Phase 3 v0.1 / Phase 4。
 """
 
 import asyncio
@@ -17,7 +18,9 @@ from rich.table import Table
 
 from explain_engine.config import Settings, make_client
 from explain_engine.engines.bootstrap import bootstrap_phenomena
-from explain_engine.hitl.cli_interactive import review_phenomena
+from explain_engine.engines.compression import propose_candidates
+from explain_engine.engines.evaluation import score_all
+from explain_engine.hitl.cli_interactive import review_insights, review_phenomena
 from explain_engine.llm.errors import LLMError, SchemaValidationError
 from explain_engine.persistence.session import Session, SessionMeta, SessionStore
 from explain_engine.schema.state import CognitiveState
@@ -111,6 +114,85 @@ def show(
             node.epistemic,
         )
     console.print(table)
+
+
+@app.command()
+def compress(
+    session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+) -> None:
+    """对已 bootstrap 的 session 跑 Compression + Evaluation + HITL 2。"""
+    asyncio.run(_run_compress(session_id))
+
+
+async def _run_compress(session_id: str) -> None:
+    store = _get_store()
+    try:
+        session = store.load(session_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    stage = session.meta.stage
+    if stage == "done":
+        console.print(f"[red]session {session_id} 已 done，不可重跑。[/red]")
+        raise typer.Exit(4)
+    if stage not in ("bootstrap_pending", "insight_pending"):
+        console.print(
+            f"[red]session {session_id} stage={stage}，不支持 compress。[/red]"
+        )
+        raise typer.Exit(4)
+
+    settings = Settings()
+    llm = make_client(settings)
+
+    gains: dict[str, float]
+
+    if stage == "bootstrap_pending":
+        console.print("[INFO] 调 LLM 生成 abstract 候选...")
+        try:
+            await propose_candidates(session.state, llm)
+        except SchemaValidationError as exc:
+            console.print(f"[red]LLM 输出不合规: {exc}[/red]")
+            raise typer.Exit(2) from exc
+        except LLMError as exc:
+            console.print(f"[red]LLM 调用失败: {exc}[/red]")
+            raise typer.Exit(1) from exc
+
+        console.print(
+            f"[INFO] 生成 {len(session.state.insight_candidates)} 个候选，开始评分..."
+        )
+        try:
+            gains = await score_all(session.state, llm)
+        except SchemaValidationError as exc:
+            console.print(f"[red]评分输出不合规: {exc}[/red]")
+            raise typer.Exit(2) from exc
+        except LLMError as exc:
+            console.print(f"[red]评分 LLM 调用失败: {exc}[/red]")
+            raise typer.Exit(1) from exc
+
+        session.meta.stage = "insight_pending"
+        try:
+            store.save(session)
+            console.print("[INFO] 中间状态已保存 (stage=insight_pending)。")
+        except OSError as exc:
+            console.print(f"[red]保存失败: {exc}[/red]")
+            raise typer.Exit(3) from exc
+    else:  # stage == "insight_pending"
+        console.print("[INFO] 检测到 stage=insight_pending，跳过 LLM 直接进入审查。")
+        # 重入时 gain 信息丢失，简化设为 0.0（Phase 5 持久化 gain）
+        gains = {cid: 0.0 for cid in session.state.insight_candidates}
+
+    # HITL 2
+    review_insights(session.state, gains, console=console)
+
+    session.meta.stage = "done"
+    try:
+        store.save(session)
+    except OSError as exc:
+        console.print(f"[red]保存失败: {exc}[/red]")
+        raise typer.Exit(3) from exc
+
+    console.print(f"\n[green]Session {session_id} 已完成。[/green]")
 
 
 @app.command(name="list")
