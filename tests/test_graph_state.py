@@ -95,3 +95,12 @@ def test_attribution_state_supports_lazy_ingest_fields():
     s2 = new_attribution_state(raw_question="test2")
     assert "lazy_ingest_count" not in s2
     assert "lazy_ingest_skipped" not in s2
+
+
+def test_attribution_state_supports_intent_qualifier():
+    """intent_qualifier 是 AttributionState 合法字段（默认不在 dict 中）。"""
+    from explain_agent.graph.state import AttributionState
+    s: AttributionState = new_attribution_state(raw_question="test")
+    assert "intent_qualifier" not in s
+    s["intent_qualifier"] = "上午"
+    assert s["intent_qualifier"] == "上午"

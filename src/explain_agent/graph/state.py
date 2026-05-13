@@ -49,6 +49,7 @@ class AttributionState(TypedDict, total=False):
     target: str
     time_window: tuple[date, date]
     intent: Literal["up", "down", "volatile", "general"]
+    intent_qualifier: str  # "上午" / "下午" / "今天" / "本周" / "近期" / "" — Phase 2.D-3 后置补丁
 
     # router/framework
     domain_id: str
