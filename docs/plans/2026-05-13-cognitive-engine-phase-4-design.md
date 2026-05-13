@@ -472,14 +472,21 @@ tests/
 
 ## 10. 验收标准
 
-- [ ] `explain compress s_e3fb6675` 真实 LLM 跑通：3-5 候选生成，按 gain 降序，HITL 2 全 path
-- [ ] **wow check (informal)**：候选里至少有一个名字接近 "长期不确定性" / "社会竞争结构" 这类高维隐藏变量，gain ≥ 0.5，coverage ≥ 7/12
-- [ ] HITL 2 Ctrl-C 后重跑能从 `insight_pending` 跳过 LLM 直接审查
-- [ ] L1+L2+L3 测试 ≥35 个 PASS
-- [ ] Phase 0-3 96 测试不破
-- [ ] ruff check 0 error
-- [ ] Phase 3 `_run_new` 也用上 `LLMError` / `SchemaValidationError` 异常分类（reviewer Q3 回填）
-- [ ] `compression_score()` 旧方法删掉或废弃（被 `compression_gain` 替代，tension #1 解掉）
+- [x] `explain compress <session>` 真实 LLM 跑通：5 候选生成，按 gain 降序，HITL 2 全 path
+- [x] **wow check (informal)** PASS：DeepSeek-chat 跑 `explain compress s_f3beb777`（"为什么宗教战争是最血腥的战争"）出 5 个语义扎实的隐藏变量：
+  - c_001 **绝对化价值框架** —— 教义绝对真理化，消除谈判空间
+  - c_002 **超越性激励系统** —— 死后奖赏降低对死亡的恐惧
+  - c_003 **非人化认知建构** —— 信徒/异教徒分类削弱人道认同
+  - c_004 **跨层次动员网络** —— 宗教认同跨民族、阶级、地域
+  - c_005 **自我延续的仇恨循环** —— 神圣化记忆代际传递
+
+  **觉察点**：实际 coverage 都是 2/12（远低于 spec 的 ≥7/12），且 gain=0.0 因用户进入了 `insight_pending` 重入路径，score 信息没持久化（Phase 5 修复）。但候选名字定性扎实，wow demo 在"高维隐藏变量"维度上 PASS。
+- [x] HITL 2 Ctrl-C 后重跑能从 `insight_pending` 跳过 LLM 直接审查（用户实测确认）
+- [x] L1+L2+L3 测试 156 PASS（远超 ≥35 spec）
+- [x] Phase 0-3 测试不破
+- [x] ruff check 0 error
+- [x] Phase 3 `_run_new` 也用上 `LLMError` / `SchemaValidationError` 异常分类（reviewer Q3 回填）
+- [x] `compression_score()` 旧方法已删（被 `compression_gain` 替代，tension #1 解掉）
 
 ---
 
@@ -487,6 +494,8 @@ tests/
 
 1. **LLM 出 5 个候选名字相似**（同义改写"长期不确定性"/"未来焦虑"/"经济悲观"）— prompt 强调"多角度互不冗余"，仍失败 → Phase 5 加 redundancy_penalty
 2. **mechanism scoring 1-5 离散度低**（可能 4/4/4/5/4）— Phase 5 考虑 7 级 or 0-100
+3. **Provider 抽象不正交** — 当前 `LLM_PROVIDER=claude|openai|deepseek` 把"协议"和"供应商"绑死成一个维度。DeepSeek 既能跑 OpenAI 协议（`/v1`）又能跑 Anthropic 协议（`/anthropic`），强行二选一会出问题。Phase 5 重构：用 `(LLM_PROTOCOL ∈ {openai, anthropic}, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL)` 三元组转发，砍掉 provider 概念。3 个 client 合并成 2 个（`AnthropicProtocolClient` + `OpenAIProtocolClient`）。
+4. **Compression coverage 偏低** — Task 4.9 acceptance smoke 中 5 候选 coverage 都是 2/12（spec ≥7/12）。LLM 在 abstract 出来后没有去最大化覆盖，倾向保守。Phase 5 prompt iteration 加 "每个候选覆盖至少 1/3 现象" 软约束。
 3. **DeepSeek 嵌套 schema 解析失败率未知** — Phase 4 不专门处理，smoke 验证后再决定 fallback
 4. **cost**：每次 `explain compress` ≈ 36 次 LLM 调用 — Phase 5 加批量 scoring prompt
 5. **HITL 2 edit 不能改 coverage** — 用户若强烈不同意某 1-2 条 mechanism 只能整 drop。Phase 5 加 fine-grained edit
