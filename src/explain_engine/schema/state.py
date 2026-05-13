@@ -18,6 +18,14 @@ class CognitiveState:
     tick: int = 0
     last_gain_tick: int = 0
 
+    def __post_init__(self) -> None:
+        if self.budget_remaining < 0:
+            raise ValueError(f"budget_remaining must be >= 0, got {self.budget_remaining}")
+        if self.tick < 0:
+            raise ValueError(f"tick must be >= 0, got {self.tick}")
+        if self.last_gain_tick < 0:
+            raise ValueError(f"last_gain_tick must be >= 0, got {self.last_gain_tick}")
+
     @classmethod
     def bootstrap(cls, question: str, budget: int) -> "CognitiveState":
         return cls(

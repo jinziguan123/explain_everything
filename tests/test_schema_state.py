@@ -49,3 +49,20 @@ class TestCognitiveState:
     def test_from_dict_invalid_raises(self):
         with pytest.raises(ValueError, match="invalid state dict"):
             CognitiveState.from_dict({"graph": {}})  # 缺多个必需 key
+
+    def test_negative_budget_rejected(self):
+        with pytest.raises(ValueError, match="budget_remaining"):
+            CognitiveState(
+                graph=ExplanationGraph(root_question="why?"),
+                budget_remaining=-1,
+                root_question="why?",
+            )
+
+    def test_negative_tick_rejected(self):
+        with pytest.raises(ValueError, match="tick"):
+            CognitiveState(
+                graph=ExplanationGraph(root_question="why?"),
+                budget_remaining=5,
+                root_question="why?",
+                tick=-1,
+            )
