@@ -106,3 +106,28 @@ class TestVariableNode:
                 confidence=0.5,
                 epistemic="fact",
             )
+
+    def test_confidence_boundary_values_accepted(self):
+        # 0.0 和 1.0 (闭区间端点) 都应该被接受
+        for c in [0.0, 1.0]:
+            node = VariableNode(
+                id="n_x",
+                name="x",
+                description="x",
+                abstraction_level=0,
+                confidence=c,
+                epistemic="fact",
+            )
+            assert node.confidence == c
+
+    def test_abstraction_level_all_values_accepted(self):
+        for level in [0, 1, 2]:
+            node = VariableNode(
+                id=f"n_{level}",
+                name="x",
+                description="x",
+                abstraction_level=level,  # type: ignore[arg-type]
+                confidence=0.5,
+                epistemic="fact",
+            )
+            assert node.abstraction_level == level

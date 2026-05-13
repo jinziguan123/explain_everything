@@ -102,3 +102,14 @@ class TestExplanationGraph:
         assert restored.nodes == g.nodes
         assert restored.edges == g.edges
         assert restored.root_question == g.root_question
+
+    def test_compression_score_counts_mid_level_too(self):
+        """abstraction_level=1 (mid) 节点也参与 compression."""
+        g = ExplanationGraph(root_question="why?")
+        g.add_node(_node("n_mid", level=1))
+        g.add_node(_node("n_con_a"))
+        g.add_node(_node("n_con_b"))
+        g.add_edge(_edge("e_1", "n_mid", "n_con_a"))
+        g.add_edge(_edge("e_2", "n_mid", "n_con_b"))
+        # mid 节点应该被 compression 计入
+        assert g.compression_score() == 2.0

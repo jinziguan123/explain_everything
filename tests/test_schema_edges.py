@@ -100,3 +100,15 @@ class TestRelationEdge:
                 confidence=0.5,
                 mechanism_description="x",
             )
+
+    def test_confidence_boundary_values_accepted(self):
+        for c in [0.0, 1.0]:
+            edge = RelationEdge(
+                id=f"e_{c}",
+                source_node="n_001",
+                target_node="n_002",
+                relation_type="causes",
+                confidence=c,
+                mechanism_description="x",
+            )
+            assert edge.confidence == c
