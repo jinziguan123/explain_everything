@@ -170,6 +170,22 @@ docs/plans/            设计文档 / 实施计划
 - [x] 全部单测通过（115 passed，含 Phase 2.A/2.B/2.C 回归）
 - [x] 端到端 smoke：session `s_17f25967`，2 条 connection_threads，70 条 web snapshot
 
+## Phase 2.D-3 后续小补丁（2026-05-13）
+
+REPL 实际使用暴露的两个体验问题修复：
+- [x] **F1 followup prompt 放宽**：金融相关追问不再因"超主题"被直接拒；
+  改成"先尝试基于现有 evidence 推测 + 标注信息局限 + 建议 /new"
+- [x] **F2 parse 加 intent_qualifier**（"上午"/"下午"/"今天"/"本周"/"近期"）：
+  写到 narrative + dim_report prompt，让 LLM 自约束引用 evidence 时段
+- [x] 全部 150 单测通过（143 → 150，+7 新单测）
+- [x] Smoke 验证：跑"总结一下今天上午的行情"，dim_reports 明确说"该时段可用证据
+  有限"（policy / international / sentiment_event），narrative 引用非今日事件
+  时明确标注日期（如"5月11日早盘..."）而非模糊化为"今天上午"
+
+**仍未解决（推到 Phase 2.D-4 brainstorm "全市场综述形态"）**：
+- Q1: technical / capital_flow 对宽泛 target（如"上午行情"）无结果（IndustryResolver 不命中）
+- Q4: 热点新闻主动获取（无"今日热点"自主发现）
+
 ## Phase 2.D-3 验收状态
 
 Corpus 自动化 + 研报 evidence。lazy_ingest 让 agent 不再依赖手动 ingest；行业/宏观研报填补 dormant 表，让 policy / industry_chain / international 三维多一个权威源。
