@@ -95,3 +95,14 @@ class TestVariableNode:
         s = node.model_dump_json()
         restored = VariableNode.model_validate_json(s)
         assert restored == node
+
+    def test_empty_id_rejected(self):
+        with pytest.raises(ValidationError):
+            VariableNode(
+                id="",  # 空 id 应该被拒
+                name="x",
+                description="x",
+                abstraction_level=0,
+                confidence=0.5,
+                epistemic="fact",
+            )

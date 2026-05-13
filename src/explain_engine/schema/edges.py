@@ -19,9 +19,9 @@ RelationType = Literal[
 class RelationEdge(BaseModel):
     """认知图中的有向边。"""
 
-    id: str
-    source_node: str
-    target_node: str
+    id: str = Field(min_length=1)
+    source_node: str = Field(min_length=1)
+    target_node: str = Field(min_length=1)
     relation_type: RelationType
     confidence: float = Field(ge=0.0, le=1.0)
     mechanism_description: str = Field(min_length=1)

@@ -69,3 +69,34 @@ class TestRelationEdge:
                 mechanism_description="x",
             )
             assert edge.relation_type == t
+
+    def test_empty_id_rejected(self):
+        with pytest.raises(ValidationError):
+            RelationEdge(
+                id="",
+                source_node="n_001",
+                target_node="n_002",
+                relation_type="causes",
+                confidence=0.5,
+                mechanism_description="x",
+            )
+
+    def test_empty_source_target_rejected(self):
+        with pytest.raises(ValidationError):
+            RelationEdge(
+                id="e_001",
+                source_node="",
+                target_node="n_002",
+                relation_type="causes",
+                confidence=0.5,
+                mechanism_description="x",
+            )
+        with pytest.raises(ValidationError):
+            RelationEdge(
+                id="e_001",
+                source_node="n_001",
+                target_node="",
+                relation_type="causes",
+                confidence=0.5,
+                mechanism_description="x",
+            )

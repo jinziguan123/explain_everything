@@ -24,7 +24,7 @@ AbstractionLevel = Literal[0, 1, 2]
 class VariableNode(BaseModel):
     """认知图中的节点。"""
 
-    id: str
+    id: str = Field(min_length=1)
     name: str
     description: str
     abstraction_level: AbstractionLevel
