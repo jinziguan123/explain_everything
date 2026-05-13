@@ -20,6 +20,26 @@ class TestSessionMeta:
         assert meta.question == "why?"
         assert meta.stage == "bootstrap_pending"
 
+    def test_invalid_stage_rejected(self):
+        with pytest.raises(ValueError, match="invalid stage"):
+            SessionMeta(
+                session_id="s_00000000",
+                question="why?",
+                stage="bogus",  # type: ignore[arg-type]
+                created_at=0.0,
+                updated_at=0.0,
+            )
+
+    def test_invalid_session_id_format_rejected(self):
+        with pytest.raises(ValueError, match="invalid session_id"):
+            SessionMeta(
+                session_id="bad-id",
+                question="why?",
+                stage="bootstrap_pending",
+                created_at=0.0,
+                updated_at=0.0,
+            )
+
 
 class TestSessionStore:
     def test_save_and_load(self, tmp_sessions_dir):
@@ -76,12 +96,12 @@ class TestSessionStore:
 
         # 修改 state 再保存
         session.state.advance_tick()
-        session.meta.stage = "in_progress"
+        session.meta.stage = "running"
         store.save(session)
 
         loaded = store.load(session.meta.session_id)
         assert loaded.state.tick == 1
-        assert loaded.meta.stage == "in_progress"
+        assert loaded.meta.stage == "running"
 
     def test_load_invalid_json_raises(self, tmp_sessions_dir):
         store = SessionStore(directory=tmp_sessions_dir)

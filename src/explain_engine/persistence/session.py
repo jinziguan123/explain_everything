@@ -5,6 +5,7 @@ session_id 格式: s_{8 hex}
 """
 
 import json
+import re
 import secrets
 import time
 from dataclasses import asdict, dataclass
@@ -20,6 +21,9 @@ Stage = Literal[
     "done",                # render 完成
 ]
 
+_SESSION_ID_RE = re.compile(r"^s_[0-9a-f]{8}$")
+_VALID_STAGES = frozenset({"bootstrap_pending", "running", "finalize_pending", "done"})
+
 
 def _new_session_id() -> str:
     return "s_" + secrets.token_hex(4)
@@ -32,6 +36,14 @@ class SessionMeta:
     stage: Stage
     created_at: float
     updated_at: float
+
+    def __post_init__(self) -> None:
+        if not _SESSION_ID_RE.match(self.session_id):
+            raise ValueError(f"invalid session_id format: {self.session_id!r}")
+        if self.stage not in _VALID_STAGES:
+            raise ValueError(
+                f"invalid stage: {self.stage!r}, must be one of {sorted(_VALID_STAGES)}"
+            )
 
     @classmethod
     def new(cls, question: str) -> "SessionMeta":
