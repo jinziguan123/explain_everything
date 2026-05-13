@@ -23,8 +23,8 @@ system: |
 user_template: |
   问题: {question}
 
-  已收集的现象:
+  已收集的现象（每行格式: `- <id>: <name> — <description>`）:
   {phenomena_table}
 
   请输出 {min_count}-{max_count} 个 abstract candidate variable。
-  每个候选的 coverage 的 concrete_id 必须来自上述现象列表。
+  每个候选的 coverage 的 concrete_id 必须从上述现象的 <id> 中选（如 p_001 / p_002 / ...）。
