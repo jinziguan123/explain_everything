@@ -11,7 +11,8 @@ SYSTEM = """你是金融归因 agent 的问题解析器。读完用户输入，�
   "target": "标的（板块/行业/主题名）",
   "time_window_start": "YYYY-MM-DD",
   "time_window_end": "YYYY-MM-DD",
-  "intent": "up|down|volatile|general"
+  "intent": "up|down|volatile|general",
+  "intent_qualifier": "上午|下午|今天|本周|近期|"
 }
 
 规则：
@@ -20,6 +21,8 @@ SYSTEM = """你是金融归因 agent 的问题解析器。读完用户输入，�
 - "今天"语义：end=今天，start=今天-5天（覆盖最近 5 个自然日，包含上一个交易日），避免单日窗口导致行情库查空
 - 若用户给出明确日期则严格按用户给定
 - intent：涨/涨停=up，跌/大跌=down，波动/异动=volatile，其它=general
+- intent_qualifier：用户提"今天上午"→"上午", "今天下午"→"下午", "今天/今日"→"今天",
+  "本周/这周"→"本周", "最近/近期/没说时间"→"近期", 其他无明确时段意图→""
 只输出 JSON。
 """
 
@@ -49,6 +52,7 @@ async def parse_question_node(
             "target": state["raw_question"][:50],
             "time_window": (today - timedelta(days=7), today),
             "intent": "general",
+            "intent_qualifier": "近期",
         }
 
     try:
@@ -61,4 +65,5 @@ async def parse_question_node(
         "target": data.get("target", state["raw_question"][:50]),
         "time_window": (start, end),
         "intent": data.get("intent", "general"),
+        "intent_qualifier": data.get("intent_qualifier", "近期") or "近期",
     }
