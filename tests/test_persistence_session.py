@@ -96,12 +96,12 @@ class TestSessionStore:
 
         # 修改 state 再保存
         session.state.advance_tick()
-        session.meta.stage = "running"
+        session.meta.stage = "insight_pending"
         store.save(session)
 
         loaded = store.load(session.meta.session_id)
         assert loaded.state.tick == 1
-        assert loaded.meta.stage == "running"
+        assert loaded.meta.stage == "insight_pending"
 
     def test_load_invalid_json_raises(self, tmp_sessions_dir):
         store = SessionStore(directory=tmp_sessions_dir)
