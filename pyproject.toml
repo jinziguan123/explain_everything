@@ -1,44 +1,35 @@
 [project]
-name = "explain-agent"
-version = "0.1.0"
-description = "A 股板块/主题异动归因 AI agent"
+name = "explain-engine"
+version = "0.0.1"
+description = "Cognitive Engine for explanation-centric reasoning"
 readme = "README.md"
 authors = [
     { name = "jinziguan", email = "18917950960@163.com" }
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "akshare>=1.18.60",
     "anthropic>=0.100.0",
-    "clickhouse-connect>=0.15.1",
-    "cryptography>=48.0.0",
-    "httpx>=0.28.1",
-    "langgraph>=1.1.10",
+    "networkx>=3.5",
     "openai>=2.36.0",
     "prompt-toolkit>=3.0.52",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.1",
-    "pymysql>=1.1.3",
     "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
-    "qdrant-client>=1.17.1",
     "rich>=15.0.0",
-    "sentence-transformers>=5.4.1",
-    "sqlalchemy>=2.0.49",
-    "tavily-python>=0.7.24",
     "tenacity>=9.1.4",
-    "trafilatura>=2.0.0",
     "typer>=0.25.1",
 ]
 
 [project.scripts]
-explain-ingest-news = "explain_agent.cli.ingest_news:app"
-explain-ingest-research = "explain_agent.cli.ingest_research:app"
-explain = "explain_agent.cli.repl.loop:main"
+explain = "explain_engine.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/explain_engine"]
 
 [dependency-groups]
 dev = [
@@ -50,9 +41,22 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 markers = [
-    "integration: 需要真实数据库/网络的集成测试，CI 默认跳过",
-    "slow: 较慢的测试（模型加载、大批量数据）",
+    "integration: 需要真实 LLM API 的集成测试，CI 默认跳过",
 ]
 addopts = "-m 'not integration'"
 
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
