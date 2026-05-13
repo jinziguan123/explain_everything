@@ -25,8 +25,11 @@ class _CoverageItem(BaseModel):
 
     @field_validator("mechanism")
     @classmethod
-    def _strip(cls, v: str) -> str:
-        return v.strip()
+    def _strip_nonempty(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("mechanism 不能为空")
+        return s
 
 
 class _CompressionCandidate(BaseModel):
@@ -88,10 +91,11 @@ async def propose_candidates(
         )
 
     # 灌进 graph
+    start_c = _next_candidate_id_num(state)
     next_edge_id = _next_edge_id(state)
     state.insight_candidates = []
-    for i, cand in enumerate(candidates, start=1):
-        c_id = f"c_{i:03d}"
+    for offset, cand in enumerate(candidates):
+        c_id = f"c_{start_c + offset:03d}"
         state.graph.add_node(
             VariableNode(
                 id=c_id,
@@ -128,6 +132,16 @@ def _render_phenomena_table(state: CognitiveState) -> str:
 
 def _next_edge_id(state: CognitiveState) -> int:
     existing = [int(eid.split("_")[1]) for eid in state.graph.edges if eid.startswith("e_")]
+    return (max(existing) + 1) if existing else 1
+
+
+def _next_candidate_id_num(state: CognitiveState) -> int:
+    """扫已有 c_NNN node 取 max+1（保证重入不撞 id）。"""
+    existing = [
+        int(nid.split("_")[1])
+        for nid in state.graph.nodes
+        if nid.startswith("c_") and nid[2:].isdigit()
+    ]
     return (max(existing) + 1) if existing else 1
 
 

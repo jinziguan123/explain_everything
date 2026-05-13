@@ -107,12 +107,93 @@ class TestPropose:
     async def test_invalid_concrete_id_raises(self) -> None:
         state = _setup_state()
         llm = AsyncMock()
-        # retry 2 次都返同样的坏数据
-        llm.chat.return_value = _mock_llm_response([
+        bad = _mock_llm_response([
             _candidate("bad", ["p_999", "p_888"]),  # 不存在的 id
         ])
+        llm.chat.side_effect = [bad, bad]  # 显式两次坏
         with pytest.raises(SchemaValidationError, match="concrete_id"):
             await propose_candidates(state, llm)
+        assert llm.chat.await_count == 2
+
+    async def test_retry_succeeds_on_second_attempt(self) -> None:
+        """第一次返坏数据 → retry → 第二次返好数据 → 成功。"""
+        state = _setup_state()
+        llm = AsyncMock()
+        bad = _mock_llm_response([_candidate("bad", ["p_999"])])  # 坏 id
+        good = _mock_llm_response([_candidate("good", ["p_001", "p_002"])])
+        llm.chat.side_effect = [bad, good]
+        await propose_candidates(state, llm)
+        assert llm.chat.await_count == 2
+        abstracts = [n for n in state.graph.nodes.values() if n.abstraction_level == 1]
+        assert len(abstracts) == 1
+        assert abstracts[0].name == "good"
+
+    async def test_empty_mechanism_raises(self) -> None:
+        """LLM 返空 mechanism → schema 校验失败 → retry → raise."""
+        state = _setup_state()
+        llm = AsyncMock()
+        bad_resp = _mock_llm_response([{
+            "name": "x", "description": "x",
+            "coverage": [{"concrete_id": "p_001", "mechanism": "   "}],
+        }])
+        llm.chat.side_effect = [bad_resp, bad_resp]
+        with pytest.raises(SchemaValidationError):
+            await propose_candidates(state, llm)
+
+    async def test_edge_id_continues_from_existing(self) -> None:
+        """已有 e_005 时，新 edge 从 e_006 起。"""
+        from explain_engine.schema.edges import RelationEdge
+        state = _setup_state()
+        # 手动 add 一条 e_005
+        state.graph.add_node(
+            VariableNode(
+                id="c_pre", name="pre", description="",
+                abstraction_level=1, confidence=0.7, epistemic="insight",
+            )
+        )
+        state.graph.add_edge(
+            RelationEdge(
+                id="e_005", source_node="c_pre", target_node="p_001",
+                relation_type="manifests_as", confidence=0.7,
+                mechanism_description="pre",
+            )
+        )
+        llm = AsyncMock()
+        llm.chat.return_value = _mock_llm_response([
+            _candidate("X", ["p_002", "p_003"]),
+        ])
+        await propose_candidates(state, llm)
+        # 新 edge 应从 e_006 起
+        new_edge_ids = [
+            eid for eid in state.graph.edges if eid.startswith("e_") and eid != "e_005"
+        ]
+        assert sorted(new_edge_ids) == ["e_006", "e_007"]
+        # c_id 仍从 1 起（c_pre 不匹配 c_NNN 数字规则）
+        new_c = [
+            nid for nid in state.graph.nodes
+            if nid.startswith("c_") and nid != "c_pre"
+        ]
+        assert new_c == ["c_001"]
+
+    async def test_candidate_id_continues_from_existing(self) -> None:
+        """已有 c_002 时，新 candidate 从 c_003 起（虽然实际 CLI 不会这样跑，但 invariant 要保证）。"""
+        state = _setup_state()
+        state.graph.add_node(
+            VariableNode(
+                id="c_002", name="prev", description="",
+                abstraction_level=1, confidence=0.7, epistemic="insight",
+            )
+        )
+        llm = AsyncMock()
+        llm.chat.return_value = _mock_llm_response([
+            _candidate("X", ["p_001", "p_002"]),
+        ])
+        await propose_candidates(state, llm)
+        new_c = [
+            nid for nid in state.graph.nodes
+            if nid.startswith("c_") and nid != "c_002"
+        ]
+        assert new_c == ["c_003"]
 
     async def test_coverage_overlap_allowed(self) -> None:
         state = _setup_state()
