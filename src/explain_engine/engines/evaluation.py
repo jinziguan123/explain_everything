@@ -94,6 +94,11 @@ async def _score_edge(
     concrete_description: str,
     mechanism: str,
 ) -> int:
+    """调 scoring.yaml prompt 评单条 edge mechanism 分数，retry 1 次。
+
+    注：retry 内联在本函数（不像 compression.py 抽 _call_with_retry）—— 因为
+    每条 edge 独立 retry，retry 粒度是 inner-loop 级别，抽函数反而绕。
+    """
     messages = [
         Message(role="system", content=prompt["system"]),
         Message(
