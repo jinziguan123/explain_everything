@@ -10,9 +10,9 @@ dist/
 *.egg-info/
 .DS_Store
 
-# 数据缓存
-data/snapshots/
-data/embeddings_cache/
+# Session 落地（每个 session 一个 JSON）
+sessions/*.json
+!sessions/.gitkeep
 
 # 日志
 *.log
