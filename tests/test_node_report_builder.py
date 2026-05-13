@@ -364,3 +364,32 @@ async def test_dim_reports_run_concurrently():
         f"report_builder 看起来仍在顺序运行: {elapsed:.2f}s, 预期 < 1.0s。"
         f"检查 narrative + 6 维 dim_reports 是否真并发。"
     )
+
+
+@pytest.mark.asyncio
+async def test_narrative_user_prompt_contains_intent_qualifier():
+    """report_builder 的 narrative + dim_report user prompt 都含'用户时段意图:'行。"""
+    fake_llm = MagicMock()
+    fake_llm.achat = AsyncMock(side_effect=[
+        json.dumps({"claims": [{"text": "测试", "evidence_ids": ["e1"]}]}),
+        "policy 重写报告",
+    ])
+    state = new_attribution_state("test")
+    state["target"] = "X"
+    state["time_window"] = (date(2026, 5, 13), date(2026, 5, 13))
+    state["intent_qualifier"] = "上午"
+    state["market_facts"] = {"snippet": ""}
+    state["dimension_results"] = {
+        "policy": DimensionResult(
+            evidence=[make_ev("e1")], mini_summary="",
+            retry_count=1, no_data=False, confidence="high",
+        ),
+    }
+
+    await report_builder_node(state, llm=fake_llm)
+
+    # 验证两个 LLM 调用的 user prompt 都含"用户时段意图: 上午"
+    user_args = [c.kwargs.get("user", "") for c in fake_llm.achat.call_args_list]
+    assert len(user_args) == 2
+    for u in user_args:
+        assert "用户时段意图: 上午" in u

@@ -30,6 +30,11 @@ DIM_REPORT_SYSTEM = """你是该维度的资深分析师。基于给定证据池
 - 不出现未在证据中出现的数字或具体描述
 - 论述结构清晰、可读
 - 不预测,不推荐操作
+- 时段约束：用户问的是 "{intent_qualifier}"（如"上午"/"今天"等）。仅引用证据
+  时间戳与该时段匹配的 evidence。证据池中可能包含其他时段的内容（因检索时间窗
+  扩展所致），这些只能作为背景知识理解趋势，不能写进 narrative 当作"该时段事件"。
+  若严格匹配该时段的 evidence 不足以构成完整叙事，narrative 中明确说明"该时段
+  的可用证据有限"。
 
 直接输出维度报告文本(不要 JSON, 不要标题, 不要前缀)。
 """
@@ -52,6 +57,11 @@ NARRATIVE_SYSTEM = """你是审慎的金融研究员。基于以下六维证据�
 - 整体长度 80-150 字
 - 鼓励：claims 引用的 evidence 来自不同 source_type（news / market_data /
   capital_flow / policy 等），多源印证比单源更可信
+- 时段约束：用户问的是 "{intent_qualifier}"（如"上午"/"今天"等）。仅引用证据
+  时间戳与该时段匹配的 evidence。证据池中可能包含其他时段的内容（因检索时间窗
+  扩展所致），这些只能作为背景知识理解趋势，不能写进 narrative 当作"该时段事件"。
+  若严格匹配该时段的 evidence 不足以构成完整叙事，narrative 中明确说明"该时段
+  的可用证据有限"。
 只输出 JSON。
 """
 
@@ -121,6 +131,7 @@ async def _rewrite_dim_report(
     target: str,
     market_facts: dict,
     llm: LLMClient,
+    intent_qualifier: str = "近期",
 ) -> str:
     """单个维度的强模型重写。no_data 维度直接返回原 mini_summary。"""
     if dim_result["no_data"] or not dim_result["evidence"]:
@@ -133,6 +144,7 @@ async def _rewrite_dim_report(
     user = (
         f"维度: {dim_id}\n"
         f"标的: {target}\n"
+        f"用户时段意图: {intent_qualifier}\n"
         f"市场锚点: {market_facts.get('snippet', '')}\n"
         f"该维度证据池:\n{json.dumps(evidence_dump, ensure_ascii=False)}"
     )
@@ -197,6 +209,7 @@ async def report_builder_node(
     user = (
         f"标的: {state['target']}\n"
         f"时间窗: {state['time_window'][0]} ~ {state['time_window'][1]}\n"
+        f"用户时段意图: {state.get('intent_qualifier') or '近期'}\n"
         f"市场锚点: {state['market_facts'].get('snippet', '')}\n"
         f"证据池:\n{json.dumps(evidence_dump, ensure_ascii=False)}"
     )
@@ -207,9 +220,11 @@ async def report_builder_node(
         _call_with_retry(llm, NARRATIVE_SYSTEM, user, max_tokens=4000)
     )
     dim_ids = list(dim_results.keys())
+    intent_qualifier = state.get("intent_qualifier") or "近期"
     dim_tasks = [
         asyncio.create_task(_rewrite_dim_report(
-            dim_id, dim_results[dim_id], state["target"], state["market_facts"], llm
+            dim_id, dim_results[dim_id], state["target"], state["market_facts"], llm,
+            intent_qualifier=intent_qualifier,
         ))
         for dim_id in dim_ids
     ]
