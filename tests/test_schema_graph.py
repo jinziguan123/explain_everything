@@ -113,3 +113,17 @@ class TestExplanationGraph:
         g.add_edge(_edge("e_2", "n_mid", "n_con_b"))
         # mid 节点应该被 compression 计入
         assert g.compression_score() == 2.0
+
+    def test_nodes_is_read_only(self):
+        g = ExplanationGraph(root_question="why?")
+        g.add_node(_node("n_001"))
+        with pytest.raises(TypeError):
+            g.nodes["n_002"] = _node("n_002")  # type: ignore[index]
+
+    def test_edges_is_read_only(self):
+        g = ExplanationGraph(root_question="why?")
+        g.add_node(_node("n_abs", level=2))
+        g.add_node(_node("n_con"))
+        g.add_edge(_edge("e_1", "n_abs", "n_con"))
+        with pytest.raises(TypeError):
+            g.edges["e_2"] = _edge("e_2", "n_abs", "n_con")  # type: ignore[index]

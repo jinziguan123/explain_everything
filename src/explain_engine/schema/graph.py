@@ -1,10 +1,7 @@
-"""ExplanationGraph — networkx.DiGraph 包装。
+"""ExplanationGraph — networkx.DiGraph 包装。"""
 
-把 VariableNode / RelationEdge 暴露成 dict-like，并提供 compression /
-coverage / frontier 计算。
-
-参考 docs/plans/2026-05-13-cognitive-engine-mvp-design.md §3.2。
-"""
+from types import MappingProxyType
+from typing import Mapping
 
 import networkx as nx
 
@@ -16,74 +13,80 @@ class ExplanationGraph:
     def __init__(self, root_question: str) -> None:
         self.root_question = root_question
         self._g: nx.DiGraph = nx.DiGraph()
-        self.nodes: dict[str, VariableNode] = {}
-        self.edges: dict[str, RelationEdge] = {}
+        self._nodes: dict[str, VariableNode] = {}
+        self._edges: dict[str, RelationEdge] = {}
+
+    @property
+    def nodes(self) -> Mapping[str, VariableNode]:
+        """只读 view。修改请走 add_node()。"""
+        return MappingProxyType(self._nodes)
+
+    @property
+    def edges(self) -> Mapping[str, RelationEdge]:
+        """只读 view。修改请走 add_edge()。"""
+        return MappingProxyType(self._edges)
 
     def add_node(self, node: VariableNode) -> None:
-        if node.id in self.nodes:
+        if node.id in self._nodes:
             raise ValueError(f"node {node.id} already exists")
-        self.nodes[node.id] = node
+        self._nodes[node.id] = node
         self._g.add_node(node.id)
 
     def add_edge(self, edge: RelationEdge) -> None:
-        if edge.source_node not in self.nodes:
+        if edge.source_node not in self._nodes:
             raise ValueError(f"unknown node: {edge.source_node}")
-        if edge.target_node not in self.nodes:
+        if edge.target_node not in self._nodes:
             raise ValueError(f"unknown node: {edge.target_node}")
-        if edge.id in self.edges:
+        if edge.id in self._edges:
             raise ValueError(f"edge {edge.id} already exists")
-        self.edges[edge.id] = edge
+        self._edges[edge.id] = edge
         self._g.add_edge(edge.source_node, edge.target_node, edge_id=edge.id)
 
     def compression_score(self) -> float:
-        """abstract 节点覆盖了多少 concrete。
-
-        v0.1 简化：返回所有 abstraction_level >= 1 节点的 out-degree 之和。
-        """
         return float(
             sum(
                 self._g.out_degree(nid)
-                for nid, node in self.nodes.items()
+                for nid, node in self._nodes.items()
                 if node.abstraction_level >= 1
             )
         )
 
     def coverage_score(self) -> float:
-        """concrete 节点中被任意 high-abstraction 节点覆盖的比例。"""
-        concretes = [nid for nid, n in self.nodes.items() if n.abstraction_level == 0]
+        concretes = [nid for nid, n in self._nodes.items() if n.abstraction_level == 0]
         if not concretes:
             return 0.0
-
         covered = {
             nid
             for nid in concretes
             if any(
                 pred for pred in self._g.predecessors(nid)
-                if self.nodes[pred].abstraction_level >= 1
+                if self._nodes[pred].abstraction_level >= 1
             )
         }
         return len(covered) / len(concretes)
 
     def frontier(self) -> list[str]:
-        """没有 outgoing edge 的 high-abstraction 节点。"""
         return sorted(
             nid
-            for nid, n in self.nodes.items()
+            for nid, n in self._nodes.items()
             if n.abstraction_level >= 1 and self._g.out_degree(nid) == 0
         )
 
     def to_dict(self) -> dict:
         return {
             "root_question": self.root_question,
-            "nodes": {nid: n.model_dump() for nid, n in self.nodes.items()},
-            "edges": {eid: e.model_dump() for eid, e in self.edges.items()},
+            "nodes": {nid: n.model_dump() for nid, n in self._nodes.items()},
+            "edges": {eid: e.model_dump() for eid, e in self._edges.items()},
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "ExplanationGraph":
-        g = cls(root_question=d["root_question"])
-        for nid, n in d["nodes"].items():
-            g.add_node(VariableNode.model_validate(n))
-        for eid, e in d["edges"].items():
-            g.add_edge(RelationEdge.model_validate(e))
-        return g
+        try:
+            g = cls(root_question=d["root_question"])
+            for nid, n in d["nodes"].items():
+                g.add_node(VariableNode.model_validate(n))
+            for eid, e in d["edges"].items():
+                g.add_edge(RelationEdge.model_validate(e))
+            return g
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"invalid graph dict: {exc}") from exc
