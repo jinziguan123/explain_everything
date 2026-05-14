@@ -109,6 +109,28 @@ class ExplanationGraph:
             if n.abstraction_level >= 1 and self._g.out_degree(nid) == 0
         )
 
+    def frontier_nodes(self) -> list[str]:
+        """Phase 5 expansion 起点: abstraction_level == 1 且没有 incoming causes edge。
+
+        限制 level == 1 是为了让 graph 最多长到 3 层 (concrete L0 / abstract L1 /
+        driver L2),避免 d_NNN 自身又被 expand 出 super-driver (schema
+        AbstractionLevel Literal 不支持 3)。Phase 6 扩 Literal 时改 condition
+        为 level >= 1。
+
+        Returns:
+            按 node id 字符串升序的 list。
+        """
+        incoming_causes_targets = {
+            e.target_node
+            for e in self._edges.values()
+            if e.relation_type == "causes"
+        }
+        return sorted(
+            nid
+            for nid, n in self._nodes.items()
+            if n.abstraction_level == 1 and nid not in incoming_causes_targets
+        )
+
     def to_dict(self) -> dict:
         return {
             "root_question": self.root_question,
