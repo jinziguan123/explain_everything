@@ -446,6 +446,64 @@ def _render_single_report(report, session, trace_all: bool = False) -> None:
         console.print(tt)
 
 
+@app.command()
+def predict(
+    session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+    intervention_text: str = typer.Argument(..., help="intervention 描述 (自然语言)"),
+) -> None:
+    """Phase 7 Wave B: forward prediction.
+
+    parser → 加 new_concepts → LLM 生 predicted L0 → propagate → HITL.
+
+    Examples:
+        explain predict s_f3beb777 "现代媒体放大效应"
+    """
+    asyncio.run(_run_predict(session_id, intervention_text))
+
+
+async def _run_predict(session_id: str, intervention_text: str) -> None:
+    from explain_engine.engines import prediction as prediction_mod
+    from explain_engine.hitl.cli_interactive import review_predicted_l0
+
+    store = _get_store()
+    try:
+        session = store.load(session_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    llm = make_llm_client()
+    try:
+        report = await prediction_mod.predict(session.state, intervention_text, llm)
+    except ValueError as exc:
+        console.print(f"[red]parser 失败: {exc}[/red]")
+        raise typer.Exit(2) from exc
+    except (LLMError, SchemaValidationError) as exc:
+        console.print(f"[red]LLM 失败: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    console.print(f"\n[bold]Forward prediction: {intervention_text}[/bold]")
+    if report.new_node_ids:
+        console.print(f"  新增 intervention nodes: {report.new_node_ids}")
+    if report.predicted_L0_ids:
+        console.print("\n[bold]Predicted new L0 (待审):[/bold]")
+        kept = review_predicted_l0(
+            session.state, report.predicted_L0_ids, console=console,
+        )
+        console.print(
+            f"\n保留 {len(kept)}/{len(report.predicted_L0_ids)} predicted L0"
+        )
+    if report.activated_existing_L0:
+        console.print(
+            f"\n[bold]Existing L0 也被激活:[/bold] {report.activated_existing_L0}"
+        )
+    try:
+        store.save(session)
+    except OSError as exc:
+        console.print(f"[red]session 保存失败: {exc}[/red]")
+        raise typer.Exit(3) from exc
+
+
 @app.command(name="list")
 def list_cmd() -> None:
     """列出所有 session（按创建时间降序）。"""

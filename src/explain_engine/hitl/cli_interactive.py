@@ -176,3 +176,49 @@ def _coverage_for(state: CognitiveState, cid: str) -> list[RelationEdge]:
         e for e in state.graph.edges.values()
         if e.source_node == cid and e.relation_type == "manifests_as"
     ]
+
+
+def review_predicted_l0(
+    state: CognitiveState,
+    predicted_L0_ids: list[str],
+    *,
+    console: Console | None = None,
+) -> list[str]:
+    """Wave B.2 HITL: 审 predicted L0. accept/reject/edit per L0, 返保留的 id list.
+
+    Side effects:
+      - reject 的 L0: 从 graph 删除 (cascade incident edges).
+      - edit 的 L0: 改 name/description in place, source 升级为 "user".
+      - accept: 不动.
+    """
+    if not predicted_L0_ids:
+        return []
+    cons = console or Console()
+    kept: list[str] = []
+    for pid in predicted_L0_ids:
+        node = state.graph.nodes.get(pid)
+        if not node:
+            continue
+        cons.print(
+            f"\n[bold]{pid}[/bold] {node.name} — {node.description}"
+        )
+        choice = Prompt.ask(
+            r"       \[a]ccept / \[r]eject / \[e]dit",
+            choices=["a", "r", "e"],
+            default="a",
+        )
+        if choice == "r":
+            state.graph.remove_node(pid)
+            cons.print(f"[yellow]rejected {pid}[/yellow]")
+        elif choice == "e":
+            new_name = Prompt.ask("       新 name", default=node.name)
+            new_desc = Prompt.ask("       新 description", default=node.description)
+            updated = node.model_copy(
+                update={"name": new_name, "description": new_desc, "source": "user"}
+            )
+            state.graph.replace_node(pid, updated)
+            kept.append(pid)
+            cons.print(f"[green]edited {pid}[/green]")
+        else:
+            kept.append(pid)
+    return kept
