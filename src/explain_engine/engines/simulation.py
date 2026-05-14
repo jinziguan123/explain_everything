@@ -17,9 +17,10 @@ from dataclasses import dataclass
 from explain_engine.engines._propagation import (
     WEAK_CHAIN_THRESHOLD,
     DecayStep,
+    get_all_L0,
+    get_all_L1_L2,
     propagate,
 )
-from explain_engine.schema.graph import ExplanationGraph
 from explain_engine.schema.state import CognitiveState
 
 
@@ -54,14 +55,6 @@ def _validate_target(state: CognitiveState, target_id: str) -> None:
         )
 
 
-def _get_all_L0(graph: ExplanationGraph) -> set[str]:
-    return {nid for nid, n in graph.nodes.items() if n.abstraction_level == 0}
-
-
-def _get_all_L1_L2(graph: ExplanationGraph) -> set[str]:
-    return {nid for nid, n in graph.nodes.items() if n.abstraction_level >= 1}
-
-
 def _check_with_baseline(
     state: CognitiveState,
     target_id: str,
@@ -69,8 +62,8 @@ def _check_with_baseline(
 ) -> ConsistencyReport:
     """单 target 的 C₁ + C₂. baseline 可传入 (batch 共用)."""
     graph = state.graph
-    L0_nodes = _get_all_L0(graph)
-    all_L1_L2 = _get_all_L1_L2(graph)
+    L0_nodes = get_all_L0(graph)
+    all_L1_L2 = get_all_L1_L2(graph)
 
     # ─── C₁: single-source propagation ─────────────
     c1_acts, c1_trace = propagate(graph, {target_id})
@@ -138,7 +131,7 @@ def check_consistency_batch(
         ValueError: 任一 target 不在 graph / level=0 (fail-fast).
     """
     if target_ids is None:
-        target_id_list = sorted(_get_all_L1_L2(state.graph))
+        target_id_list = sorted(get_all_L1_L2(state.graph))
     else:
         target_id_list = list(target_ids)
 
@@ -148,7 +141,7 @@ def check_consistency_batch(
     for tid in target_id_list:
         _validate_target(state, tid)
 
-    all_L1_L2 = _get_all_L1_L2(state.graph)
+    all_L1_L2 = get_all_L1_L2(state.graph)
     baseline_acts, _ = propagate(state.graph, all_L1_L2)
 
     return [

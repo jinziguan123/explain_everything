@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field, ValidationError
 
-from explain_engine.engines._propagation import propagate
+from explain_engine.engines._propagation import next_edge_id, next_id, propagate
 from explain_engine.engines.intervention_parser import (
     ParsedIntervention,
 )
@@ -87,7 +87,7 @@ async def substitute(
     added_L0_ids: list[str] = []
     for spec in parsed.new_concepts:
         prefix = "c" if spec.expected_level == 1 else "d"
-        new_id = _next_id(cf_graph, prefix)
+        new_id = next_id(cf_graph, prefix)
         cf_graph.add_node(VariableNode(
             id=new_id, name=spec.name, description=spec.description,
             abstraction_level=spec.expected_level,
@@ -101,7 +101,7 @@ async def substitute(
             cf_graph, parsed, intervention_text, llm, state.root_question,
         )
         for predicted in gen_output.predicted_L0:
-            p_id = _next_id(cf_graph, "p")
+            p_id = next_id(cf_graph, "p")
             cf_graph.add_node(VariableNode(
                 id=p_id, name=predicted.name, description=predicted.description,
                 abstraction_level=0, confidence=0.7,
@@ -110,7 +110,7 @@ async def substitute(
             added_L0_ids.append(p_id)
             # I1 fix from B.2: 只跟第一个 new_concept 建 edge
             if added_ids:
-                edge_id = _next_edge_id(cf_graph)
+                edge_id = next_edge_id(cf_graph)
                 cf_graph.add_edge(RelationEdge(
                     id=edge_id, source_node=added_ids[0], target_node=p_id,
                     relation_type="manifests_as", confidence=0.7,
@@ -209,23 +209,3 @@ async def _generate_narrative(
     if resp.parsed is None:
         raise SchemaValidationError("narrative LLM 未返回 structured output")
     return _NarrativeOutput.model_validate(resp.parsed).narrative
-
-
-def _next_id(graph: ExplanationGraph, prefix: str) -> str:
-    existing = [
-        int(nid.split("_")[1])
-        for nid in graph.nodes
-        if nid.startswith(f"{prefix}_") and nid[len(prefix)+1:].isdigit()
-    ]
-    n = (max(existing) + 1) if existing else 1
-    return f"{prefix}_{n:03d}"
-
-
-def _next_edge_id(graph: ExplanationGraph) -> str:
-    existing = [
-        int(eid.split("_")[1])
-        for eid in graph.edges
-        if eid.startswith("e_") and eid[2:].isdigit()
-    ]
-    n = (max(existing) + 1) if existing else 1
-    return f"e_{n:03d}"

@@ -15,7 +15,12 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field, ValidationError
 
-from explain_engine.engines._propagation import DecayStep, propagate
+from explain_engine.engines._propagation import (
+    DecayStep,
+    next_edge_id,
+    next_id,
+    propagate,
+)
 from explain_engine.engines.intervention_parser import (
     ParsedIntervention,
 )
@@ -73,7 +78,7 @@ async def predict(
     # 1. 加 new_concepts 进 graph
     for spec in parsed.new_concepts:
         prefix = "c" if spec.expected_level == 1 else "d"
-        new_id = _next_id(state, prefix)
+        new_id = next_id(state.graph, prefix)
         state.graph.add_node(VariableNode(
             id=new_id, name=spec.name, description=spec.description,
             abstraction_level=spec.expected_level,
@@ -85,7 +90,7 @@ async def predict(
     if parsed.new_concepts:
         gen_output = await _generate_predicted_L0(state, parsed, intervention_text, llm)
         for predicted in gen_output.predicted_L0:
-            p_id = _next_id(state, "p")
+            p_id = next_id(state.graph, "p")
             state.graph.add_node(VariableNode(
                 id=p_id, name=predicted.name, description=predicted.description,
                 abstraction_level=0, confidence=0.7,
@@ -95,7 +100,7 @@ async def predict(
             # I1 fix: 仅 link 第一个 new_concept (避免 noisy-OR 过度激活,
             # 因为 fan-out 把同一 intervention 的效应当独立 parent).
             if new_node_ids:
-                edge_id = _next_edge_id(state)
+                edge_id = next_edge_id(state.graph)
                 state.graph.add_edge(RelationEdge(
                     id=edge_id, source_node=new_node_ids[0], target_node=p_id,
                     relation_type="manifests_as", confidence=0.7,
@@ -157,23 +162,3 @@ async def _generate_predicted_L0(
             continue
     assert last_exc is not None
     raise last_exc
-
-
-def _next_id(state: CognitiveState, prefix: str) -> str:
-    existing = [
-        int(nid.split("_")[1])
-        for nid in state.graph.nodes
-        if nid.startswith(f"{prefix}_") and nid[len(prefix)+1:].isdigit()
-    ]
-    n = (max(existing) + 1) if existing else 1
-    return f"{prefix}_{n:03d}"
-
-
-def _next_edge_id(state: CognitiveState) -> str:
-    existing = [
-        int(eid.split("_")[1])
-        for eid in state.graph.edges
-        if eid.startswith("e_") and eid[2:].isdigit()
-    ]
-    n = (max(existing) + 1) if existing else 1
-    return f"e_{n:03d}"

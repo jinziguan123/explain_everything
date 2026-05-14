@@ -111,3 +111,35 @@ def propagate(
         frontier = next_frontier
 
     return activations, trace
+
+
+def get_all_L0(graph: ExplanationGraph) -> set[str]:
+    """所有 abstraction_level=0 节点 ids."""
+    return {nid for nid, n in graph.nodes.items() if n.abstraction_level == 0}
+
+
+def get_all_L1_L2(graph: ExplanationGraph) -> set[str]:
+    """所有 abstraction_level >= 1 节点 ids."""
+    return {nid for nid, n in graph.nodes.items() if n.abstraction_level >= 1}
+
+
+def next_id(graph: ExplanationGraph, prefix: str) -> str:
+    """生成下一个未占用的 {prefix}_NNN 节点 id (3 位 zero-padded)."""
+    existing = [
+        int(nid.split("_")[1])
+        for nid in graph.nodes
+        if nid.startswith(f"{prefix}_") and nid[len(prefix)+1:].isdigit()
+    ]
+    n = (max(existing) + 1) if existing else 1
+    return f"{prefix}_{n:03d}"
+
+
+def next_edge_id(graph: ExplanationGraph) -> str:
+    """生成下一个未占用的 e_NNN edge id."""
+    existing = [
+        int(eid.split("_")[1])
+        for eid in graph.edges
+        if eid.startswith("e_") and eid[2:].isdigit()
+    ]
+    n = (max(existing) + 1) if existing else 1
+    return f"e_{n:03d}"
