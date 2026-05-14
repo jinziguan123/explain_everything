@@ -62,8 +62,16 @@ async def run(
                     state, target_id, llm
                 )
                 llm_calls = 1
+                # Phase 7 C.3: expand tick 算"图状态隐式被接受", 重置 reflection
+                # 陈旧度计数, 避免 stop.py 的 reflection_signaled_stop 在 reflect
+                # 还没 run 前误触发。reflect "stop" 分支会再把它设为更低值反推触发。
+                state.last_reflection_change_tick = state.tick
             else:
-                # 不该到这: should_stop 会先触发 no_frontier。defensive：
+                # Phase 7 C.2 后: 仅在 covered L1 时进入此分支 (frontier 空但
+                # graph 有 L1+ 节点; stop.py 的 no_frontier_remaining 已被 C.2
+                # relaxed 为只在 zero L1+ 时触发, 不再优先触发)。
+                # scheduler 调度 reflect tick 时不重复执行此 fallthrough
+                # (那条路径已直接走下面的 reflect 分支)。
                 action = "reflect"
 
         if action == "reflect":
@@ -90,8 +98,11 @@ async def run(
                 )
             # refl_action == "continue": no-op
 
-            # Wave C.2: reflect tick 本身算"活动",不算 no_gain idle —
-            # 否则 reflect-only 循环 3 tick 内就被 no_gain_for_3_ticks 误停。
+            # Phase 7 C.2 note: reflect tick 本身算"活动", 不算 no_gain idle —
+            # 否则 reflect-only 循环 3 tick 内就被 Phase 5 no_gain_for_3_ticks 误停
+            # (reflect tick 是 meta-cognition, 没有 expansion 那种 semantic "gain")。
+            # Wave C.3 用独立的 last_reflection_change_tick (上面 re-expand/prune/stop
+            # 分支单独维护) 驱动 reflection_signaled_stop signal — gate 与 no_gain 解耦。
             state.last_gain_tick = state.tick
 
         state.reasoning_trace.append(TraceEntry(

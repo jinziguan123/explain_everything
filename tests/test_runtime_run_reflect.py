@@ -144,12 +144,63 @@ async def test_on_tick_callback_invoked_each_tick(mocker) -> None:
         return_value=[],
     )
     calls = []
+    # Wave C.3 后: fixture 图无 frontier (c_001 已被 d_001 "causes" 覆盖),
+    # 所有 expand tick fall through 到 reflect, reflect 返 "continue" 不 bump
+    # last_reflection_change_tick → 在 tick=4 时 reflection_signaled_stop 触发。
+    # budget=4 让 budget 先于 reflection_stop 终止, 验证 on_tick 每 tick 调一次。
     await run(
-        state, mocker.AsyncMock(), budget=5,
+        state, mocker.AsyncMock(), budget=4,
         scheduler=PhaseScheduler(K=2),
         on_tick=lambda s: calls.append(s.tick),
     )
-    assert len(calls) == 5
+    assert len(calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_scheduler_driven_reflect_with_non_empty_frontier(mocker) -> None:
+    """C.2 review M-1 follow-up: scheduler 触发的 reflect tick (而非 fallthrough).
+
+    Fixture 留 frontier 给 expand tick 用; scheduler 在 tick K (=2) 时 yield "reflect".
+    验证此条路径 (scheduler-driven) 与 expand 分支 fallthrough 路径互不干扰。
+    """
+    g = ExplanationGraph(root_question="q")
+    # c_001 没 incoming causes — frontier (expand 可用)
+    g.add_node(VariableNode(
+        id="c_001", name="c", description="d",
+        abstraction_level=1, confidence=0.7, epistemic="insight",
+    ))
+    g.add_node(VariableNode(
+        id="p_001", name="p", description="d",
+        abstraction_level=0, confidence=0.7, epistemic="observation",
+    ))
+    g.add_edge(RelationEdge(
+        id="e_001", source_node="c_001", target_node="p_001",
+        relation_type="manifests_as", confidence=0.7, mechanism_description="m",
+    ))
+    state = CognitiveState(graph=g, budget_remaining=10, root_question="q")
+
+    mocker.patch(
+        "explain_engine.engines.expansion._call_with_retry",
+        return_value=ExpansionOutput(drivers=[]),
+    )
+    mocker.patch(
+        "explain_engine.engines.reflection.check_consistency_batch",
+        return_value=[
+            ConsistencyReport(
+                target_id="c_001", consistency_score=0.8, essentialness_score=0.5,
+                reachable_L0=["p_001"], weak_chains=[],
+                contribution_breakdown={}, decay_trace=[],
+            ),
+        ],
+    )
+    await run(state, mocker.AsyncMock(), budget=3,
+              scheduler=PhaseScheduler(K=2))
+    # K=2 → tick 0,1 expand; tick 2 reflect
+    actions = [e.action for e in state.reasoning_trace]
+    # First 2 ticks should be expand (frontier non-empty), tick 2 reflect
+    assert actions[0] == "expand"
+    assert actions[1] == "expand"
+    assert actions[2] == "reflect"
 
 
 @pytest.mark.asyncio

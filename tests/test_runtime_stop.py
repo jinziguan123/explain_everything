@@ -11,22 +11,32 @@ from explain_engine.schema.nodes import VariableNode
 from explain_engine.schema.state import CognitiveState
 
 
-def _state_with_frontier(tick: int, budget: int, last_gain_tick: int) -> CognitiveState:
+def _state_with_frontier(
+    tick: int, budget: int, last_gain_tick: int,
+    last_refl: int | None = None,
+) -> CognitiveState:
     g = ExplanationGraph(root_question="why")
     g.add_node(VariableNode(id="c_001", name="x", description="d", abstraction_level=1,
                             confidence=0.7, epistemic="insight"))
     s = CognitiveState(graph=g, budget_remaining=budget, root_question="why")
     s.tick = tick
     s.last_gain_tick = last_gain_tick
+    # Wave C.3 后: last_reflection_change_tick 默认对齐 tick 以避免误触发
+    # reflection_signaled_stop (CONSISTENCY_STALE_TICKS+1=4 阈值)。
+    s.last_reflection_change_tick = tick if last_refl is None else last_refl
     return s
 
 
-def _state_no_frontier(tick: int, budget: int, last_gain_tick: int) -> CognitiveState:
+def _state_no_frontier(
+    tick: int, budget: int, last_gain_tick: int,
+    last_refl: int | None = None,
+) -> CognitiveState:
     g = ExplanationGraph(root_question="why")
     # 无 level==1 节点 → 无 frontier
     s = CognitiveState(graph=g, budget_remaining=budget, root_question="why")
     s.tick = tick
     s.last_gain_tick = last_gain_tick
+    s.last_reflection_change_tick = tick if last_refl is None else last_refl
     return s
 
 
