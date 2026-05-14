@@ -114,3 +114,14 @@ def test_check_renders_color_threshold_in_batch(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "Consistency" in result.output
     assert "Essentialness" in result.output
+
+
+def test_check_single_with_trace_all_renders_full_trace(tmp_path, monkeypatch) -> None:
+    """--trace-all flag 渲染完整 decay_trace (区别于默认 top 8)."""
+    monkeypatch.setenv("SESSIONS_DIR", str(tmp_path))
+    sid = _prepare_session(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(app, ["check", sid, "c_001", "--trace-all"])
+    assert result.exit_code == 0
+    # 详细模式渲染 "(full)" 标题, 区别于默认 "(top 8 by activation_after, ...)"
+    assert "(full)" in result.output

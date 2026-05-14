@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 from explain_engine.config import Settings, make_llm_client
+from explain_engine.engines._propagation import WEAK_CHAIN_THRESHOLD
 from explain_engine.engines.bootstrap import bootstrap_phenomena
 from explain_engine.engines.compression import propose_candidates
 from explain_engine.engines.evaluation import score_all
@@ -394,7 +395,7 @@ def _render_single_report(report, session, trace_all: bool = False) -> None:
     )
     if report.weak_chains:
         console.print(
-            f"  weak chains (<0.15):  {len(report.weak_chains)}   {report.weak_chains}"
+            f"  weak chains (<{WEAK_CHAIN_THRESHOLD:.2f}):  {len(report.weak_chains)}   {report.weak_chains}"
         )
 
     if report.contribution_breakdown:
