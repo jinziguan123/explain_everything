@@ -121,6 +121,27 @@ class TestMultiHopChain:
         acts, _ = propagate(g, {"a"})
         assert abs(acts["d"] - 0.729) < 1e-9
 
+    def test_cross_layer_merge_combines_direct_and_indirect(self) -> None:
+        """同 dst 既被直接 reach 又被 indirect reach, 跨层 merge 用 noisy-OR.
+
+        d → p (direct, conf=0.6) + d → c → p (indirect, 0.5×0.4=0.2)
+        合并: 1 - (1-0.6)(1-0.2) = 0.68
+        """
+        g = ExplanationGraph(root_question="why")
+        g.add_node(_node("d", level=2))
+        g.add_node(_node("c", level=1))
+        g.add_node(_node("p", level=0))
+        g.add_edge(_edge("e1", "d", "c", rel="causes", conf=0.5))
+        g.add_edge(_edge("e2", "d", "p", rel="manifests_as", conf=0.6))
+        g.add_edge(_edge("e3", "c", "p", rel="manifests_as", conf=0.4))
+
+        acts, _ = propagate(g, {"d"})
+        # depth 0: c = 0.5 (via e1), p = 0.6 (via e2 direct)
+        # depth 1: p gets indirect 0.5 × 0.4 = 0.2, cross-layer noisy-OR:
+        #   p = 1 - (1-0.6)(1-0.2) = 0.68
+        assert abs(acts["p"] - 0.68) < 1e-9
+        assert abs(acts["c"] - 0.5) < 1e-9
+
 
 class TestConstraints:
     def test_threshold_prunes_weak_propagation(self, monkeypatch) -> None:

@@ -66,7 +66,7 @@ def propagate(
     for depth in range(MAX_DEPTH):
         # 1. 收集本层 propagation 候选
         candidates: list[tuple[str, str, RelationEdge, float]] = []
-        for src in frontier:
+        for src in sorted(frontier):
             for edge in graph.outgoing_edges(src):
                 if edge.relation_type not in FORWARD_RELATIONS:
                     continue
@@ -97,7 +97,7 @@ def propagate(
 
         # 3. MAX_ACTIVE_VARIABLES top-k 剪枝
         if len(new_layer) > MAX_ACTIVE_VARIABLES:
-            top_k = sorted(new_layer.items(), key=lambda x: -x[1])[:MAX_ACTIVE_VARIABLES]
+            top_k = sorted(new_layer.items(), key=lambda x: x[1], reverse=True)[:MAX_ACTIVE_VARIABLES]
             new_layer = dict(top_k)
 
         # 4. 跨层合并 (跟历史 activations 再 noisy-OR)
