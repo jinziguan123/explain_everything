@@ -111,7 +111,11 @@ s_705f0435 c_003 essentialness=0.14 较高 — 因为它覆盖 4 个 L0 (单 c �
 - `MAX_ACTIVE_VARIABLES=12`: 单层最多 5 节点 (per-c L0), 远 < 12. 改了无影响.
 - `WEAK_CHAIN_THRESHOLD=0.15`: 实际 reachable_L0 activation 都 ≥ 0.42, 全 > 0.15. weak_chains 永远空. 阈值合理, 但需要更深 chain 才有意义.
 
-**结论**: 顶层 §11.4 默认值在当前 graph 数据上**未被压力测试**. Phase 7+ 当 confidence 真正变化时再 tune.
+**结论**: 顶层 §11.4 默认值在当前 graph 数据上**未被压力测试**. Phase 7+ 当 driver
+数量突破 12 (single layer) 时 MAX_ACTIVE 剪枝会触发, 届时需验算 essentialness
+clip [0, +∞) 行为 (见 simulation._check_with_baseline 注释 — 当前 test
+`test_essentialness_non_negative_when_max_active_pruning_engages` 已覆盖).
+当 confidence 真正变化时再 tune.
 
 ## Phase 7 起点
 

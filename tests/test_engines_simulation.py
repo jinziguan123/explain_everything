@@ -124,8 +124,38 @@ class TestC2Essentialness:
         state = _make_state()
         report = check_consistency(state, "c_001")
         assert set(report.contribution_breakdown.keys()) == {"p_001", "p_002"}
+        # Invariant: contribution clipped to [0, +∞) — see _check_with_baseline
+        # docstring for rationale (MAX_ACTIVE pruning artifact handling)
         for v in report.contribution_breakdown.values():
             assert v >= 0
+
+    def test_essentialness_non_negative_when_max_active_pruning_engages(
+        self, monkeypatch,
+    ) -> None:
+        """MAX_ACTIVE=3 时 baseline 剪掉某 L0, without_target 保留它, 不应
+        produce 负 contribution (clip 到 0)."""
+        monkeypatch.setattr(
+            "explain_engine.engines._propagation.MAX_ACTIVE_VARIABLES",
+            3,
+        )
+        g = ExplanationGraph(root_question="why")
+        # 5 个 L1 各自指向唯一 L0, 不同 confidence
+        # baseline propagate(5 sources) 时 5 candidates → 剪到 top 3 (按 confidence)
+        # without target=c_001 时 4 candidates → 剪到 top 3, 但保留的子集不同
+        for i, conf in enumerate([0.9, 0.8, 0.7, 0.6, 0.5]):
+            g.add_node(_node(f"c_{i:03d}"))
+            g.add_node(_node(f"p_{i:03d}", level=0))
+            g.add_edge(_edge(f"e_{i:03d}", f"c_{i:03d}", f"p_{i:03d}", conf=conf))
+        state = CognitiveState(graph=g, budget_remaining=0, root_question="why")
+
+        report = check_consistency(state, "c_000")
+        # 关键 assertion: 所有 contribution 都 >= 0 (clip), essentialness >= 0
+        for nid, v in report.contribution_breakdown.items():
+            assert v >= 0, (
+                f"contribution[{nid}]={v} < 0 — MAX_ACTIVE pruning "
+                f"reshuffle 应被 clip"
+            )
+        assert report.essentialness_score >= 0
 
 
 class TestCheckConsistencyBatch:

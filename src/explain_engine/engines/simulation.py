@@ -91,8 +91,13 @@ def _check_with_baseline(
         else:
             baseline_acts, _ = propagate(graph, all_L1_L2)
     without_acts, _ = propagate(graph, all_L1_L2 - {target_id})
+    # Clip to [0, +∞): MAX_ACTIVE_VARIABLES top-k pruning 在 baseline 触发但
+    # without_target 不触发时, 可能让无关 L0 在 without 中"复活", 产生
+    # contribution < 0 (反向贡献). 语义上 essentialness 只衡量正向 marginal
+    # contribution — 删 target 引起的 top-k reshuffle 是 algorithm artifact,
+    # 不是 target 的真实"贡献", 应 clip.
     contribution = {
-        nid: baseline_acts.get(nid, 0.0) - without_acts.get(nid, 0.0)
+        nid: max(0.0, baseline_acts.get(nid, 0.0) - without_acts.get(nid, 0.0))
         for nid in L0_nodes
     }
     essentialness_score = (
