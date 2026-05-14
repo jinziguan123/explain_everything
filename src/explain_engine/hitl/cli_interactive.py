@@ -76,20 +76,22 @@ def review_phenomena(
 
 def review_insights(
     state: CognitiveState,
-    gains: dict[str, float],
     console: Console | None = None,
 ) -> None:
     """HITL 2: 逐候选 keep/edit/drop/view-full。
 
+    Phase 5: gain 列从 state.last_gains 读（EvaluationEngine 已持久化），
+    不再要求 caller 传 gains dict —— 这样 stage=insight_pending 重入也能正确显示。
+
     Side effects:
-        - drop: state.graph.remove_node(cid) 级联删 edges
+        - drop: state.graph.remove_node(cid) 级联删 edges；state.last_gains.pop(cid)
         - edit: 改 candidate node.name/description + source="user"
         - 完成时: state.insight_candidates 清空
     """
     console = console or Console()
 
     # Step 1: 总览 table
-    _render_insights_table(state, gains, console)
+    _render_insights_table(state, console)
 
     # Step 2: 逐候选
     candidates_snapshot = list(state.insight_candidates)
@@ -97,7 +99,7 @@ def review_insights(
         if cid not in state.graph.nodes:
             continue  # 防御性：已被前一步 drop
         cand = state.graph.nodes[cid]
-        gain = gains.get(cid, 0.0)
+        gain = state.last_gains.get(cid, 0.0)
         cov = _coverage_for(state, cid)
         console.print(
             f"\n[bold cyan][{idx}/{len(candidates_snapshot)}][/bold cyan] "
@@ -116,6 +118,7 @@ def review_insights(
                 break
             if choice == "d":
                 state.graph.remove_node(cid)
+                state.last_gains.pop(cid, None)
                 break
             if choice == "e":
                 new_name = Prompt.ask("       新名称", default=cand.name)
@@ -148,7 +151,6 @@ def review_insights(
 
 def _render_insights_table(
     state: CognitiveState,
-    gains: dict[str, float],
     console: Console,
 ) -> None:
     table = Table(title="候选 (按 compression_gain 降序)")
@@ -163,7 +165,7 @@ def _render_insights_table(
         cov_count = len(_coverage_for(state, cid))
         table.add_row(
             cid, n.name, n.description,
-            f"{cov_count}/{total}", f"{gains.get(cid, 0.0):.2f}",
+            f"{cov_count}/{total}", f"{state.last_gains.get(cid, 0.0):.2f}",
         )
     console.print(table)
 

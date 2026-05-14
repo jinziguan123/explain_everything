@@ -162,7 +162,7 @@ async def _run_compress(session_id: str) -> None:
             f"[INFO] 生成 {len(session.state.insight_candidates)} 个候选，开始评分..."
         )
         try:
-            gains = await score_all(session.state, llm)
+            await score_all(session.state, llm)
         except SchemaValidationError as exc:
             console.print(f"[red]评分输出不合规: {exc}[/red]")
             raise typer.Exit(2) from exc
@@ -181,14 +181,10 @@ async def _run_compress(session_id: str) -> None:
             raise typer.Exit(3) from exc
     else:  # stage == "insight_pending"
         console.print("[INFO] 检测到 stage=insight_pending，跳过 LLM 直接进入审查。")
-        console.print(
-            "[yellow][WARN] gain 信息未持久化（Phase 5 修复），所有候选显示 gain=0.0[/yellow]"
-        )
-        # 重入时 gain 信息丢失，简化设为 0.0（Phase 5 持久化 gain）
-        gains = {cid: 0.0 for cid in session.state.insight_candidates}
+        # Phase 5: gain 已持久化进 state.last_gains，重入也能正确显示
 
-    # HITL 2
-    review_insights(session.state, gains, console=console)
+    # HITL 2 — Phase 5 起从 state.last_gains 读
+    review_insights(session.state, console=console)
 
     session.meta.stage = "done"
     try:

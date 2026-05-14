@@ -81,6 +81,8 @@ async def score_all(state: CognitiveState, llm: LLMClient) -> dict[str, float]:
     state.insight_candidates = sorted(
         state.insight_candidates, key=lambda cid: gains[cid], reverse=True
     )
+    # Phase 5: 持久化 last_gains（覆盖旧值），让 HITL 2 重入 + Runtime loop 读得到
+    state.last_gains = dict(gains)
     return gains
 
 
