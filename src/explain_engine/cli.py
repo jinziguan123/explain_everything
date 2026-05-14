@@ -86,8 +86,12 @@ async def _run_new(question: str) -> None:
 @app.command()
 def show(
     session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+    trace: bool = typer.Option(False, "--trace", help="渲染 reasoning_trace 表 (Phase 5)"),
 ) -> None:
-    """显示某个 session 的 phenomena 和 metadata。"""
+    """显示某个 session 的 phenomena 和 metadata。
+
+    `--trace` 额外渲染 reasoning_trace (Phase 5 reasoning loop 每 tick 记录)。
+    """
     store = _get_store()
     try:
         session = store.load(session_id)
@@ -115,6 +119,24 @@ def show(
             node.epistemic,
         )
     console.print(table)
+
+    if trace:
+        if not session.state.reasoning_trace:
+            console.print("\n[dim](reasoning_trace 为空)[/dim]")
+        else:
+            t = Table(title="Reasoning Trace")
+            t.add_column("tick", justify="right")
+            t.add_column("action")
+            t.add_column("target")
+            t.add_column("gain", justify="right")
+            t.add_column("llm calls", justify="right")
+            t.add_column("timestamp", style="dim")
+            for e in session.state.reasoning_trace:
+                t.add_row(
+                    str(e.tick), e.action, e.target_node_id or "-",
+                    f"{e.gain_delta:.2f}", str(e.llm_calls), e.timestamp,
+                )
+            console.print(t)
 
 
 @app.command()
@@ -192,6 +214,58 @@ async def _run_compress(session_id: str) -> None:
         raise typer.Exit(3) from exc
 
     console.print(f"\n[green]Session {session_id} 已完成。[/green]")
+
+
+@app.command()
+def run(
+    session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+    budget: int = typer.Option(15, "--budget", help="reasoning loop tick 上限"),
+) -> None:
+    """Phase 5 reasoning loop: 上溯 driver,自动收敛。
+
+    session 必须 stage=done (Phase 4 HITL 2 完成后)。
+    跑完 stage 变 converged。
+    """
+    from explain_engine.runtime.runtime import run as runtime_run
+
+    store = _get_store()
+    try:
+        session = store.load(session_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if session.meta.stage != "done":
+        console.print(
+            f"[red]session stage={session.meta.stage!r}, must be 'done' to run "
+            f"(先跑 explain compress)。[/red]"
+        )
+        raise typer.Exit(4)
+
+    llm = make_llm_client()
+
+    def on_tick(_state: CognitiveState) -> None:
+        store.save(session)
+
+    try:
+        reason = asyncio.run(runtime_run(session.state, llm, budget=budget, on_tick=on_tick))
+    except (LLMError, SchemaValidationError) as exc:
+        console.print(f"[red]runtime failed: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    session.meta.stage = "converged"
+    store.save(session)
+
+    drivers = [nid for nid, n in session.state.graph.nodes.items() if n.abstraction_level == 2]
+    console.print(
+        f"\n[green]Phase 5 run complete[/green] "
+        f"(reason={reason}, tick={session.state.tick})"
+    )
+    console.print(
+        f"graph: {len(session.state.graph.nodes)} nodes / "
+        f"{len(session.state.graph.edges)} edges"
+    )
+    console.print(f"driver layer: {len(drivers)} drivers added")
 
 
 @app.command(name="list")
