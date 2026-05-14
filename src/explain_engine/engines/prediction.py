@@ -136,9 +136,15 @@ async def _generate_predicted_L0(
         f"- {nid}: {n.name}" for nid, n in state.graph.nodes.items()
         if n.abstraction_level == 0 and n.epistemic != "speculation"
     ) or "(none)"
+    # B.2 I3 fix: 传 {id}(name) 而非 raw id, 让 LLM 有上下文
+    existing_refs_with_names = [
+        f"{rid}({state.graph.nodes[rid].name})"
+        for rid in parsed.existing_refs
+        if rid in state.graph.nodes
+    ]
     intervention_summary = (
         f"{intervention_text}\n"
-        f"existing_refs={parsed.existing_refs}, "
+        f"existing_refs={existing_refs_with_names}, "
         f"new_concepts={[c.name for c in parsed.new_concepts]}"
     )
     messages = [

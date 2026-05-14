@@ -73,29 +73,27 @@ class TestCounterfactualNoMutation:
     @pytest.mark.asyncio
     async def test_state_graph_not_mutated_on_remove(self, mocker) -> None:
         state = _make_state()
-        snapshot_nodes = set(state.graph.nodes.keys())
-        snapshot_edges = set(state.graph.edges.keys())
+        snapshot = state.graph.to_dict()
         _mock_parser(mocker, ParsedIntervention(
             existing_refs=["d_002"], new_concepts=[],
         ))
         llm = mocker.AsyncMock()
         await substitute(state, "如果删除 d_002", llm)
-        assert set(state.graph.nodes.keys()) == snapshot_nodes
-        assert set(state.graph.edges.keys()) == snapshot_edges
+        # to_dict 比 set(keys) 严格: 同时捕 structural 与 value mutation
+        # (e.g. node.confidence / description 被改).
+        assert state.graph.to_dict() == snapshot
 
     @pytest.mark.asyncio
     async def test_state_graph_not_mutated_on_substitute(self, mocker) -> None:
         state = _make_state()
-        snapshot_nodes = set(state.graph.nodes.keys())
-        snapshot_edges = set(state.graph.edges.keys())
+        snapshot = state.graph.to_dict()
         _mock_parser(mocker, ParsedIntervention(
             existing_refs=["d_002"],
             new_concepts=[NewConceptSpec(name="替代", description="d", expected_level=2)],
         ))
         llm = _mock_substitute_llm(mocker)
         await substitute(state, "用 X 替代 Y", llm)
-        assert set(state.graph.nodes.keys()) == snapshot_nodes
-        assert set(state.graph.edges.keys()) == snapshot_edges
+        assert state.graph.to_dict() == snapshot
 
 
 class TestCounterfactualReport:
@@ -178,14 +176,23 @@ class TestCounterfactualErrors:
 
     @pytest.mark.asyncio
     async def test_remove_nonexistent_id_is_silent(self, mocker) -> None:
-        """existing_refs 已经被 parser 验证过, 但 counterfactual 多一层防御:
-        如果 id 不在 graph (race condition), 跳过不抛."""
+        """Defensive branch (counterfactual.py: `if rid in cf_graph.nodes`).
+
+        parser 已经会拒 invalid id, 但 counterfactual 多一层防御兜 race
+        condition (e.g. parser 跟 substitute 之间 state 被改).
+
+        本测试通过 mock parser 直接注一个 graph 里没有的 id, 绕过 parser 的
+        valid_ids 校验, 真触发 defensive branch.
+
+        Assertion: removed_node_ids 只含*实际*删的 id, 不含 silently 跳过的.
+        """
         state = _make_state()
+        # 直接 mock parser 输出含 ghost id (绕过正常 valid_ids 校验)
         _mock_parser(mocker, ParsedIntervention(
-            existing_refs=["d_002"], new_concepts=[],
+            existing_refs=["d_002", "ghost_nonexistent"],
+            new_concepts=[],
         ))
-        # remove d_002 from state right before substitute (simulate race)
-        # ... actually we can't easily simulate this; just trust parser
         llm = mocker.AsyncMock()
         report = await substitute(state, "x", llm)
+        # 仅 d_002 被实际删; ghost_nonexistent silently 跳
         assert report.removed_node_ids == ["d_002"]

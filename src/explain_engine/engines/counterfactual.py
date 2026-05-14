@@ -72,6 +72,14 @@ async def substitute(
     }
     baseline_acts, _ = propagate(state.graph, original_L1_L2) if original_L1_L2 else ({}, [])
 
+    # B.3 I3 fix: 在 mutation 之前从 state.graph (原图) 解 removed 节点的 name,
+    # 因为 cf_graph 在 step 3 会删掉这些节点, 之后无法解.
+    existing_refs_summary = ", ".join(
+        f"{rid}({state.graph.nodes[rid].name})"
+        for rid in parsed.existing_refs
+        if rid in state.graph.nodes
+    ) or "(none)"
+
     # 2. 深拷贝 graph (副作用隔离)
     cf_graph = copy.deepcopy(state.graph)
 
@@ -98,7 +106,8 @@ async def substitute(
     # 5. LLM 生 alt predicted L0 (仅 substitute case)
     if parsed.new_concepts:
         gen_output = await _generate_alt_predicted(
-            cf_graph, parsed, intervention_text, llm, state.root_question,
+            cf_graph, parsed, intervention_text, existing_refs_summary,
+            llm, state.root_question,
         )
         for predicted in gen_output.predicted_L0:
             p_id = next_id(cf_graph, "p")
@@ -132,8 +141,34 @@ async def substitute(
     # 8. narrative (仅 substitute case)
     alt_narrative: str | None = None
     if parsed.new_concepts:
+        # B.3 I3 fix: pre-resolve name 给 narrative prompt, 让 LLM 有上下文.
+        removed_summary_str = ", ".join(
+            f"{rid}({state.graph.nodes[rid].name})"
+            for rid in removed_ids
+            if rid in state.graph.nodes
+        )
+        added_summary_str = ", ".join(
+            f"{aid}({cf_graph.nodes[aid].name})"
+            for aid in added_ids
+            if aid in cf_graph.nodes
+        )
+
+        def _name(nid: str) -> str:
+            # diff 含 baseline 跟 cf 两边的 id. cf_graph 是 superset
+            # (含 predicted L0); 失败 fallback 到原图 (含已删的).
+            if nid in cf_graph.nodes:
+                return cf_graph.nodes[nid].name
+            if nid in state.graph.nodes:
+                return state.graph.nodes[nid].name
+            return "?"
+
+        diff_with_names = sorted(
+            [(nid, _name(nid), v) for nid, v in diff.items()],
+            key=lambda x: x[0],
+        )
         alt_narrative = await _generate_narrative(
-            state.root_question, removed_ids, added_ids, diff, llm,
+            state.root_question, removed_summary_str, added_summary_str,
+            diff_with_names, llm,
         )
 
     return CounterfactualReport(
@@ -152,6 +187,7 @@ async def _generate_alt_predicted(
     cf_graph: ExplanationGraph,
     parsed: ParsedIntervention,
     intervention_text: str,
+    existing_refs_summary: str,
     llm: LLMClient,
     question: str,
 ) -> PredictionOutput:
@@ -160,9 +196,10 @@ async def _generate_alt_predicted(
         f"- {nid}: {n.name}" for nid, n in cf_graph.nodes.items()
         if n.abstraction_level == 0 and n.epistemic != "speculation"
     ) or "(none)"
+    # B.3 I3 fix: 用 pre-resolved {id}(name) 而非 raw id list, 给 LLM 上下文
     intervention_summary = (
         f"{intervention_text}\n"
-        f"removed: {parsed.existing_refs}, "
+        f"removed: {existing_refs_summary}, "
         f"substituted: {[c.name for c in parsed.new_concepts]}"
     )
     messages = [
@@ -189,19 +226,27 @@ async def _generate_alt_predicted(
 
 
 async def _generate_narrative(
-    question: str, removed: list[str], added: list[str],
-    diff: dict[str, float], llm: LLMClient,
+    question: str,
+    removed_summary: str,
+    added_summary: str,
+    diff_with_names: list[tuple[str, str, float]],
+    llm: LLMClient,
 ) -> str:
+    """生成 counterfactual narrative.
+
+    B.3 I3 fix: removed/added/diff 全用 pre-resolved {id}(name) 而非 raw id,
+    让 LLM 有足够上下文写出可读的 narrative.
+    """
     prompt = load_prompt("counterfactual_narrative")
     diff_table = "\n".join(
-        f"  {nid}: {v:+.2f}" for nid, v in sorted(diff.items())
+        f"  {nid}({name}): {v:+.2f}" for nid, name, v in diff_with_names
     ) or "(无变化)"
     messages = [
         Message(role="system", content=prompt["system"]),
         Message(role="user", content=prompt["user_template"].format(
             question=question,
-            removed_summary=", ".join(removed) or "(无)",
-            substituted_summary=", ".join(added) or "(无)",
+            removed_summary=removed_summary or "(无)",
+            substituted_summary=added_summary or "(无)",
             diff_table=diff_table,
         )),
     ]
