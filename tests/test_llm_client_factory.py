@@ -1,6 +1,17 @@
-"""LLM client factory: 按 LLM_PROTOCOL 路由 anthropic / openai。"""
+"""LLM client factory: 按 LLM_PROTOCOL 路由 anthropic / openai。
+
+注: autouse fixture mock load_dotenv 为 no-op, 让 test 完全控制 env
+(不被本地 .env 污染)。
+"""
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_dotenv(monkeypatch):
+    """所有 factory test 不加载 .env, 让 monkeypatch.setenv/delenv 完全决定 env。"""
+    from explain_engine import config as config_mod
+    monkeypatch.setattr(config_mod, "load_dotenv", lambda *_a, **_kw: False)
 
 
 def _set_full_env(monkeypatch, *, protocol: str, base_url: str, api_key: str, model: str) -> None:
@@ -71,6 +82,7 @@ def test_factory_unknown_protocol_rejected(monkeypatch) -> None:
 
 
 def test_factory_missing_env_var_rejected(monkeypatch) -> None:
+    """删 env var 后 make_llm_client 抛 KeyError。"""
     from explain_engine.config import make_llm_client
 
     monkeypatch.delenv("LLM_PROTOCOL", raising=False)

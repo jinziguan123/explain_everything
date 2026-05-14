@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -36,6 +37,8 @@ class Settings(BaseSettings):
 def make_llm_client() -> LLMClient:
     """按 LLM_PROTOCOL 路由到对应 client。
 
+    自动加载 .env (override=False, 已设的 env var 优先 — 让 test monkeypatch 生效)。
+
     必填 env:
       - LLM_PROTOCOL: 'anthropic' 或 'openai'
       - LLM_BASE_URL: API 入口 (e.g. https://api.anthropic.com)
@@ -46,6 +49,7 @@ def make_llm_client() -> LLMClient:
       - LLM_STRUCTURED_OUTPUT_MODE: 'json_schema' (默认) 或 'json_object'
         (DeepSeek 等不支持 json_schema strict 的 vendor 用 json_object)
     """
+    load_dotenv(override=False)
     try:
         proto = os.environ["LLM_PROTOCOL"]
         base_url = os.environ["LLM_BASE_URL"]
