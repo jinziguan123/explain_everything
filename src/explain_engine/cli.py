@@ -268,6 +268,183 @@ def run(
     console.print(f"driver layer: {len(drivers)} drivers added")
 
 
+@app.command()
+def check(
+    session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+    target_id: str | None = typer.Argument(
+        None,
+        help="单个 variable id (c_NNN / d_NNN). 不传则 batch check 全 L1+L2.",
+    ),
+    trace_all: bool = typer.Option(
+        False, "--trace-all", help="渲染完整 decay_trace (默认 top 8)"
+    ),
+) -> None:
+    """Phase 6 consistency check: 数学验证 abstract/driver 能否 rollout 出 concrete.
+
+    Pure rule-based, 0 LLM call. 适合在已 converged session 上 audit graph 质量.
+
+    Examples:
+        explain check s_f3beb777              # batch: 全 graph L1+L2
+        explain check s_f3beb777 c_001        # 单 target: 只 check c_001
+    """
+    from explain_engine.engines.simulation import (
+        check_consistency,
+        check_consistency_batch,
+    )
+
+    store = _get_store()
+    try:
+        session = store.load(session_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    try:
+        if target_id is None:
+            reports = check_consistency_batch(session.state)
+            if not reports:
+                console.print("[yellow]graph 无 L1/L2 节点可 check[/yellow]")
+                return
+            _render_batch_reports(reports, session)
+        else:
+            report = check_consistency(session.state, target_id)
+            _render_single_report(report, session, trace_all=trace_all)
+    except ValueError as exc:
+        console.print(f"[red]invalid target: {exc}[/red]")
+        raise typer.Exit(2) from exc
+
+
+def _color_for(score: float) -> str:
+    if score >= 0.7:
+        return "green"
+    if score >= 0.4:
+        return "yellow"
+    return "red"
+
+
+def _render_batch_reports(reports, session) -> None:
+    g = session.state.graph
+    n_L0 = sum(1 for n in g.nodes.values() if n.abstraction_level == 0)
+    n_L1 = sum(1 for n in g.nodes.values() if n.abstraction_level == 1)
+    n_L2 = sum(1 for n in g.nodes.values() if n.abstraction_level == 2)
+    console.print(
+        f"\n[bold]Consistency Check: {session.meta.session_id}[/bold]"
+    )
+    console.print(
+        f"  (graph: {n_L0} L0 + {n_L1} L1 + {n_L2} L2 = {len(g.nodes)} nodes)\n"
+    )
+
+    table = Table()
+    table.add_column("ID", style="cyan")
+    table.add_column("名称", style="bold")
+    table.add_column("Lvl", justify="right")
+    table.add_column("Consistency", justify="right")
+    table.add_column("Essentialness", justify="right")
+    for r in reports:
+        node = g.nodes[r.target_id]
+        c_color = _color_for(r.consistency_score)
+        e_color = _color_for(r.essentialness_score)
+        table.add_row(
+            r.target_id,
+            node.name,
+            str(node.abstraction_level),
+            f"[{c_color}]{r.consistency_score:.2f}[/{c_color}]",
+            f"[{e_color}]{r.essentialness_score:.2f}[/{e_color}]",
+        )
+    console.print(table)
+
+    if reports:
+        lowest_c = min(reports, key=lambda r: r.consistency_score)
+        lowest_e = min(reports, key=lambda r: r.essentialness_score)
+        all_weak: set[str] = set()
+        for r in reports:
+            all_weak.update(r.weak_chains)
+        console.print(
+            f"\nLowest consistency: {lowest_c.target_id} ({lowest_c.consistency_score:.2f})"
+        )
+        console.print(
+            f"Lowest essentialness: {lowest_e.target_id} ({lowest_e.essentialness_score:.2f})"
+        )
+        if all_weak:
+            console.print(f"Weak chains in any: {', '.join(sorted(all_weak))}")
+
+
+def _render_single_report(report, session, trace_all: bool = False) -> None:
+    g = session.state.graph
+    node = g.nodes[report.target_id]
+    console.print(
+        f"\n[bold]ConsistencyReport: {session.meta.session_id} → "
+        f"{report.target_id} {node.name} (L{node.abstraction_level})[/bold]\n"
+    )
+
+    c_color = _color_for(report.consistency_score)
+    e_color = _color_for(report.essentialness_score)
+    console.print(
+        f"  consistency_score:    "
+        f"[{c_color}]{report.consistency_score:.2f}[/{c_color}]   "
+        f"(mean activation over reachable L0)"
+    )
+    console.print(
+        f"  essentialness_score:  "
+        f"[{e_color}]{report.essentialness_score:.2f}[/{e_color}]   "
+        f"(Σ contribution / |L0|)"
+    )
+    console.print(
+        f"  reachable L0:         {len(report.reachable_L0)}   {report.reachable_L0}"
+    )
+    if report.weak_chains:
+        console.print(
+            f"  weak chains (<0.15):  {len(report.weak_chains)}   {report.weak_chains}"
+        )
+
+    if report.contribution_breakdown:
+        console.print("\n[bold]Contribution Breakdown[/bold] (baseline - without_target):")
+        ct = Table()
+        ct.add_column("L0 ID", style="cyan")
+        ct.add_column("名称", style="dim")
+        ct.add_column("Contribution", justify="right")
+        for lid, contrib in sorted(
+            report.contribution_breakdown.items(),
+            key=lambda kv: -kv[1],
+        ):
+            node_name = g.nodes[lid].name if lid in g.nodes else lid
+            ct.add_row(lid, node_name, f"{contrib:.2f}")
+        console.print(ct)
+
+    if report.decay_trace:
+        steps = report.decay_trace
+        if not trace_all:
+            steps = sorted(steps, key=lambda s: -s.activation_after)[:8]
+            console.print(
+                "\n[bold]Decay Trace[/bold] (top 8 by activation_after, --trace-all 看完整):"
+            )
+        else:
+            console.print("\n[bold]Decay Trace[/bold] (full):")
+        tt = Table()
+        tt.add_column("depth", justify="right")
+        tt.add_column("src")
+        tt.add_column("→")
+        tt.add_column("dst")
+        tt.add_column("edge")
+        tt.add_column("conf", justify="right")
+        tt.add_column("act_before", justify="right")
+        tt.add_column("→")
+        tt.add_column("act_after", justify="right")
+        for s in steps:
+            tt.add_row(
+                str(s.depth),
+                s.src,
+                "→",
+                s.dst,
+                s.edge_id,
+                f"{s.edge_confidence:.2f}",
+                f"{s.activation_before:.2f}",
+                "→",
+                f"{s.activation_after:.2f}",
+            )
+        console.print(tt)
+
+
 @app.command(name="list")
 def list_cmd() -> None:
     """列出所有 session（按创建时间降序）。"""
