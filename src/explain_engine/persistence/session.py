@@ -21,11 +21,12 @@ logger = logging.getLogger(__name__)
 Stage = Literal[
     "bootstrap_pending",   # 等 HITL 1
     "insight_pending",     # Compression + Evaluation 完成，等 HITL 2
-    "done",                # HITL 2 完成
+    "done",                # HITL 2 完成 (Phase 4 终态 → Phase 5 入口)
+    "converged",           # Phase 5 reasoning loop 完成 (终态)
 ]
 
 _SESSION_ID_RE = re.compile(r"^s_[0-9a-f]{8}$")
-_VALID_STAGES = frozenset({"bootstrap_pending", "insight_pending", "done"})
+_VALID_STAGES = frozenset({"bootstrap_pending", "insight_pending", "done", "converged"})
 
 
 def _new_session_id() -> str:

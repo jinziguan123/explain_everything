@@ -1,11 +1,58 @@
 """CognitiveState — runtime 运行时状态。
 
-参考 docs/plans/2026-05-13-cognitive-engine-mvp-design.md §3.2。
+参考 docs/plans/2026-05-13-cognitive-engine-mvp-design.md §3.2 + Phase 5 design §4。
 """
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from explain_engine.schema.graph import ExplanationGraph
+
+Action = Literal["expand", "compress", "evaluate"]
+_VALID_ACTIONS = frozenset({"expand", "compress", "evaluate"})
+
+
+@dataclass
+class TraceEntry:
+    """Phase 5 reasoning_trace 单条记录。"""
+
+    tick: int
+    action: Action
+    target_node_id: str | None
+    gain_delta: float
+    llm_calls: int
+    timestamp: str   # iso8601
+
+    def __post_init__(self) -> None:
+        if self.action not in _VALID_ACTIONS:
+            raise ValueError(
+                f"invalid action: {self.action!r}, must be one of {sorted(_VALID_ACTIONS)}"
+            )
+        if self.tick < 0:
+            raise ValueError(f"tick must be >= 0, got {self.tick}")
+        if self.llm_calls < 0:
+            raise ValueError(f"llm_calls must be >= 0, got {self.llm_calls}")
+
+    def to_dict(self) -> dict:
+        return {
+            "tick": self.tick,
+            "action": self.action,
+            "target_node_id": self.target_node_id,
+            "gain_delta": self.gain_delta,
+            "llm_calls": self.llm_calls,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TraceEntry":
+        return cls(
+            tick=d["tick"],
+            action=d["action"],
+            target_node_id=d.get("target_node_id"),
+            gain_delta=d["gain_delta"],
+            llm_calls=d["llm_calls"],
+            timestamp=d["timestamp"],
+        )
 
 
 @dataclass
@@ -17,6 +64,9 @@ class CognitiveState:
     insight_candidates: list[str] = field(default_factory=list)
     tick: int = 0
     last_gain_tick: int = 0
+    # Phase 5 NEW:
+    last_gains: dict[str, float] = field(default_factory=dict)
+    reasoning_trace: list[TraceEntry] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.budget_remaining < 0:
@@ -52,6 +102,8 @@ class CognitiveState:
             "insight_candidates": list(self.insight_candidates),
             "tick": self.tick,
             "last_gain_tick": self.last_gain_tick,
+            "last_gains": dict(self.last_gains),
+            "reasoning_trace": [e.to_dict() for e in self.reasoning_trace],
         }
 
     @classmethod
@@ -65,6 +117,10 @@ class CognitiveState:
                 insight_candidates=list(d.get("insight_candidates", [])),
                 tick=d.get("tick", 0),
                 last_gain_tick=d.get("last_gain_tick", 0),
+                last_gains=dict(d.get("last_gains", {})),
+                reasoning_trace=[
+                    TraceEntry.from_dict(t) for t in d.get("reasoning_trace", [])
+                ],
             )
         except (KeyError, ValueError) as exc:
             raise ValueError(f"invalid state dict: {exc}") from exc
