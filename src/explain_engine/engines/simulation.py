@@ -25,7 +25,13 @@ from explain_engine.schema.state import CognitiveState
 
 @dataclass(frozen=True)
 class ConsistencyReport:
-    """单个 target 的 consistency check 结果。"""
+    """单个 target 的 consistency check 结果。
+
+    Note: frozen=True 是浅冻结 — 只防字段 rebind, 不防 reachable_L0.append()
+    或 contribution_breakdown[k]=v 这种 inner mutable container mutate.
+    依赖 downstream (CLI render 等) 自律 read-only. Phase 7+ 真要严格 immutable
+    再换 tuple + MappingProxyType.
+    """
 
     target_id: str
     consistency_score: float
@@ -79,7 +85,11 @@ def _check_with_baseline(
 
     # ─── C₂: counterfactual ────────────────────────
     if baseline_acts is None:
-        baseline_acts, _ = propagate(graph, all_L1_L2)
+        # 极简 case: all_L1_L2 == {target_id}, baseline == c1_acts (避免重算)
+        if all_L1_L2 == {target_id}:
+            baseline_acts = c1_acts
+        else:
+            baseline_acts, _ = propagate(graph, all_L1_L2)
     without_acts, _ = propagate(graph, all_L1_L2 - {target_id})
     contribution = {
         nid: baseline_acts.get(nid, 0.0) - without_acts.get(nid, 0.0)
