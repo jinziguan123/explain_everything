@@ -81,7 +81,7 @@ async def test_run_writes_reasoning_trace() -> None:
     llm = FakeLLM(plausibility=4)
     await run(state, llm, budget=5)
     # 每 tick 1 entry
-    assert all(e.action in {"expand", "evaluate"} for e in state.reasoning_trace)
+    assert all(e.action in {"expand", "reflect"} for e in state.reasoning_trace)
     # 第一个 tick 是 expand (K=4 modulo)
     assert state.reasoning_trace[0].action == "expand"
 

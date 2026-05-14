@@ -72,6 +72,44 @@ async def expand_one_frontier(
             f"target {target_id!r} already has incoming causes edge (not a frontier)"
         )
 
+    return await _do_expansion(state, target_id, llm, max_drivers=max_drivers)
+
+
+async def re_expand(
+    state: CognitiveState,
+    target_id: str,
+    llm: LLMClient,
+    max_drivers: int = 2,
+) -> tuple[list[str], float]:
+    """Wave C.2: 绕过 frontier check 给已 covered L1 加 driver (reflection 用)。
+
+    与 expand_one_frontier 唯一差别: 不要求 target 没有 incoming causes edge。
+    default max_drivers=2 (re-expand 比首次 expand 更保守,避免膨胀)。
+
+    Raises:
+        ValueError: target_id 不在 graph / target 不是 level==1
+        LLMError: LLM 调用失败 (provider 抛出,本函数不捕)
+        SchemaValidationError: LLM 输出 schema 不合规 (retry 1 次后仍失败)
+    """
+    if target_id not in state.graph.nodes:
+        raise ValueError(f"target {target_id!r} not found in graph")
+    target = state.graph.nodes[target_id]
+    if target.abstraction_level != 1:
+        raise ValueError(
+            f"target {target_id!r} has level={target.abstraction_level}, must be 1"
+        )
+
+    return await _do_expansion(state, target_id, llm, max_drivers=max_drivers)
+
+
+async def _do_expansion(
+    state: CognitiveState,
+    target_id: str,
+    llm: LLMClient,
+    max_drivers: int,
+) -> tuple[list[str], float]:
+    """LLM 调用 + driver/edge 写入的共享 helper (frontier check 由 caller 做)。"""
+    target = state.graph.nodes[target_id]
     prompt = load_prompt("expansion")
     outgoing_edges_text = _render_target_outgoing_edges(state, target_id)
     existing_drivers_text = _render_existing_drivers(state)

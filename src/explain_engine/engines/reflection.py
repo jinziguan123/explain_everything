@@ -43,6 +43,9 @@ def reflect(state: CognitiveState) -> tuple[ReflectionAction, str | None]:
         return ("continue", None)
 
     reports = check_consistency_batch(state)
+    # Defensive: 过滤已不在 graph 中的 target (e.g. 上一 tick 刚被 prune 的 node)。
+    # 真实 check_consistency_batch 不会返陈旧 target, 但 mock 可能, 避免 KeyError。
+    reports = [r for r in reports if r.target_id in state.graph.nodes]
 
     # 1. re-expand 低 consistency L1
     low_c = sorted(
