@@ -44,8 +44,8 @@ def mock_llm_chat(monkeypatch):
         mock_llm = AsyncMock()
         mock_llm.chat = AsyncMock(return_value=_mock_llm_response(phenomena))
         monkeypatch.setattr(
-            "explain_engine.cli.make_client",
-            lambda settings: mock_llm,
+            "explain_engine.cli.make_llm_client",
+            lambda: mock_llm,
         )
         return mock_llm
 
@@ -129,8 +129,8 @@ class TestCliNew:
         mock_llm = AsyncMock()
         mock_llm.chat = AsyncMock(side_effect=LLMError("API down"))
         monkeypatch.setattr(
-            "explain_engine.cli.make_client",
-            lambda settings: mock_llm,
+            "explain_engine.cli.make_llm_client",
+            lambda: mock_llm,
         )
         mock_review_phenomena("all")
 
@@ -152,8 +152,8 @@ class TestCliNew:
         mock_llm = AsyncMock()
         mock_llm.chat = AsyncMock(side_effect=SchemaValidationError("missing field"))
         monkeypatch.setattr(
-            "explain_engine.cli.make_client",
-            lambda settings: mock_llm,
+            "explain_engine.cli.make_llm_client",
+            lambda: mock_llm,
         )
         mock_review_phenomena("all")
 

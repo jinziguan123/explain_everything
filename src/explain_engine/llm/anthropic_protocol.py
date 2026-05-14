@@ -1,7 +1,7 @@
-"""Claude (Anthropic) provider 实现。
+"""Anthropic 协议 client (跨 vendor: Anthropic 官方 / DeepSeek anthropic / Bedrock / Vertex)。
 
-Structured output 走 tools API: 把 schema 塞进 tools[0].input_schema,
-强制 tool_choice。
+Phase 5 起取代 ClaudeClient，通过 base_url 解耦协议与供应商。
+Structured output 走 tools API。
 """
 
 from typing import Any
@@ -19,9 +19,17 @@ from explain_engine.llm.client import Message, Response
 from explain_engine.llm.errors import LLMError, SchemaValidationError
 
 
-class ClaudeClient:
-    def __init__(self, api_key: str, default_model: str) -> None:
-        self._client = AsyncAnthropic(api_key=api_key)
+class AnthropicProtocolClient:
+    def __init__(
+        self,
+        api_key: str,
+        default_model: str,
+        base_url: str | None = None,
+    ) -> None:
+        kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._client = AsyncAnthropic(**kwargs)
         self._default_model = default_model
 
     async def chat(

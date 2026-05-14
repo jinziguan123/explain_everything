@@ -84,7 +84,7 @@ class TestCompress:
         # 1 compression call + 4 scoring calls (2 candidates × 2 edges each)
         fake_llm.chat.side_effect = [_comp_response()] + [_score_response()] * 4
 
-        with patch("explain_engine.cli.make_client", return_value=fake_llm), \
+        with patch("explain_engine.cli.make_llm_client", return_value=fake_llm), \
              patch("rich.prompt.Prompt.ask", side_effect=["k", "k"]):
             result = runner.invoke(app, ["compress", sid])
         assert result.exit_code == 0, result.output
@@ -132,7 +132,7 @@ class TestCompress:
 
         fake_llm = AsyncMock()
         # LLM 不该被调用
-        with patch("explain_engine.cli.make_client", return_value=fake_llm), \
+        with patch("explain_engine.cli.make_llm_client", return_value=fake_llm), \
              patch("rich.prompt.Prompt.ask", side_effect=["k"]):
             result = runner.invoke(app, ["compress", sid])
         assert result.exit_code == 0
@@ -147,7 +147,7 @@ class TestCompress:
         _mock_settings_to_tmp(monkeypatch, tmp_path)
         fake_llm = AsyncMock()
         fake_llm.chat.side_effect = LLMError("network down")
-        with patch("explain_engine.cli.make_client", return_value=fake_llm):
+        with patch("explain_engine.cli.make_llm_client", return_value=fake_llm):
             result = runner.invoke(app, ["compress", sid])
         assert result.exit_code == 1
 
@@ -158,6 +158,6 @@ class TestCompress:
         _mock_settings_to_tmp(monkeypatch, tmp_path)
         fake_llm = AsyncMock()
         fake_llm.chat.side_effect = SchemaValidationError("bad output")
-        with patch("explain_engine.cli.make_client", return_value=fake_llm):
+        with patch("explain_engine.cli.make_llm_client", return_value=fake_llm):
             result = runner.invoke(app, ["compress", sid])
         assert result.exit_code == 2

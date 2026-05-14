@@ -1,11 +1,15 @@
-"""DeepSeek provider 实现。
+"""OpenAI 协议 client (跨 vendor: OpenAI / DeepSeek openai / Azure / Together / Groq)。
 
-DeepSeek 用 OpenAI 兼容 API。structured output 走 JSON mode +
-prompt 注入 schema 描述 —— 不支持 json_schema strict 模式。
+Phase 5 起取代 OpenAIClient + DeepSeekClient,通过 base_url + mode 解耦。
+
+Structured output mode:
+- 'json_schema': 用 response_format={"type":"json_schema", ...} strict (OpenAI 官方等)
+- 'json_object': 用 response_format={"type":"json_object"} + prompt 注入 schema
+   (DeepSeek 等不支持 json_schema strict 的 vendor 用)
 """
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from openai import (
     APIConnectionError,
@@ -19,6 +23,8 @@ from pydantic import BaseModel, ValidationError
 from explain_engine.llm.client import Message, Response
 from explain_engine.llm.errors import LLMError, SchemaValidationError
 
+Mode = Literal["json_schema", "json_object"]
+
 
 def _schema_instructions(schema: type[BaseModel]) -> str:
     json_schema = schema.model_json_schema()
@@ -29,15 +35,20 @@ def _schema_instructions(schema: type[BaseModel]) -> str:
     )
 
 
-class DeepSeekClient:
+class OpenAIProtocolClient:
     def __init__(
         self,
         api_key: str,
         default_model: str,
-        base_url: str,
+        base_url: str | None = None,
+        mode: Mode = "json_schema",
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._client = AsyncOpenAI(**kwargs)
         self._default_model = default_model
+        self._mode = mode
 
     async def chat(
         self,
@@ -49,23 +60,32 @@ class DeepSeekClient:
             api_messages: list[dict[str, str]] = [
                 {"role": m.role, "content": m.content} for m in messages
             ]
-
             call_kwargs: dict[str, Any] = {
                 "model": model or self._default_model,
                 "messages": api_messages,
             }
 
             if schema is not None:
-                schema_text = _schema_instructions(schema)
-                if api_messages and api_messages[0]["role"] == "system":
-                    api_messages[0] = {
-                        "role": "system",
-                        "content": schema_text + "\n\n" + api_messages[0]["content"],
+                if self._mode == "json_schema":
+                    call_kwargs["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": schema.__name__,
+                            "schema": schema.model_json_schema(),
+                            "strict": True,
+                        },
                     }
-                else:
-                    api_messages.insert(0, {"role": "system", "content": schema_text})
-                call_kwargs["messages"] = api_messages
-                call_kwargs["response_format"] = {"type": "json_object"}
+                else:  # json_object
+                    schema_text = _schema_instructions(schema)
+                    if api_messages and api_messages[0]["role"] == "system":
+                        api_messages[0] = {
+                            "role": "system",
+                            "content": schema_text + "\n\n" + api_messages[0]["content"],
+                        }
+                    else:
+                        api_messages.insert(0, {"role": "system", "content": schema_text})
+                    call_kwargs["messages"] = api_messages
+                    call_kwargs["response_format"] = {"type": "json_object"}
 
             api_resp = await self._client.chat.completions.create(**call_kwargs)
 

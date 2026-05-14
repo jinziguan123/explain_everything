@@ -1,6 +1,11 @@
-"""LLMError / SchemaValidationError + provider wrap 测试。"""
+"""LLMError / SchemaValidationError + provider wrap 测试。
 
-from unittest.mock import AsyncMock
+Phase 5: 旧 3 client → 2 (AnthropicProtocol / OpenAIProtocol)。
+DeepSeek 是 OpenAIProtocolClient(mode='json_object') 的 vendor，wrap 行为
+跟 OpenAI mode 一致，所以这里覆盖 anthropic + openai 两个协议即可。
+"""
+
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -29,17 +34,17 @@ def _make_request() -> httpx.Request:
     return httpx.Request("POST", "https://example.test/v1/messages")
 
 
-class TestClaudeWrap:
-    """ClaudeClient 把 anthropic SDK 异常 wrap 成 LLMError。"""
+class TestAnthropicProtocolWrap:
+    """AnthropicProtocolClient 把 anthropic SDK 异常 wrap 成 LLMError。"""
 
-    async def test_claude_wraps_api_error(self, mocker) -> None:
+    async def test_wraps_api_error(self, mocker) -> None:
         from anthropic import APIError
 
-        from explain_engine.llm.claude import ClaudeClient
+        from explain_engine.llm.anthropic_protocol import AnthropicProtocolClient
 
         mock_client = AsyncMock()
         mocker.patch(
-            "explain_engine.llm.claude.AsyncAnthropic",
+            "explain_engine.llm.anthropic_protocol.AsyncAnthropic",
             return_value=mock_client,
         )
 
@@ -51,18 +56,18 @@ class TestClaudeWrap:
             )
         )
 
-        client = ClaudeClient(api_key="sk-test", default_model="claude-test")
+        client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-test")
         with pytest.raises(LLMError, match="network down"):
             await client.chat([Message(role="user", content="hi")])
 
-    async def test_claude_wraps_connection_error(self, mocker) -> None:
+    async def test_wraps_connection_error(self, mocker) -> None:
         from anthropic import APIConnectionError
 
-        from explain_engine.llm.claude import ClaudeClient
+        from explain_engine.llm.anthropic_protocol import AnthropicProtocolClient
 
         mock_client = AsyncMock()
         mocker.patch(
-            "explain_engine.llm.claude.AsyncAnthropic",
+            "explain_engine.llm.anthropic_protocol.AsyncAnthropic",
             return_value=mock_client,
         )
 
@@ -70,20 +75,20 @@ class TestClaudeWrap:
             side_effect=APIConnectionError(request=_make_request())
         )
 
-        client = ClaudeClient(api_key="sk-test", default_model="claude-test")
+        client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-test")
         with pytest.raises(LLMError):
             await client.chat([Message(role="user", content="hi")])
 
 
-class TestOpenAIWrap:
-    async def test_openai_wraps_api_error(self, mocker) -> None:
+class TestOpenAIProtocolWrap:
+    async def test_wraps_api_error(self, mocker) -> None:
         import openai
 
-        from explain_engine.llm.openai_client import OpenAIClient
+        from explain_engine.llm.openai_protocol import OpenAIProtocolClient
 
         mock_client = AsyncMock()
         mocker.patch(
-            "explain_engine.llm.openai_client.AsyncOpenAI",
+            "explain_engine.llm.openai_protocol.AsyncOpenAI",
             return_value=mock_client,
         )
 
@@ -95,26 +100,24 @@ class TestOpenAIWrap:
             )
         )
 
-        client = OpenAIClient(api_key="sk-test", default_model="gpt-test")
+        client = OpenAIProtocolClient(api_key="sk-test", default_model="gpt-test")
         with pytest.raises(LLMError, match="quota exceeded"):
             await client.chat([Message(role="user", content="hi")])
 
-    async def test_openai_wraps_json_decode_error(self, mocker) -> None:
+    async def test_wraps_json_decode_error_json_schema(self, mocker) -> None:
         """structured output 返回非法 JSON → LLMError (parse-layer)。"""
         from pydantic import BaseModel
 
-        from explain_engine.llm.openai_client import OpenAIClient
+        from explain_engine.llm.openai_protocol import OpenAIProtocolClient
 
         class _Schema(BaseModel):
             answer: str
 
         mock_client = AsyncMock()
         mocker.patch(
-            "explain_engine.llm.openai_client.AsyncOpenAI",
+            "explain_engine.llm.openai_protocol.AsyncOpenAI",
             return_value=mock_client,
         )
-
-        from unittest.mock import MagicMock
 
         resp = MagicMock()
         resp.choices = [MagicMock()]
@@ -124,53 +127,27 @@ class TestOpenAIWrap:
 
         mock_client.chat.completions.create = AsyncMock(return_value=resp)
 
-        client = OpenAIClient(api_key="sk-test", default_model="gpt-test")
+        client = OpenAIProtocolClient(api_key="sk-test", default_model="gpt-test")
         with pytest.raises(LLMError):
             await client.chat(
                 [Message(role="user", content="hi")],
                 schema=_Schema,
             )
 
-
-class TestDeepSeekWrap:
-    async def test_deepseek_wraps_api_error(self, mocker) -> None:
-        import openai
-
-        from explain_engine.llm.deepseek import DeepSeekClient
-
-        mock_client = AsyncMock()
-        mocker.patch(
-            "explain_engine.llm.deepseek.AsyncOpenAI",
-            return_value=mock_client,
-        )
-
-        mock_client.chat.completions.create = AsyncMock(
-            side_effect=openai.APIConnectionError(request=_make_request())
-        )
-
-        client = DeepSeekClient(
-            api_key="sk-test",
-            default_model="deepseek-test",
-            base_url="https://api.deepseek.test",
-        )
-        with pytest.raises(LLMError):
-            await client.chat([Message(role="user", content="hi")])
-
-    async def test_deepseek_wraps_json_decode_error(self, mocker) -> None:
+    async def test_wraps_json_decode_error_json_object_mode(self, mocker) -> None:
+        """json_object mode (DeepSeek 等) 同样 wrap JSONDecodeError。"""
         from pydantic import BaseModel
 
-        from explain_engine.llm.deepseek import DeepSeekClient
+        from explain_engine.llm.openai_protocol import OpenAIProtocolClient
 
         class _Schema(BaseModel):
             answer: str
 
         mock_client = AsyncMock()
         mocker.patch(
-            "explain_engine.llm.deepseek.AsyncOpenAI",
+            "explain_engine.llm.openai_protocol.AsyncOpenAI",
             return_value=mock_client,
         )
-
-        from unittest.mock import MagicMock
 
         resp = MagicMock()
         resp.choices = [MagicMock()]
@@ -180,10 +157,11 @@ class TestDeepSeekWrap:
 
         mock_client.chat.completions.create = AsyncMock(return_value=resp)
 
-        client = DeepSeekClient(
+        client = OpenAIProtocolClient(
             api_key="sk-test",
             default_model="deepseek-test",
             base_url="https://api.deepseek.test",
+            mode="json_object",
         )
         with pytest.raises(LLMError):
             await client.chat(
@@ -191,18 +169,43 @@ class TestDeepSeekWrap:
                 schema=_Schema,
             )
 
+    async def test_deepseek_connection_error_wrapped(self, mocker) -> None:
+        """openai SDK + base_url=deepseek 的 connection error wrap。"""
+        import openai
+
+        from explain_engine.llm.openai_protocol import OpenAIProtocolClient
+
+        mock_client = AsyncMock()
+        mocker.patch(
+            "explain_engine.llm.openai_protocol.AsyncOpenAI",
+            return_value=mock_client,
+        )
+
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=openai.APIConnectionError(request=_make_request())
+        )
+
+        client = OpenAIProtocolClient(
+            api_key="sk-test",
+            default_model="deepseek-test",
+            base_url="https://api.deepseek.test",
+            mode="json_object",
+        )
+        with pytest.raises(LLMError):
+            await client.chat([Message(role="user", content="hi")])
+
 
 class TestExceptionChainPreserved:
     """raise X from exc 保留 __cause__。"""
 
-    async def test_claude_chain_preserved(self, mocker) -> None:
+    async def test_anthropic_chain_preserved(self, mocker) -> None:
         from anthropic import APIError
 
-        from explain_engine.llm.claude import ClaudeClient
+        from explain_engine.llm.anthropic_protocol import AnthropicProtocolClient
 
         mock_client = AsyncMock()
         mocker.patch(
-            "explain_engine.llm.claude.AsyncAnthropic",
+            "explain_engine.llm.anthropic_protocol.AsyncAnthropic",
             return_value=mock_client,
         )
 
@@ -213,7 +216,7 @@ class TestExceptionChainPreserved:
         )
         mock_client.messages.create = AsyncMock(side_effect=original)
 
-        client = ClaudeClient(api_key="sk-test", default_model="claude-test")
+        client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-test")
         try:
             await client.chat([Message(role="user", content="hi")])
         except LLMError as wrapped:

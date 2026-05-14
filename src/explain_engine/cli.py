@@ -16,7 +16,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from explain_engine.config import Settings, make_client
+from explain_engine.config import Settings, make_llm_client
 from explain_engine.engines.bootstrap import bootstrap_phenomena
 from explain_engine.engines.compression import propose_candidates
 from explain_engine.engines.evaluation import score_all
@@ -47,11 +47,12 @@ def new(
 
 async def _run_new(question: str) -> None:
     settings = Settings()
-    llm = make_client(settings)
+    llm = make_llm_client()
 
-    console.print(
-        f"\n[INFO] 调 {settings.llm_provider} ({settings.llm_model}) 生现象..."
-    )
+    import os
+    proto = os.environ.get("LLM_PROTOCOL", "?")
+    model = os.environ.get("LLM_MODEL", "?")
+    console.print(f"\n[INFO] 调 LLM ({proto} / {model}) 生现象...")
     try:
         phenomena = await bootstrap_phenomena(question, llm)
     except SchemaValidationError as exc:
@@ -142,10 +143,7 @@ async def _run_compress(session_id: str) -> None:
         )
         raise typer.Exit(4)
 
-    settings = Settings()
-    llm = make_client(settings)
-
-    gains: dict[str, float]
+    llm = make_llm_client()
 
     if stage == "bootstrap_pending":
         console.print("[INFO] 调 LLM 生成 abstract 候选...")

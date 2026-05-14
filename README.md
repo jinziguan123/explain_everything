@@ -29,11 +29,32 @@ Phase 3-6（Engine + Runtime + CLI + 评估）后续规划。
 
 ```bash
 uv sync                                  # 安装依赖
-cp .env.example .env                     # 配置 LLM provider
+cp .env.example .env                     # 配置 LLM (详见下)
 uv run pytest                            # 单测
 uv run ruff check .                      # 静态检查
 uv run mypy src/                         # 类型检查
 ```
+
+## LLM 配置 (Phase 5+)
+
+Phase 5 起协议跟供应商解耦，配 4 个 env var:
+
+- `LLM_PROTOCOL`: `anthropic` 或 `openai`
+- `LLM_BASE_URL`: API 入口（详见 `.env.example`）
+- `LLM_API_KEY`: API key
+- `LLM_MODEL`: 模型名
+
+可选: `LLM_STRUCTURED_OUTPUT_MODE` (openai 协议下 `json_schema` (默认) / `json_object`)
+
+### Phase 4 → Phase 5 配置迁移
+
+| Phase 4                              | Phase 5 等价                                                                |
+|---|---|
+| `LLM_PROVIDER=claude`                | `LLM_PROTOCOL=anthropic` + `LLM_BASE_URL=https://api.anthropic.com`         |
+| `LLM_PROVIDER=openai`                | `LLM_PROTOCOL=openai` + `LLM_BASE_URL=https://api.openai.com/v1`            |
+| `LLM_PROVIDER=deepseek` (openai)     | `LLM_PROTOCOL=openai` + `LLM_BASE_URL=https://api.deepseek.com/v1` + `LLM_STRUCTURED_OUTPUT_MODE=json_object` |
+| `LLM_PROVIDER=deepseek` (anthropic)  | `LLM_PROTOCOL=anthropic` + `LLM_BASE_URL=https://api.deepseek.com/anthropic` |
+| `CLAUDE_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | `LLM_API_KEY` (统一)                              |
 
 ## 历史
 
