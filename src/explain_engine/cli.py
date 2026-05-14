@@ -513,6 +513,71 @@ async def _run_predict(session_id: str, intervention_text: str) -> None:
         raise typer.Exit(3) from exc
 
 
+@app.command()
+def counterfactual(
+    session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+    intervention_text: str = typer.Argument(..., help="intervention 描述 (自然语言)"),
+) -> None:
+    """Phase 7 Wave B: counterfactual remove + (optional) substitute.
+
+    副作用 = 0: 不改 state.graph. 深拷贝跑 propagate, 拷贝丢弃.
+
+    Examples:
+        explain counterfactual s_f3beb777 "用经济激励替代教义不可妥协性"
+        explain counterfactual s_f3beb777 "如果删除集体身份维系压力"
+    """
+    asyncio.run(_run_counterfactual(session_id, intervention_text))
+
+
+async def _run_counterfactual(session_id: str, intervention_text: str) -> None:
+    from explain_engine.engines import counterfactual as counterfactual_mod
+
+    store = _get_store()
+    try:
+        session = store.load(session_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    # Phase 7 design §5.7: counterfactual 要求 stage ∈ {done, converged}
+    if session.meta.stage not in ("done", "converged"):
+        console.print(
+            f"[red]counterfactual 要求 stage ∈ {{done, converged}}, "
+            f"实际 stage={session.meta.stage!r}. "
+            f"先跑 explain compress (→ done) 或 explain run (→ converged).[/red]"
+        )
+        raise typer.Exit(4)
+
+    llm = make_llm_client()
+    try:
+        report = await counterfactual_mod.substitute(
+            session.state, intervention_text, llm,
+        )
+    except ValueError as exc:
+        console.print(f"[red]parser 失败: {exc}[/red]")
+        raise typer.Exit(2) from exc
+    except (LLMError, SchemaValidationError) as exc:
+        console.print(f"[red]LLM 失败: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    console.print(f"\n[bold]Counterfactual: {intervention_text}[/bold]")
+    console.print(f"  Removed: {report.removed_node_ids}")
+    if report.added_node_ids:
+        console.print(f"  Substituted with: {report.added_node_ids}")
+    if report.alt_narrative:
+        console.print(f"\n[bold]Alt narrative:[/bold]\n{report.alt_narrative}")
+    # 渲染 diff table (top changes, |delta| > 0.05)
+    significant = sorted(
+        [(nid, v) for nid, v in report.activation_diff.items() if abs(v) > 0.05],
+        key=lambda kv: -abs(kv[1]),
+    )[:10]
+    if significant:
+        console.print("\n[bold]Top activation diff (baseline - counterfactual):[/bold]")
+        for nid, v in significant:
+            console.print(f"  {nid}: {v:+.2f}")
+    # 副作用 = 0, 不需要 store.save
+
+
 @app.command(name="list")
 def list_cmd() -> None:
     """列出所有 session（按创建时间降序）。"""
