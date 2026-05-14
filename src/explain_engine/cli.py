@@ -323,6 +323,34 @@ def _color_for(score: float) -> str:
     return "red"
 
 
+def _render_parsed(parsed, state) -> None:
+    """渲染 parser 输出 (Wave B fix2 / Fix A): 透明化 existing_refs + new_concepts.
+
+    格式:
+      解析:
+        existing_refs: c_001(name), d_002(name), ...
+        new_concepts: [{name, level=2}, ...]
+    """
+    console.print("\n  解析:")
+    if parsed.existing_refs:
+        refs_str = ", ".join(
+            f"{rid}({state.graph.nodes[rid].name})"
+            if rid in state.graph.nodes else rid
+            for rid in parsed.existing_refs
+        )
+        console.print(f"    existing_refs: {refs_str}")
+    else:
+        console.print("    existing_refs: (none)")
+    if parsed.new_concepts:
+        concepts_str = ", ".join(
+            f"{{name={c.name}, level={c.expected_level}}}"
+            for c in parsed.new_concepts
+        )
+        console.print(f"    new_concepts: {concepts_str}")
+    else:
+        console.print("    new_concepts: (none)")
+
+
 def _render_batch_reports(reports, session) -> None:
     g = session.state.graph
     n_L0 = sum(1 for n in g.nodes.values() if n.abstraction_level == 0)
@@ -492,6 +520,7 @@ async def _run_predict(session_id: str, intervention_text: str) -> None:
         raise typer.Exit(1) from exc
 
     console.print(f"\n[bold]Forward prediction: {intervention_text}[/bold]")
+    _render_parsed(report.parsed, session.state)
     if report.new_node_ids:
         console.print(f"  新增 intervention nodes: {report.new_node_ids}")
     if report.predicted_L0_ids:
@@ -505,6 +534,17 @@ async def _run_predict(session_id: str, intervention_text: str) -> None:
     if report.activated_existing_L0:
         console.print(
             f"\n[bold]Existing L0 也被激活:[/bold] {report.activated_existing_L0}"
+        )
+    if (
+        not report.new_node_ids
+        and not report.predicted_L0_ids
+        and not report.activated_existing_L0
+    ):
+        console.print(
+            "\n[yellow]⚠ 无明显 effect: parser 识别的 intervention 下游 propagation "
+            "到达节点都被 filter (speculation epistemic 不算激活 existing L0). 建议:\n"
+            "  - 用更具体的 driver/abstract 名称作 intervention\n"
+            "  - 引入新机制变量 (description 强调 level=2 driver)[/yellow]"
         )
     try:
         store.save(session)
@@ -561,6 +601,7 @@ async def _run_counterfactual(session_id: str, intervention_text: str) -> None:
         raise typer.Exit(1) from exc
 
     console.print(f"\n[bold]Counterfactual: {intervention_text}[/bold]")
+    _render_parsed(report.parsed, session.state)
     console.print(f"  Removed: {report.removed_node_ids}")
     if report.added_node_ids:
         console.print(f"  Substituted with: {report.added_node_ids}")
@@ -575,6 +616,15 @@ async def _run_counterfactual(session_id: str, intervention_text: str) -> None:
         console.print("\n[bold]Top activation diff (baseline - counterfactual):[/bold]")
         for nid, v in significant:
             console.print(f"  {nid}: {v:+.2f}")
+    if (
+        not report.removed_node_ids
+        and not report.added_node_ids
+        and not significant
+    ):
+        console.print(
+            "\n[yellow]⚠ 无明显 effect: parser 未识别可 remove/substitute 的节点, "
+            "或 activation diff 全 < 0.05.[/yellow]"
+        )
     # 副作用 = 0, 不需要 store.save
 
 

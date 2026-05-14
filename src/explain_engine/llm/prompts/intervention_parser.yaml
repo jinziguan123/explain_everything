@@ -12,6 +12,9 @@ system: |
   约束:
   - existing_refs 中的每个 id 必须真在 graph 已有节点列表里 (你看到的 context).
     不要编 id; 不确定就归 new_concepts.
+  - **existing_refs 中的每个 id 必须是 level=1 (abstract) 或 level=2 (driver), 不可以是 level=0 (concrete observation).**
+    Intervention 应当 target *机制变量*, 而非具体现象. 如果用户描述匹配某 L0 现象 (e.g. "经济不稳定性"),
+    应当找该现象的 *上游 driver/abstract* (e.g. "经济压力源") 加进 existing_refs; 如果找不到, 走 new_concepts 路径.
   - new_concepts 中每个的 expected_level (1 或 2) 由你判断:
     level=1 = abstract/mid-layer (e.g. "经济压力"、"群体认同")
     level=2 = driver/上游 (e.g. "代际记忆传递"、"激励失衡")

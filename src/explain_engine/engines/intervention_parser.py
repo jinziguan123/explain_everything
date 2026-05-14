@@ -43,7 +43,9 @@ async def parse(
     """
     prompt = load_prompt("intervention_parser")
     graph_nodes_table = _render_graph_nodes(state)
-    valid_ids = set(state.graph.nodes.keys())
+    valid_ids_with_level: dict[str, int] = {
+        nid: n.abstraction_level for nid, n in state.graph.nodes.items()
+    }
 
     messages = [
         Message(role="system", content=prompt["system"]),
@@ -57,7 +59,7 @@ async def parse(
         ),
     ]
 
-    parsed = await _call_with_retry(llm, messages, valid_ids)
+    parsed = await _call_with_retry(llm, messages, valid_ids_with_level)
 
     if not parsed.existing_refs and not parsed.new_concepts:
         raise ValueError(
@@ -78,7 +80,7 @@ def _render_graph_nodes(state: CognitiveState) -> str:
 async def _call_with_retry(
     llm: LLMClient,
     messages: list[Message],
-    valid_ids: set[str],
+    valid_ids_with_level: dict[str, int],
 ) -> ParsedIntervention:
     last_exc: Exception | None = None
     for _attempt in range(2):
@@ -91,9 +93,21 @@ async def _call_with_retry(
         except ValidationError as exc:
             last_exc = SchemaValidationError(f"parser 输出 schema 不合规: {exc}")
             continue
-        bad = [rid for rid in parsed.existing_refs if rid not in valid_ids]
-        if bad:
-            last_exc = SchemaValidationError(f"未知 variable id: {bad}")
+        bad_unknown = [
+            rid for rid in parsed.existing_refs if rid not in valid_ids_with_level
+        ]
+        if bad_unknown:
+            last_exc = SchemaValidationError(f"未知 variable id: {bad_unknown}")
+            continue
+        bad_l0 = [
+            rid for rid in parsed.existing_refs
+            if valid_ids_with_level[rid] == 0
+        ]
+        if bad_l0:
+            last_exc = SchemaValidationError(
+                f"L0 节点不可作 intervention target "
+                f"(intervention 应 target L1/L2 mechanism): {bad_l0}"
+            )
             continue
         return parsed
     assert last_exc is not None

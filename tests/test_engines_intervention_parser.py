@@ -147,3 +147,16 @@ class TestParseErrors:
         })
         with pytest.raises(ValueError, match="无法解析"):
             await parse(state, "废话", llm)
+
+    @pytest.mark.asyncio
+    async def test_l0_node_in_existing_refs_raises(self, mocker) -> None:
+        """L0 节点不可作 intervention target (Fix B)."""
+        state = _make_state()  # has p_001 at level=0
+        llm = _mock_llm(mocker, {
+            "existing_refs": ["p_001"],  # L0 — 应被拒
+            "new_concepts": [],
+        })
+        with pytest.raises(SchemaValidationError, match=r"L0|level"):
+            await parse(state, "x", llm)
+        # 应已 retry: 2 次 chat
+        assert llm.chat.call_count == 2
