@@ -472,6 +472,15 @@ async def _run_predict(session_id: str, intervention_text: str) -> None:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
+    # Phase 7 design §5.7: predict 必须 stage ∈ {done, converged}
+    if session.meta.stage not in ("done", "converged"):
+        console.print(
+            f"[red]predict 要求 stage ∈ {{done, converged}}, "
+            f"实际 stage={session.meta.stage!r}. "
+            f"先跑 explain compress (→ done) 或 explain run (→ converged).[/red]"
+        )
+        raise typer.Exit(4)
+
     llm = make_llm_client()
     try:
         report = await prediction_mod.predict(session.state, intervention_text, llm)

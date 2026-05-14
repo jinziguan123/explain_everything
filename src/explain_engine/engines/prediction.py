@@ -92,10 +92,12 @@ async def predict(
                 epistemic="speculation", source="llm",
             ))
             predicted_L0_ids.append(p_id)
-            for new_id in new_node_ids:
+            # I1 fix: 仅 link 第一个 new_concept (避免 noisy-OR 过度激活,
+            # 因为 fan-out 把同一 intervention 的效应当独立 parent).
+            if new_node_ids:
                 edge_id = _next_edge_id(state)
                 state.graph.add_edge(RelationEdge(
-                    id=edge_id, source_node=new_id, target_node=p_id,
+                    id=edge_id, source_node=new_node_ids[0], target_node=p_id,
                     relation_type="manifests_as", confidence=0.7,
                     mechanism_description=predicted.mechanism,
                 ))

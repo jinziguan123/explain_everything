@@ -230,3 +230,46 @@ class TestPredictMainPath:
             if n.epistemic == "speculation"
         ]
         assert speculation_nodes == []
+
+    @pytest.mark.asyncio
+    async def test_predicted_L0_links_only_to_first_new_concept(self, mocker) -> None:
+        """I1 fix: 2 new_concepts → 仅第一个 concept 跟每个 predicted L0 建 edge."""
+        state = _make_state()
+        _mock_parser(mocker, ParsedIntervention(
+            existing_refs=[],
+            new_concepts=[
+                NewConceptSpec(name="concept_A", description="d", expected_level=2),
+                NewConceptSpec(name="concept_B", description="d", expected_level=2),
+            ],
+        ))
+        gen_resp = _mock_generation(mocker, [
+            {"name": "p_alpha", "description": "d", "mechanism": "m1"},
+            {"name": "p_beta", "description": "d", "mechanism": "m2"},
+        ])
+        llm = mocker.AsyncMock()
+        llm.chat = mocker.AsyncMock(return_value=gen_resp)
+        report = await predict(state, "A + B", llm)
+
+        # 2 new_concepts created
+        assert len(report.new_node_ids) == 2
+        first_concept = report.new_node_ids[0]
+        second_concept = report.new_node_ids[1]
+
+        # 2 predicted L0 created
+        assert len(report.predicted_L0_ids) == 2
+
+        # 每个 predicted L0 应该恰好有 1 个 manifests_as edge from first_concept
+        for p_id in report.predicted_L0_ids:
+            edges_to_p = [
+                e for e in state.graph.edges.values()
+                if e.relation_type == "manifests_as" and e.target_node == p_id
+            ]
+            assert len(edges_to_p) == 1, f"{p_id} should have 1 edge, got {len(edges_to_p)}"
+            assert edges_to_p[0].source_node == first_concept
+
+        # second_concept 应该没有任何 outgoing edge to predicted L0
+        second_concept_out = [
+            e for e in state.graph.edges.values()
+            if e.source_node == second_concept and e.relation_type == "manifests_as"
+        ]
+        assert second_concept_out == []

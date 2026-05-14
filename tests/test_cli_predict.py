@@ -118,6 +118,42 @@ class TestCLIPredict:
         result = runner.invoke(app, ["predict", "s_ccccdddd", "x"])
         assert result.exit_code == 1
 
+    def test_stage_not_done_or_converged_exits_4(self, cli_env, runner, monkeypatch) -> None:
+        """Phase 7 design §5.7: predict 要求 stage ∈ {done, converged}."""
+        sid = "s_eeeeffff"
+        payload = {
+            "meta": {
+                "session_id": sid, "question": "q", "stage": "bootstrap_pending",
+                "created_at": 1234567890.0, "updated_at": 1234567890.0,
+            },
+            "state": {
+                "graph": {
+                    "root_question": "q",
+                    "nodes": {
+                        "p_001": {
+                            "id": "p_001", "name": "p", "description": "d",
+                            "abstraction_level": 0, "confidence": 0.7,
+                            "epistemic": "observation",
+                        },
+                    },
+                    "edges": {},
+                },
+                "budget_remaining": 0, "root_question": "q",
+                "active_frontier": [], "insight_candidates": [],
+                "tick": 0, "last_gain_tick": 0,
+                "last_gains": {}, "reasoning_trace": [],
+            },
+        }
+        (cli_env / f"{sid}.json").write_text(json.dumps(payload, ensure_ascii=False))
+
+        # Mock LLM (won't be called)
+        monkeypatch.setattr(
+            "explain_engine.cli.make_llm_client", lambda: MagicMock(),
+        )
+        result = runner.invoke(app, ["predict", sid, "x"])
+        assert result.exit_code == 4
+        assert "stage" in result.stdout or "stage" in result.stderr
+
     def test_predict_persists_graph_mutations(self, cli_env, runner, monkeypatch) -> None:
         """predict 副作用应 save 到 session JSON."""
         _save_converged_session(cli_env, "s_ddddeeee")
