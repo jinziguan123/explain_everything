@@ -8,8 +8,10 @@ from typing import Literal
 
 from explain_engine.schema.graph import ExplanationGraph
 
-Action = Literal["expand", "compress", "evaluate"]
-_VALID_ACTIONS = frozenset({"expand", "compress", "evaluate"})
+Action = Literal["expand", "compress", "evaluate", "reflect"]
+_VALID_ACTIONS = frozenset({"expand", "compress", "evaluate", "reflect"})
+
+ReflectionAction = Literal["continue", "re-expand", "prune", "stop"]
 
 
 @dataclass
@@ -22,6 +24,7 @@ class TraceEntry:
     gain_delta: float
     llm_calls: int
     timestamp: str   # iso8601
+    reflection_action: "ReflectionAction | None" = None
 
     def __post_init__(self) -> None:
         if self.action not in _VALID_ACTIONS:
@@ -41,6 +44,7 @@ class TraceEntry:
             "gain_delta": self.gain_delta,
             "llm_calls": self.llm_calls,
             "timestamp": self.timestamp,
+            "reflection_action": self.reflection_action,
         }
 
     @classmethod
@@ -52,6 +56,7 @@ class TraceEntry:
             gain_delta=d["gain_delta"],
             llm_calls=d["llm_calls"],
             timestamp=d["timestamp"],
+            reflection_action=d.get("reflection_action"),
         )
 
 
@@ -67,6 +72,8 @@ class CognitiveState:
     # Phase 5 NEW:
     last_gains: dict[str, float] = field(default_factory=dict)
     reasoning_trace: list[TraceEntry] = field(default_factory=list)
+    # Phase 7 Wave C NEW:
+    last_reflection_change_tick: int = 0
 
     def __post_init__(self) -> None:
         if self.budget_remaining < 0:
@@ -75,6 +82,10 @@ class CognitiveState:
             raise ValueError(f"tick must be >= 0, got {self.tick}")
         if self.last_gain_tick < 0:
             raise ValueError(f"last_gain_tick must be >= 0, got {self.last_gain_tick}")
+        if self.last_reflection_change_tick < 0:
+            raise ValueError(
+                f"last_reflection_change_tick must be >= 0, got {self.last_reflection_change_tick}"
+            )
 
     @classmethod
     def bootstrap(cls, question: str, budget: int) -> "CognitiveState":
@@ -104,6 +115,7 @@ class CognitiveState:
             "last_gain_tick": self.last_gain_tick,
             "last_gains": dict(self.last_gains),
             "reasoning_trace": [e.to_dict() for e in self.reasoning_trace],
+            "last_reflection_change_tick": self.last_reflection_change_tick,
         }
 
     @classmethod
@@ -121,6 +133,7 @@ class CognitiveState:
                 reasoning_trace=[
                     TraceEntry.from_dict(t) for t in d.get("reasoning_trace", [])
                 ],
+                last_reflection_change_tick=d.get("last_reflection_change_tick", 0),
             )
         except (KeyError, ValueError) as exc:
             raise ValueError(f"invalid state dict: {exc}") from exc
