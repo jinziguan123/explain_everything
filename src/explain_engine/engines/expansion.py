@@ -125,7 +125,8 @@ async def expand_one_frontier(
                 source_node=d_id,
                 target_node=target_id,
                 relation_type="causes",
-                confidence=0.6,
+                # Wave A (Phase 7 design §4.3): linear mapping plausibility→confidence
+                confidence=d.plausibility / 5.0,
                 mechanism_description=d.mechanism,
             )
         )
