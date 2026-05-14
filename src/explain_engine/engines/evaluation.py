@@ -61,6 +61,7 @@ async def score_all(state: CognitiveState, llm: LLMClient) -> dict[str, float]:
         representation_reduction = covered / total_concrete
 
         scores: list[int] = []
+        scores_by_edge: dict[str, int] = {}   # Wave A: 记录 per-edge score
         for e in out_edges:
             concrete = state.graph.nodes[e.target_node]
             score = await _score_edge(
@@ -73,9 +74,14 @@ async def score_all(state: CognitiveState, llm: LLMClient) -> dict[str, float]:
                 mechanism=e.mechanism_description,
             )
             scores.append(score)
+            scores_by_edge[e.id] = score        # Wave A: 累计
 
         explanatory_preservation = (sum(scores) / len(scores)) / 5.0
         gains[cid] = representation_reduction * explanatory_preservation
+
+        # Wave A (Phase 7 design §4.2): 写回 edge.confidence = score / 5.0
+        for edge_id, score in scores_by_edge.items():
+            state.graph.edges[edge_id].confidence = score / 5.0
 
     # 降序重排
     state.insight_candidates = sorted(
