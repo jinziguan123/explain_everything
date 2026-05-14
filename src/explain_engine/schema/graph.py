@@ -1,6 +1,6 @@
 """ExplanationGraph — networkx.DiGraph 包装。"""
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 
 import networkx as nx
@@ -130,6 +130,18 @@ class ExplanationGraph:
             for nid, n in self._nodes.items()
             if n.abstraction_level == 1 and nid not in incoming_causes_targets
         )
+
+    def outgoing_edges(self, node_id: str) -> Iterator[RelationEdge]:
+        """返 node_id 的所有 outgoing RelationEdge (Phase 6 propagation 用)。
+
+        Raises:
+            ValueError: node_id 不存在.
+        """
+        if node_id not in self._nodes:
+            raise ValueError(f"node {node_id!r} not found in graph")
+        for edge in self._edges.values():
+            if edge.source_node == node_id:
+                yield edge
 
     def to_dict(self) -> dict:
         return {
