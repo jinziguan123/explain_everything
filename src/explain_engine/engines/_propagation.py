@@ -143,3 +143,69 @@ def next_edge_id(graph: ExplanationGraph) -> str:
     ]
     n = (max(existing) + 1) if existing else 1
     return f"e_{n:03d}"
+
+
+def rollout_from_roots(graph: ExplanationGraph) -> tuple[set[str], set[str]]:
+    """Wave 2 Task 2.1: 从 L2 root 起算的全 graph rollout reachability (BFS).
+
+    哲学锚点 §8.1: "Explanation 必须能 rollout, 否则可能不是真机制".
+    从 L2 root drivers 出发沿 causes (L2→L1) + manifests_as (L1→L0) BFS,
+    收集 reachable L0 集合. 没被触达的 L0 是"孤儿观察", 揭示 graph
+    explanatory_scope 不完整.
+
+    退化处理:
+      - 无 L2 节点 → 用 L1 节点作 roots (避免空 reachable)
+      - 无 L1 + L2 节点 → 返 (empty, all_l0) 或 (empty, empty)
+
+    Wave 4 集成 (Task 4.1 启用):
+      - 跳过 lifecycle_state == "decayed" 的节点 (forward-compat: 用 getattr)
+
+    Args:
+        graph: ExplanationGraph.
+
+    Returns:
+        (reachable_l0_ids, missing_l0_ids) tuple of sets.
+        reachable + missing == 全部 L0 ids.
+    """
+    all_l0 = {nid for nid, n in graph.nodes.items() if n.abstraction_level == 0}
+    if not all_l0:
+        return set(), set()
+
+    roots = {nid for nid, n in graph.nodes.items() if n.abstraction_level == 2}
+    if not roots:
+        # 退化: 无 L2 用 L1 作 roots
+        roots = {nid for nid, n in graph.nodes.items() if n.abstraction_level == 1}
+    if not roots:
+        # 纯 L0 graph
+        return set(), all_l0
+
+    # Wave 4 hook: 跳过 decayed (forward-compat)
+    def _is_decayed(nid: str) -> bool:
+        node = graph.nodes.get(nid)
+        if node is None:
+            return False
+        return getattr(node, "lifecycle_state", "active") == "decayed"
+
+    visited: set[str] = set()
+    queue: list[str] = []
+    for r in roots:
+        if not _is_decayed(r):
+            visited.add(r)
+            queue.append(r)
+
+    while queue:
+        current = queue.pop(0)
+        for edge in graph.outgoing_edges(current):
+            if edge.relation_type not in FORWARD_RELATIONS:
+                continue
+            target = edge.target_node
+            if target in visited:
+                continue
+            if _is_decayed(target):
+                continue
+            visited.add(target)
+            queue.append(target)
+
+    reachable_l0 = visited & all_l0
+    missing_l0 = all_l0 - reachable_l0
+    return reachable_l0, missing_l0
