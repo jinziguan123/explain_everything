@@ -21,7 +21,10 @@ from explain_engine.config import Settings, make_llm_client
 from explain_engine.engines._propagation import WEAK_CHAIN_THRESHOLD
 from explain_engine.engines.bootstrap import bootstrap_phenomena
 from explain_engine.engines.compression import propose_candidates
+from explain_engine.engines.errors import InsufficientObservationsError
 from explain_engine.engines.evaluation import score_all
+from explain_engine.engines.input_validation import MIN_OVERLAP_SCORE
+from explain_engine.engines.input_validation import validate as validate_input
 from explain_engine.hitl.cli_interactive import review_insights, review_phenomena
 from explain_engine.llm.errors import LLMError, SchemaValidationError
 from explain_engine.persistence.session import Session, SessionMeta, SessionStore
@@ -228,11 +231,18 @@ async def _run_compress(session_id: str) -> None:
 def run(
     session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
     budget: int = typer.Option(15, "--budget", help="reasoning loop tick 上限"),
+    no_input_check: bool = typer.Option(
+        False, "--no-input-check",
+        help="Phase 8 Wave 3: 跳过 input validation fail-fast (兜底用)",
+    ),
 ) -> None:
     """Phase 5 reasoning loop: 上溯 driver,自动收敛。
 
     session 必须 stage=done (Phase 4 HITL 2 完成后)。
     跑完 stage 变 converged。
+
+    Phase 8 Wave 3: tick=0 时调 input_validation, overlap_score < MIN_OVERLAP_SCORE
+    fail-fast (exit 2). 用 --no-input-check 跳过.
     """
     from explain_engine.runtime.runtime import run as runtime_run
 
@@ -251,6 +261,45 @@ def run(
         raise typer.Exit(4)
 
     llm = make_llm_client()
+
+    # ── Wave 3 Phase 8: input validation (tick=0 一次性 fail-fast) ──
+    # design §9.4 可证伪性: 系统必须能说"我无法回答这个 question",
+    # 而非强行编造 explanation. tick > 0 (resume) 跳过, --no-input-check 跳过.
+    if not no_input_check and session.state.tick == 0:
+        l0_nodes = [
+            n for n in session.state.graph.nodes.values()
+            if n.abstraction_level == 0
+        ]
+        try:
+            align_report = asyncio.run(
+                validate_input(session.state.root_question, l0_nodes, llm)
+            )
+            session.state.last_input_alignment_report = align_report
+            if align_report.overlap_score < MIN_OVERLAP_SCORE:
+                raise InsufficientObservationsError(
+                    overlap_score=align_report.overlap_score,
+                    question_subject=align_report.question_subject,
+                    observation_subjects=align_report.observation_subjects,
+                    falsifiable_reason=align_report.falsifiable_reason,
+                )
+        except InsufficientObservationsError as exc:
+            console.print(
+                f"\n[red]❌ Input validation failed "
+                f"(overlap={exc.overlap_score}/5)[/red]\n"
+            )
+            console.print(f"Question 主体: {exc.question_subject}")
+            console.print("Observation 主体:")
+            for s in exc.observation_subjects:
+                console.print(f"  - {s}")
+            console.print(f"\n理由: {exc.falsifiable_reason}")
+            console.print(
+                "\n[dim]💡 If you believe this is a false positive, "
+                "retry with --no-input-check[/dim]"
+            )
+            raise typer.Exit(2) from exc
+        except (LLMError, SchemaValidationError) as exc:
+            console.print(f"[red]input validation LLM 失败: {exc}[/red]")
+            raise typer.Exit(1) from exc
 
     def on_tick(_state: CognitiveState) -> None:
         store.save(session)
@@ -444,6 +493,15 @@ def _render_multi_signal(state) -> None:
     )
     if report.missing_l0:
         console.print(f"  missing_l0            {report.missing_l0}")
+
+    # Wave 3 Phase 8: alignment section (when populated by input_validation)
+    if report.input_alignment is not None:
+        score = round(report.input_alignment * 5)
+        console.print(
+            "\n[bold cyan]═══ Falsifiability (Phase 8 Wave 3) ═══[/bold cyan]"
+        )
+        console.print(f"  input_alignment       {score}/5")
+        console.print(f"  falsifiable_reason    {report.falsifiable_reason}")
 
 
 def _render_single_report(report, session, trace_all: bool = False) -> None:

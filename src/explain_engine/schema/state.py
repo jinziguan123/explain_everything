@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal
 from explain_engine.schema.graph import ExplanationGraph
 
 if TYPE_CHECKING:
+    from explain_engine.engines.input_validation import InputAlignmentReport
     from explain_engine.engines.simulation import AcceptanceReport
 
 Action = Literal["expand", "compress", "evaluate", "reflect"]
@@ -85,6 +86,14 @@ class CognitiveState:
     # 不持久化到 JSON: (a) 避免序列化 dataclass 嵌套引用环, (b) 重算成本低,
     # (c) 非业务数据 — runtime 每个 reflect tick 重新刷新, load 后 None 即可.
     last_acceptance_report: "AcceptanceReport | None" = field(default=None, repr=False)
+    # Phase 8 Wave 3 NEW: in-memory only (不持久化), 由 CLI explain run 入口
+    # tick=0 时调 input_validation.validate() 写入. aggregate_acceptance 读取
+    # 注入 input_alignment + falsifiable_reason 到 AcceptanceReport.
+    # 同 last_acceptance_report 不持久化: tick=0 一次性事件, resume session 后
+    # tick > 0 不会重跑, 留 None 即可 (acceptance 字段也跟着 None).
+    last_input_alignment_report: "InputAlignmentReport | None" = field(
+        default=None, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.budget_remaining < 0:

@@ -60,7 +60,11 @@ def test_run_happy_path(tmp_path, monkeypatch) -> None:
     sid = _prepare_done_session(tmp_path)
     with patch("explain_engine.cli.make_llm_client", return_value=FakeLLM()):
         runner = CliRunner()
-        result = runner.invoke(app, ["run", sid, "--budget", "3"])
+        # --no-input-check: 跳过 Wave 3 input_validation (本测试聚焦 runtime loop,
+        # FakeLLM 只 mock expand schema, 不能也回 InputAlignmentReport schema).
+        result = runner.invoke(
+            app, ["run", sid, "--budget", "3", "--no-input-check"]
+        )
     assert result.exit_code == 0, result.output
     # 重新 load 看 stage
     store = SessionStore(directory=tmp_path)

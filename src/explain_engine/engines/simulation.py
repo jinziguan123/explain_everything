@@ -227,6 +227,16 @@ def aggregate_acceptance(state: CognitiveState) -> AcceptanceReport:
     all_l0 = {nid for nid, n in state.graph.nodes.items() if n.abstraction_level == 0}
     rollout_coverage = (len(reachable) / len(all_l0)) if all_l0 else 1.0
 
+    # ── Wave 3 Task 3.2: 注入 alignment 字段 (如果 input_validation 跑过) ──
+    # state.last_input_alignment_report 由 CLI explain run 入口 tick=0 时写入.
+    # 没跑过 (旧 session / --no-input-check / tick > 0 resume) → None, 不影响 report.
+    input_alignment: float | None = None
+    falsifiable_reason: str | None = None
+    align_report = getattr(state, "last_input_alignment_report", None)
+    if align_report is not None:
+        input_alignment = align_report.overlap_score / 5.0
+        falsifiable_reason = align_report.falsifiable_reason
+
     L1_L2 = sorted(get_all_L1_L2(state.graph))
     if not L1_L2:
         # 无 L1+L2: 没有 consistency 可算, 但 rollout 仍可信. only-L0 graph
@@ -236,6 +246,8 @@ def aggregate_acceptance(state: CognitiveState) -> AcceptanceReport:
             avg_essentialness=0.0,
             rollout_coverage=rollout_coverage,
             missing_l0=sorted(missing),
+            input_alignment=input_alignment,
+            falsifiable_reason=falsifiable_reason,
         )
 
     reports = check_consistency_batch(state)
@@ -277,4 +289,6 @@ def aggregate_acceptance(state: CognitiveState) -> AcceptanceReport:
         essentialness_spread=essentialness_spread,
         rollout_coverage=rollout_coverage,
         missing_l0=sorted(missing),
+        input_alignment=input_alignment,
+        falsifiable_reason=falsifiable_reason,
     )
