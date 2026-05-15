@@ -22,10 +22,30 @@
 
 ## Status
 
-**Phase 7 milestone (2026-05-15)** — Confidence + Forward Prediction + Reflection。
-389 tests pass，ruff 0。Phase 0-7 全部实施完，Phase 8 直接 motivation：
-multi-signal acceptance + reflect/re_expand 重设计 + question-graph alignment
-（详见 [Phase 7 acceptance evidence](docs/plans/2026-05-15-cognitive-engine-phase-7-acceptance.md)）。
+**Phase 8 milestone (2026-05-15)** — Reflect Redesign + Multi-Signal + Falsifiability + Lifecycle。
+482 tests pass，ruff 0。Phase 0-8 全部实施完，Phase 9 直接 motivation：
+cross-session memory consolidation / theory formation / lifecycle 完整 8 阶段
+（详见 [Phase 8 acceptance evidence](docs/plans/2026-05-15-cognitive-engine-phase-8-acceptance.md)）。
+
+## Phase 8 (2026-05-15) — Reflect Redesign + Multi-Signal + Falsifiability + Lifecycle
+
+修 Phase 7 acceptance 暴露的 4 个根本问题:
+
+- ✅ re_expand 死循环 → `expand_downward` 替换 (Wave 1, 哲学 §8.1 rollout)
+- ✅ 单信号 acceptance → 6 multi-signal + rollout_coverage (Wave 2, 哲学 §11.3)
+- ✅ Mismatch 失明 → `input_validation` fail-fast (Wave 3, 哲学 §9.4 可证伪性)
+- ✅ 节点无生命 → Variable lifecycle 3 阶段 + fitness + auto decay (Wave 4, 哲学 §6.1/§9.2/§9.3)
+
+新 CLI flag:
+
+- `explain run --no-input-check` — 跳过入口 question/observations 对齐校验 (兜底用)
+- `explain check` 现含 "Multi-signal acceptance" + "Falsifiability" 两个 section
+
+文档:
+
+- design: [docs/plans/2026-05-15-cognitive-engine-phase-8-design.md](docs/plans/2026-05-15-cognitive-engine-phase-8-design.md)
+- plan: [docs/plans/2026-05-15-cognitive-engine-phase-8-plan.md](docs/plans/2026-05-15-cognitive-engine-phase-8-plan.md)
+- acceptance: [docs/plans/2026-05-15-cognitive-engine-phase-8-acceptance.md](docs/plans/2026-05-15-cognitive-engine-phase-8-acceptance.md)
 
 ## Phase 7 (2026-05-15) — Confidence + Forward Prediction + Reflection
 

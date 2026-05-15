@@ -1,0 +1,397 @@
+{
+  "meta": {
+    "session_id": "s_f3beb777",
+    "question": "为什么宗教战争是最血腥的战争",
+    "stage": "converged",
+    "created_at": 1778679667.150868,
+    "updated_at": 1778817358.928483
+  },
+  "state": {
+    "graph": {
+      "root_question": "为什么宗教战争是最血腥的战争",
+      "nodes": {
+        "p_001": {
+          "id": "p_001",
+          "name": "神圣不可妥协性",
+          "description": "宗教教义常被视为绝对真理，信徒认为背离即背叛，导致战争目标不是击败军队而是消灭异端，拒绝投降或和谈。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_002": {
+          "id": "p_002",
+          "name": "最高奖赏激发狂热",
+          "description": "宗教承诺殉道者获得永恒福报或天堂地位，使战士不惧死亡，愿意采取极端暴力手段，提升战争烈度。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_003": {
+          "id": "p_003",
+          "name": "跨界动员能力",
+          "description": "宗教认同可跨越民族、阶级、地域，将不同背景的人群整合为统一战斗力量，形成大规模、多战线的冲突。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_004": {
+          "id": "p_004",
+          "name": "神权政治结构",
+          "description": "宗教领袖同时掌握军政大权，政教合一决策链短，战争动员效率高，且缺乏世俗制衡，易升级为总体战。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_005": {
+          "id": "p_005",
+          "name": "象征性目标放大化",
+          "description": "宗教战争常围绕圣地、圣物或信仰象征展开，这些目标具有超乎军事价值的心理意义，导致守方死守、攻方死攻。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_006": {
+          "id": "p_006",
+          "name": "排他性群体认同",
+          "description": "宗教区分‘信徒’与‘异教徒’，削弱对敌方的人道认同，允许甚至鼓励对平民的暴行，如屠城、奴役。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_007": {
+          "id": "p_007",
+          "name": "世代仇恨积累",
+          "description": "宗教战争记忆通过家庭、社区代代相传，引发复仇循环，使冲突持续时间远超初始原因，血腥程度递增。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_008": {
+          "id": "p_008",
+          "name": "外部势力干预",
+          "description": "同宗教的不同派系常获得外部宗教政权或跨国组织的支持，引入武器、资金和志愿军，扩大战争规模与强度。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_009": {
+          "id": "p_009",
+          "name": "教义内部分裂",
+          "description": "同一宗教的分支（如天主教与新教、伊斯兰教什叶派与逊尼派）争夺正统性，内战造成的伤亡有时超过对外战争。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_010": {
+          "id": "p_010",
+          "name": "世俗事务神圣化",
+          "description": "宗教战争常将经济资源、领土控制等世俗利益包裹在神学辩论中，使有限目标变为不可退让的终极原则。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_011": {
+          "id": "p_011",
+          "name": "仪式化暴力",
+          "description": "宗教仪式（如献祭、圣战）将暴力行为赋予神圣意义，降低参与者对残酷行为的心理抑制，加剧杀戮。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "p_012": {
+          "id": "p_012",
+          "name": "教育系统固化对立",
+          "description": "宗教学校或家庭宣传他方为邪恶、非人，从幼年培养敌意，使战争爆发时民众支持无条件且持久。",
+          "abstraction_level": 0,
+          "confidence": 0.7,
+          "epistemic": "observation",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "c_001": {
+          "id": "c_001",
+          "name": "绝对化价值框架",
+          "description": "指将目标或教义视为绝对真理，任何妥协或偏离都等同于背叛，从而消除谈判空间。不同于一般战争中的相对利益博弈。",
+          "abstraction_level": 1,
+          "confidence": 0.7,
+          "epistemic": "insight",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "c_003": {
+          "id": "c_003",
+          "name": "非人化认知建构",
+          "description": "指通过宗教分类（信徒/异教徒）和教育对立将敌方归为劣等或邪恶，削弱对其人道的认同，允许暴行。与世俗的种族歧视或政治宣传类似，但宗教提供了神圣化依据。",
+          "abstraction_level": 1,
+          "confidence": 0.7,
+          "epistemic": "insight",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "c_004": {
+          "id": "c_004",
+          "name": "跨层次动员网络",
+          "description": "指宗教认同超越民族、阶级、地域等界限，并结合神权政治的高效决策，形成大规模、多战线且缺乏制衡的动员能力。不同于世俗联盟的松散或民主制的协商延迟。",
+          "abstraction_level": 1,
+          "confidence": 0.7,
+          "epistemic": "insight",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "d_001": {
+          "id": "d_001",
+          "name": "文本原教旨主义",
+          "description": "对宗教经典（如《圣经》《古兰经》）进行严格字面解读，拒绝历史语境化和隐喻解释，导致教义僵化。",
+          "abstraction_level": 2,
+          "confidence": 0.6,
+          "epistemic": "inference",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "d_002": {
+          "id": "d_002",
+          "name": "殉道与彼岸奖励信念",
+          "description": "相信为信仰丧命可获永恒奖赏（如天堂、七十二处女），降低对生存的本能依赖。",
+          "abstraction_level": 2,
+          "confidence": 0.6,
+          "epistemic": "inference",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "d_003": {
+          "id": "d_003",
+          "name": "群体身份与异教徒边界强化",
+          "description": "通过强调『信者』与『异教徒』的截然区分，构建高度内聚的排他性群体身份。",
+          "abstraction_level": 2,
+          "confidence": 0.6,
+          "epistemic": "inference",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "d_004": {
+          "id": "d_004",
+          "name": "神圣化道德二元论",
+          "description": "将敌我冲突视为宇宙善恶之战，赋予杀戮以神圣使命感，消除道德疑虑。",
+          "abstraction_level": 2,
+          "confidence": 0.6,
+          "epistemic": "inference",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "d_005": {
+          "id": "d_005",
+          "name": "教义豁免机制",
+          "description": "宗教教义或神权权威对杀戮行为提供赦免或赎罪通道，降低个体心理负担。",
+          "abstraction_level": 2,
+          "confidence": 0.6,
+          "epistemic": "inference",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "d_006": {
+          "id": "d_006",
+          "name": "超验性普世使命",
+          "description": "宗教领袖或运动认定自身信仰具有超越一切世俗认同的普世效力，负有拯救全人类或征服世界的天命。",
+          "abstraction_level": 2,
+          "confidence": 0.6,
+          "epistemic": "inference",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "d_007": {
+          "id": "d_007",
+          "name": "圣战与叛教者双重威胁框架",
+          "description": "同时将外部异教徒和内部叛教者/温和派定义为必须清除的威胁，形成内外兼攻的动员逻辑。",
+          "abstraction_level": 2,
+          "confidence": 0.6,
+          "epistemic": "inference",
+          "evidence_ids": [],
+          "source": "llm"
+        },
+        "d_008": {
+          "id": "d_008",
+          "name": "仪式化暴力记忆与神圣仇恨传递",
+          "description": "通过周期性的宗教仪式（如圣战纪念日、殉道者周年）、宗教学校教育和口传历史，将历史宗教战争中的暴力记忆转化为跨越代际的集体仇恨与复仇义务。",
+          "abstraction_level": 2,
+          "confidence": 0.6,
+          "epistemic": "inference",
+          "evidence_ids": [],
+          "source": "llm"
+        }
+      },
+      "edges": {
+        "e_001": {
+          "id": "e_001",
+          "source_node": "c_001",
+          "target_node": "p_001",
+          "relation_type": "manifests_as",
+          "confidence": 0.8,
+          "mechanism_description": "教义的绝对真理性使信徒认为背离即背叛，战争目标从击败变成消灭，拒绝和谈。"
+        },
+        "e_002": {
+          "id": "e_002",
+          "source_node": "c_001",
+          "target_node": "p_010",
+          "relation_type": "manifests_as",
+          "confidence": 0.2,
+          "mechanism_description": "世俗事务被神圣化后，有限利益变为不可退让的神学原则，丧失妥协余地。"
+        },
+        "e_005": {
+          "id": "e_005",
+          "source_node": "c_003",
+          "target_node": "p_006",
+          "relation_type": "manifests_as",
+          "confidence": 0.2,
+          "mechanism_description": "信徒/异教徒的区分导致对敌方人道认同的削弱，允许甚至鼓励对平民的暴行。"
+        },
+        "e_006": {
+          "id": "e_006",
+          "source_node": "c_003",
+          "target_node": "p_012",
+          "relation_type": "manifests_as",
+          "confidence": 0.4,
+          "mechanism_description": "教育系统固化对立，使他方被宣传为邪恶、非人，从而民众支持无条件的持久战争。"
+        },
+        "e_007": {
+          "id": "e_007",
+          "source_node": "c_004",
+          "target_node": "p_003",
+          "relation_type": "manifests_as",
+          "confidence": 0.4,
+          "mechanism_description": "宗教认同跨越民族、阶级、地域，整合不同人群为统一力量，形成大规模冲突。"
+        },
+        "e_008": {
+          "id": "e_008",
+          "source_node": "c_004",
+          "target_node": "p_004",
+          "relation_type": "manifests_as",
+          "confidence": 0.8,
+          "mechanism_description": "神权政治结构下宗教领袖兼掌军政，决策链短，动员效率高，且缺乏制衡易升级。"
+        },
+        "e_009": {
+          "id": "e_009",
+          "source_node": "d_001",
+          "target_node": "c_001",
+          "relation_type": "causes",
+          "confidence": 0.6,
+          "mechanism_description": "文本原教旨主义使信徒将经典中的战争叙事（如『圣战』『消灭异教徒』）视为直接命令，从而将‘绝对化价值框架’确立为信仰核心，任何妥协都被视为对神圣文本的背叛。"
+        },
+        "e_010": {
+          "id": "e_010",
+          "source_node": "d_002",
+          "target_node": "c_001",
+          "relation_type": "causes",
+          "confidence": 0.6,
+          "mechanism_description": "该信念使信徒视死亡为荣耀而非终结，从而强化‘绝对化价值框架’：既然牺牲有永恒回报，则战斗目标必须绝对化，谈判或投降等于放弃彼岸奖赏，故拒绝妥协。"
+        },
+        "e_011": {
+          "id": "e_011",
+          "source_node": "d_003",
+          "target_node": "c_001",
+          "relation_type": "causes",
+          "confidence": 0.6,
+          "mechanism_description": "强大的群体身份使成员将外部敌人妖魔化，内部团结极度依赖教义纯洁性。任何偏离‘绝对化价值框架’的妥协都会被解读为群体身份的瓦解威胁，从而迫使领袖和成员维持极端立场以维系群体凝聚力。"
+        },
+        "e_012": {
+          "id": "e_012",
+          "source_node": "d_004",
+          "target_node": "c_003",
+          "relation_type": "causes",
+          "confidence": 0.6,
+          "mechanism_description": "宗教提供一套绝对道德框架，将自身正义化、对方邪恶化，使暴力成为清除邪恶的神圣行为。这种二元论压制了平常的不杀生道德，催生非人化认知。"
+        },
+        "e_013": {
+          "id": "e_013",
+          "source_node": "d_005",
+          "target_node": "c_003",
+          "relation_type": "causes",
+          "confidence": 0.6,
+          "mechanism_description": "通过忏悔、赎罪券、清洗仪式等机制，教义承诺杀戮后可被宽恕，使信徒能持续实施暴行而免于永久道德谴责，加速非人化认知建构。"
+        },
+        "e_014": {
+          "id": "e_014",
+          "source_node": "d_006",
+          "target_node": "c_004",
+          "relation_type": "causes",
+          "confidence": 0.6,
+          "mechanism_description": "超验性普世使命使得宗教冲突被定义为非零和博弈的终极救赎战争，任何边界、谈判或妥协都是对神意的背叛，因此动员网络会无限扩大战线（从区域部落扩展到跨国信徒），同时拒绝任何冲突降级机制。跨层次动员网络正是这种不受地域限制、不受制衡的使命驱动力的组织表达。"
+        },
+        "e_015": {
+          "id": "e_015",
+          "source_node": "d_007",
+          "target_node": "c_004",
+          "relation_type": "causes",
+          "confidence": 0.6,
+          "mechanism_description": "当冲突框架同时锁定外部敌人（异教徒）和内部温和派/叛教者时，跨层次动员网络就失去了在民族、阶级或地域层面建立缓冲或议和的可能性；任何内部政治力量都被宗教法庭或护卫者组织审查，使得动员网络异常紧密、无制衡且持久。"
+        },
+        "e_016": {
+          "id": "e_016",
+          "source_node": "d_008",
+          "target_node": "c_004",
+          "relation_type": "causes",
+          "confidence": 0.6,
+          "mechanism_description": "神圣仇恨传递机制使跨层次动员网络不依赖直接利益或地缘危机，而是基于代际传递的复仇脚本；任何新事件都会被嵌入既有叙事框架，导致动员网络不必等待现实摩擦即可再次激活，且动员规模不受现实利益边界限制。"
+        }
+      }
+    },
+    "budget_remaining": 12,
+    "root_question": "为什么宗教战争是最血腥的战争",
+    "active_frontier": [],
+    "insight_candidates": [],
+    "tick": 3,
+    "last_gain_tick": 2,
+    "last_gains": {},
+    "reasoning_trace": [
+      {
+        "tick": 0,
+        "action": "expand",
+        "target_node_id": "c_001",
+        "gain_delta": 0.8666666666666667,
+        "llm_calls": 1,
+        "timestamp": "2026-05-14T03:41:52.154947+00:00",
+        "reflection_action": null
+      },
+      {
+        "tick": 1,
+        "action": "expand",
+        "target_node_id": "c_003",
+        "gain_delta": 0.7,
+        "llm_calls": 1,
+        "timestamp": "2026-05-14T03:41:55.490697+00:00",
+        "reflection_action": null
+      },
+      {
+        "tick": 2,
+        "action": "expand",
+        "target_node_id": "c_004",
+        "gain_delta": 0.7333333333333333,
+        "llm_calls": 1,
+        "timestamp": "2026-05-14T03:42:02.654905+00:00",
+        "reflection_action": null
+      }
+    ],
+    "last_reflection_change_tick": 0
+  }
+}
