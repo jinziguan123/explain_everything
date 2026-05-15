@@ -101,29 +101,46 @@ class TestComputeFitness:
         assert isinstance(result, float)
 
     def test_redundant_siblings_lower_fitness(self) -> None:
-        """同 level + 同 outgoing target set → redundancy 加分项扣 fitness."""
-        n_unique = _node("c_001", 1, activation=1.0, stability=0.5)
-        n_sib1 = _node("c_002", 1, activation=1.0, stability=0.5)
-        n_sib2 = _node("c_003", 1, activation=1.0, stability=0.5)
-        p = _node("p_001", 0)
+        """同 graph 内, 同 outgoing-degree 节点, 但 redundancy 不同 → fitness 不同.
+
+        Isolation: equalize centrality so the only differentiator is redundancy.
+        """
+        # c_redundant + c_dup1 + c_dup2 都指向 p_shared (3 redundant siblings)
+        # c_unique 指向 p_other (no siblings)
+        # 4 个 L1 + 2 个 L0, 所有 L1 都有 1 outgoing edge → centrality 相同
+        c_red = _node("c_red", 1, activation=1.0, stability=0.5)
+        c_dup1 = _node("c_dup1", 1, activation=1.0, stability=0.5)
+        c_dup2 = _node("c_dup2", 1, activation=1.0, stability=0.5)
+        c_unique = _node("c_unique", 1, activation=1.0, stability=0.5)
+        p_shared = _node("p_shared", 0)
+        p_other = _node("p_other", 0)
         state = _state_with(
-            [n_unique, n_sib1, n_sib2, p],
+            [c_red, c_dup1, c_dup2, c_unique, p_shared, p_other],
             edges=[
-                ("e_001", "c_001", "p_001", "manifests_as", 0.7),
-                ("e_002", "c_002", "p_001", "manifests_as", 0.7),  # 与 c_001 同 target
-                ("e_003", "c_003", "p_001", "manifests_as", 0.7),  # 与 c_001 同 target
+                ("e_001", "c_red", "p_shared", "manifests_as", 0.7),
+                ("e_002", "c_dup1", "p_shared", "manifests_as", 0.7),
+                ("e_003", "c_dup2", "p_shared", "manifests_as", 0.7),
+                ("e_004", "c_unique", "p_other", "manifests_as", 0.7),
             ],
         )
-        # c_002 has 2 siblings with same target ({p_001}) → redundancy 0.4
-        # c_001 has 2 siblings with same target ({p_001}) → redundancy 0.4
-        # All have same fitness because all are equally redundant.
-        # Compare with isolated baseline:
-        state2 = _state_with(
-            [_node("c_999", 1, activation=1.0, stability=0.5),
-             _node("p_999", 0)],
-            edges=[("e_001", "c_999", "p_999", "manifests_as", 0.7)],
+
+        # Same acceptance report for all → equal explanatory
+        from explain_engine.engines.simulation import AcceptanceReport
+        state.last_acceptance_report = AcceptanceReport(
+            avg_consistency=0.5, avg_essentialness=0.5,
+            per_l1={"c_red": 0.5, "c_dup1": 0.5, "c_dup2": 0.5, "c_unique": 0.5},
         )
-        f_redundant = compute_fitness(state.graph.nodes["c_001"], state)
-        f_unique = compute_fitness(state2.graph.nodes["c_999"], state2)
-        # Redundant should be lower (or at least not higher)
-        assert f_redundant < f_unique
+
+        f_red = compute_fitness(state.graph.nodes["c_red"], state)
+        f_unique = compute_fitness(state.graph.nodes["c_unique"], state)
+
+        # Both have 1 outgoing edge, but:
+        # - c_red has 2 siblings with same target set {p_shared} → redundancy 0.4
+        # - c_unique has 0 siblings with same target set {p_other} → redundancy 0.0
+        # Centrality may differ slightly (p_shared has 3 incoming vs p_other 1),
+        # but L1 nodes themselves all have degree=1 outgoing.
+        # The redundancy term must dominate.
+        assert f_red < f_unique
+        # Stronger: gap should be at least the redundancy delta (0.4)
+        # minus any centrality compensation. Verify gap is meaningful.
+        assert (f_unique - f_red) >= 0.2  # roughly redundancy 0.4 - centrality compensation

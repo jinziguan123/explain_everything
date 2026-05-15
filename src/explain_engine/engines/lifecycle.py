@@ -23,6 +23,8 @@ STALE_TO_DECAYED_TICKS: int = 5
 """节点在 stale 状态停留多少 tick 后, 升级为 decayed."""
 
 # Fitness 公式权重 (acceptance 后调优)
+W_EXPLANATORY: float = 1.0
+"""主项权重 (顶层 §11.3 '最大解释力' 占主导, 故权重 1.0 而其他项 < 1.0)."""
 W_REUSE: float = 0.3
 W_STABILITY: float = 0.2
 W_CENTRALITY: float = 0.3
@@ -40,8 +42,17 @@ def compute_fitness(node: VariableNode, state: CognitiveState) -> float:
       ⏳ predictive_utility [Phase 9+, 需要 prediction 命中率]
       ⏳ vagueness         [Phase 9+, 需要 NLP 评估]
 
+    L0 nodes:
+      compute_fitness 不区分 abstraction_level — 任何节点都返回一个浮点数.
+      但 L0 (concrete observations) 的 explanatory_power 信号没意义 (L0 是 ground
+      truth, 不被 consistency_score 评估). L0 默认走 explanatory=0.5.
+
+      约定: Task 4.2 update_lifecycle / pick_decay_target 应只迭代 L1+L2,
+      不对 L0 做 lifecycle 决策 (L0 = facts, 不是 evolving theories).
+      调用方负责过滤; engine 不在此 raise (避免上层重复检查).
+
     Returns:
-        fitness ∈ [0.0, ~1.5]. 越大 = 越健康.
+        fitness ∈ [0.0, 1.8]. 越大 = 越健康.
     """
     # explanatory power (Wave 2 信号)
     explanatory: float = 0.5  # 中性默认 (L0 / 无 report)
@@ -92,7 +103,7 @@ def compute_fitness(node: VariableNode, state: CognitiveState) -> float:
     redundancy = min(siblings_with_same_targets * 0.2, 0.5)
 
     fitness = (
-        explanatory
+        explanatory * W_EXPLANATORY
         + reuse * W_REUSE
         + stability * W_STABILITY
         + centrality * W_CENTRALITY
