@@ -33,6 +33,8 @@ class ConsistencyReport:
     或 contribution_breakdown[k]=v 这种 inner mutable container mutate.
     依赖 downstream (CLI render 等) 自律 read-only. Phase 7+ 真要严格 immutable
     再换 tuple + MappingProxyType.
+
+    单 target 报告; 全 graph 聚合见 AcceptanceReport.
     """
 
     target_id: str
@@ -207,22 +209,33 @@ def aggregate_acceptance(state: CognitiveState) -> AcceptanceReport:
     """Wave 2 Task 2.2: 全 graph 聚合 multi-signal report.
 
     流程:
-      1. check_consistency_batch (现有 Phase 6) → list[ConsistencyReport] per-target
-      2. 拆 per_l1 (consistency_score) / per_l2 (essentialness_score) dict
-      3. 算 avg / spread / weak_chains_l1s / lowest_l1
-      4. rollout_from_roots → rollout_coverage / missing_l0
+      1. rollout_from_roots → rollout_coverage / missing_l0 (无论 L1+L2 是否存在)
+      2. check_consistency_batch (现有 Phase 6) → list[ConsistencyReport] per-target
+      3. 拆 per_l1 (consistency_score) / per_l2 (essentialness_score) dict
+      4. 算 avg / spread / weak_chains_l1s / lowest_l1
 
     不调 LLM. 只读, 不改 state.
     """
-    # Import 在函数体内避免 circular: reflection.py imports from simulation.py
+    # Import 在函数体内避免 circular: reflection.py imports from simulation.py.
+    # TODO(Phase 8 housekeeping): extract LOW_CONSISTENCY_THRESHOLD to
+    # engines/_thresholds.py, 让 simulation 和 reflection 都 top-level import,
+    # 移除此 workaround.
     from explain_engine.engines.reflection import LOW_CONSISTENCY_THRESHOLD
+
+    # ── Wave 2 rollout coverage (无论是否有 L1+L2 都算, 防 only-L0 graph 报错默认) ──
+    reachable, missing = rollout_from_roots(state.graph)
+    all_l0 = {nid for nid, n in state.graph.nodes.items() if n.abstraction_level == 0}
+    rollout_coverage = (len(reachable) / len(all_l0)) if all_l0 else 1.0
 
     L1_L2 = sorted(get_all_L1_L2(state.graph))
     if not L1_L2:
-        # 空 graph 安全默认
+        # 无 L1+L2: 没有 consistency 可算, 但 rollout 仍可信. only-L0 graph
+        # 此时 rollout_coverage = 0 (L0 都触达不到), missing_l0 = all_l0.
         return AcceptanceReport(
             avg_consistency=0.0,
             avg_essentialness=0.0,
+            rollout_coverage=rollout_coverage,
+            missing_l0=sorted(missing),
         )
 
     reports = check_consistency_batch(state)
@@ -252,11 +265,6 @@ def aggregate_acceptance(state: CognitiveState) -> AcceptanceReport:
     essentialness_spread = (
         (max(per_l2.values()) - min(per_l2.values())) if per_l2 else 0.0
     )
-
-    # Wave 2 rollout coverage (Q6.2: 也服务 Wave 3 rollout_alignment)
-    reachable, missing = rollout_from_roots(state.graph)
-    all_l0 = {nid for nid, n in state.graph.nodes.items() if n.abstraction_level == 0}
-    rollout_coverage = (len(reachable) / len(all_l0)) if all_l0 else 1.0
 
     return AcceptanceReport(
         avg_consistency=avg_consistency,
