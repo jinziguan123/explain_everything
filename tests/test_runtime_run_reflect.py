@@ -245,3 +245,49 @@ async def test_reflection_trace_entry_has_action(mocker) -> None:
     assert reflect_entries[0].reflection_action in (
         "expand-downward", "re-expand", "prune", "stop", "continue",
     )
+
+
+@pytest.mark.asyncio
+async def test_aggregate_acceptance_called_each_reflect_tick(mocker) -> None:
+    """Wave 2 I1: runtime 必须在每个 reflect tick 之前刷新 cache, 不能只调一次.
+
+    Regression guard: 如果 runtime 退化为 'if cache is None: aggregate' 模式,
+    cache 会在第一个 reflect tick 后永不更新, 所有后续 reflect 用 stale 数据.
+    """
+    # 构造 state: 1 L1 + 1 L0, 强 chain (无 weak), 让 reflect 多次返 continue
+    g = ExplanationGraph(root_question="q")
+    g.add_node(VariableNode(
+        id="c_001", name="strong", description="d",
+        abstraction_level=1, confidence=0.9, epistemic="insight",
+    ))
+    g.add_node(VariableNode(
+        id="p_001", name="p", description="d",
+        abstraction_level=0, confidence=0.9, epistemic="observation",
+    ))
+    g.add_edge(RelationEdge(
+        id="e_001", source_node="c_001", target_node="p_001",
+        relation_type="manifests_as", confidence=0.9, mechanism_description="m",
+    ))
+    state = CognitiveState(
+        graph=g, budget_remaining=10, root_question="q",
+        insight_candidates=["c_001"],
+    )
+
+    # Mock aggregate_acceptance to count calls
+    mock_agg = mocker.patch(
+        "explain_engine.runtime.runtime.aggregate_acceptance",
+        return_value=_make_acceptance(per_l1={"c_001": 0.9}),  # strong, no weak
+    )
+
+    # Mock scheduler to force "reflect" action repeatedly
+    sched = mocker.MagicMock()
+    sched.pick.side_effect = ["reflect", "reflect", "reflect"]
+
+    fake_llm = mocker.MagicMock()
+    await run(state, llm=fake_llm, budget=3, scheduler=sched)
+
+    # Each reflect tick MUST trigger aggregate_acceptance refresh
+    assert mock_agg.call_count == 3, (
+        f"Expected aggregate_acceptance called once per reflect tick (3 ticks); "
+        f"got {mock_agg.call_count}. Cache refresh regression!"
+    )

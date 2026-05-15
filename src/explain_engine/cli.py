@@ -413,16 +413,17 @@ def _render_batch_reports(reports, session) -> None:
 def _render_multi_signal(state) -> None:
     """Wave 2 Phase 8: 渲染 AcceptanceReport multi-signal section.
 
-    显示 6 个 Wave 2 信号 + Wave 3 alignment 占位 (后者目前总是 None,
-    Task 3.2 将在 explain run 集成 input_validation 后填充).
+    优先读 state.last_acceptance_report (Wave 3 input_alignment / falsifiable_reason
+    存活), fallback 当场聚合 (CLI from-disk load 时 cache 必为 None).
     """
-    from explain_engine.engines.simulation import aggregate_acceptance
-
-    try:
-        report = aggregate_acceptance(state)
-    except Exception as exc:
-        console.print(f"\n[dim](无法计算 multi-signal: {exc})[/dim]")
-        return
+    report = getattr(state, "last_acceptance_report", None)
+    if report is None:
+        from explain_engine.engines.simulation import aggregate_acceptance
+        try:
+            report = aggregate_acceptance(state)
+        except Exception as exc:
+            console.print(f"\n[dim](无法计算 multi-signal: {exc})[/dim]")
+            return
 
     console.print(
         "\n[bold cyan]═══ Multi-signal acceptance (Phase 8 Wave 2) ═══[/bold cyan]"

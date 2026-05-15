@@ -77,9 +77,10 @@ def _exhausted_expansion_targets(state: CognitiveState) -> set[str]:
 def reflect(state: CognitiveState) -> tuple[ReflectionAction, str | None]:
     """Reflection decision (Wave 1 + Wave 2 重写). 0 LLM call.
 
-    Wave 2 Task 2.3 改: 优先用 cached state.last_acceptance_report.weak_chain_l1s
-    + per_l2 (runtime 在 reflect tick 之前刷新). fallback 当场调
-    aggregate_acceptance — 兼容老 caller / 单测.
+    Wave 2 Task 2.3 改: 优先用 cached state.last_acceptance_report 的
+    weak_chain_l1s + per_l2 (production runtime 在 reflect tick 前必刷新,
+    见 runtime.run). Fallback 当场调 aggregate_acceptance — 仅供 unit test
+    直接调 reflect() 跳过 runtime orchestration; production 路径不会触发.
 
     决策优先级 (Wave 1 改): expand-downward > prune > stop > continue.
 
