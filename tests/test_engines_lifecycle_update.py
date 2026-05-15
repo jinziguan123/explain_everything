@@ -81,3 +81,28 @@ class TestUpdateLifecycle:
         changes = update_lifecycle(state, current_tick=1)
         # active stays active → no entry in changes
         assert "c_001" not in changes
+
+    def test_stale_node_decays_after_save_load(self) -> None:
+        """Regression: I1 — stale_since_tick must be persisted on VariableNode,
+        not state._stale_since_ticks dict, so save+load preserves stale timing.
+        """
+        state = _state_with_low_fitness_l1()
+        # First update → stale at tick=1
+        update_lifecycle(state, current_tick=1)
+        assert state.graph.nodes["c_001"].lifecycle_state == "stale"
+        assert state.graph.nodes["c_001"].stale_since_tick == 1
+
+        # Simulate save → load by reconstructing node from dict
+        node_dict = state.graph.nodes["c_001"].model_dump()
+        reloaded_node = VariableNode.model_validate(node_dict)
+        assert reloaded_node.lifecycle_state == "stale"
+        assert reloaded_node.stale_since_tick == 1
+
+        # Replace node in graph (simulate full session reload — replace_node
+        # 保留 id 不变, 仅替 metadata, 等价于 from_dict 重建后挂回 graph).
+        state.graph.replace_node("c_001", reloaded_node)
+
+        # Now run update_lifecycle at tick=1+STALE_TO_DECAYED_TICKS
+        # Should decay (because stale_since_tick=1 was preserved through save/load)
+        update_lifecycle(state, current_tick=1 + STALE_TO_DECAYED_TICKS)
+        assert state.graph.nodes["c_001"].lifecycle_state == "decayed"

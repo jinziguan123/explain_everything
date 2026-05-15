@@ -59,4 +59,11 @@ class VariableNode(BaseModel):
 
     lifecycle_state: LifecycleState = "active"
 
+    stale_since_tick: int | None = Field(default=None)
+    """Wave 4 Phase 8: 节点最后一次进入 stale 状态的 tick. None = 当前不是 stale.
+
+    用于计算 stale → decayed 转换 (累积 STALE_TO_DECAYED_TICKS=5 后).
+    Persisted to JSON to survive session save/load (修 review I1: in-memory
+    dict 在 from_dict 后丢, stale 节点 resume 后永不 decay)."""
+
     model_config = {"frozen": False}  # MVP 可变，v0.2 可考虑 frozen + new_with()

@@ -119,24 +119,26 @@ def update_lifecycle(
     """Wave 4 Task 4.2: 在每个 reflect tick 推进所有 L1+L2 节点的 lifecycle.
 
     状态机:
-        active → stale: fitness < STALE_THRESHOLD
+        active → stale: fitness < STALE_THRESHOLD (set node.stale_since_tick = current_tick)
         stale → decayed: stale 累积 ≥ STALE_TO_DECAYED_TICKS
-        stale → active: fitness 回到 ≥ STALE_THRESHOLD (复活)
+        stale → active: fitness 回到 ≥ STALE_THRESHOLD (复活, clear stale_since_tick)
         decayed → ?  (Phase 8 不复活; Phase 9 memory consolidation 处理)
 
-    L0 nodes 跳过 (Task 4.1 M4 contract: L0 是 ground truth, 不参与 lifecycle).
+    L0 nodes 跳过 (Task 4.1 M4 contract).
+
+    持久化设计 (修 review I1):
+        stale_since_tick 是 VariableNode 字段 (持久化), 不是 state 上的 in-memory dict.
+        save+load 后 stale 节点能正确从原始 stale_since_tick 续算 → decayed.
 
     副作用:
         - 更新 node.lifecycle_state
-        - 更新 node.age_ticks (= current_tick 简化, Phase 9 加 birth_tick)
-        - 在 state 上挂 _stale_since_ticks dict (in-memory only, 不持久化)
+        - 更新 node.age_ticks
+        - 更新 node.stale_since_tick (set on enter stale, clear on recover/decay)
 
     Returns:
         {node_id: new_state} 变更日志 (只含状态变更的节点).
     """
     changes: dict[str, str] = {}
-    if not hasattr(state, "_stale_since_ticks"):
-        state._stale_since_ticks = {}
 
     for nid, node in state.graph.nodes.items():
         # L0 跳过 (Task 4.1 M4 contract)
@@ -153,18 +155,29 @@ def update_lifecycle(
         if node.lifecycle_state == "active":
             if fitness < STALE_THRESHOLD:
                 node.lifecycle_state = "stale"
-                state._stale_since_ticks[nid] = current_tick
+                node.stale_since_tick = current_tick
                 changes[nid] = "stale"
 
         elif node.lifecycle_state == "stale":
             if fitness >= STALE_THRESHOLD:
                 node.lifecycle_state = "active"
-                state._stale_since_ticks.pop(nid, None)
+                node.stale_since_tick = None
                 changes[nid] = "active"
             else:
-                stale_since = state._stale_since_ticks.get(nid, current_tick)
+                # stale_since_tick 必为 int (进 stale 时设的)
+                # 但防御性: 如果是 None (e.g. 老 session 直接 lifecycle_state="stale")
+                # 用 current_tick 作 fallback (decay 至少要等 STALE_TO_DECAYED_TICKS)
+                stale_since = (
+                    node.stale_since_tick
+                    if node.stale_since_tick is not None
+                    else current_tick
+                )
+                if node.stale_since_tick is None:
+                    # Repair: 立即 set, 否则下次 tick 又走 fallback
+                    node.stale_since_tick = current_tick
                 if current_tick - stale_since >= STALE_TO_DECAYED_TICKS:
                     node.lifecycle_state = "decayed"
+                    node.stale_since_tick = None  # cleanup
                     changes[nid] = "decayed"
 
     return changes
