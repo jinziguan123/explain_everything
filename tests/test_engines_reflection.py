@@ -250,8 +250,12 @@ class TestReExpandAntiThrash:
         # c_002 不 exhausted, c_001 也不 exhausted (因为 c_002 在 c_001 后面打断了 c_001 streak)
         assert action == "re-expand"
 
-    def test_continue_action_breaks_streak(self, mocker) -> None:
-        """reflect=continue 打断 streak."""
+    def test_continue_action_does_not_break_count_within_window(self, mocker) -> None:
+        """v2: continue 是 reflect entry, 算 window 大小但不加 c_001 count.
+
+        re-expand c_001 → continue → re-expand c_001 (3 reflect entries, 都在 window=5 内).
+        c_001 出现 2 次 ≥ LIMIT → exhausted (v1 语义会因 continue 打断 streak 不 exhausted).
+        """
         from explain_engine.schema.state import TraceEntry
         state = _make_state([("c_001", 1), ("p_001", 0)])
         state.reasoning_trace.append(TraceEntry(
@@ -269,10 +273,65 @@ class TestReExpandAntiThrash:
             gain_delta=0.5, llm_calls=1, timestamp="t",
             reflection_action="re-expand",
         ))
-        # 倒序: c_001 (count=1), continue → break. count=1 < 2.
+        _mock_reports(mocker, [("c_001", 0.3, 0.5)])
+        action, _ = reflect(state)
+        assert action != "re-expand"   # c_001 occurrence count=2 在 window=5 内, exhausted
+
+    def test_prune_between_re_expands_does_not_break_count(self, mocker) -> None:
+        """v2 修 v1 leak: prune 不该 reset 同 target re-expand 计数.
+
+        re-expand c_001 → re-expand c_001 → prune d_999 → re-expand c_001 (4 reflects).
+        v1: 倒序见 prune 即 break, c_001 count=1 → 不 exhausted (LEAK).
+        v2: 4 entries 都在 window=5, c_001 count=3 → exhausted ✓
+        """
+        from explain_engine.schema.state import TraceEntry
+        state = _make_state([("c_001", 1), ("p_001", 0)])
+        for tick, action_target in [
+            (0, ("re-expand", "c_001")),
+            (1, ("re-expand", "c_001")),
+            (2, ("prune", "d_999")),
+            (3, ("re-expand", "c_001")),
+        ]:
+            state.reasoning_trace.append(TraceEntry(
+                tick=tick, action="reflect", target_node_id=action_target[1],
+                gain_delta=0.5 if action_target[0] == "re-expand" else 0.0,
+                llm_calls=1 if action_target[0] == "re-expand" else 0,
+                timestamp="t",
+                reflection_action=action_target[0],
+            ))
+        _mock_reports(mocker, [("c_001", 0.3, 0.5)])
+        action, _ = reflect(state)
+        assert action != "re-expand"   # 修 v1 leak
+
+    def test_old_re_expand_outside_window_forgotten(self, mocker) -> None:
+        """超出 LOOKBACK_WINDOW 的 re-expand entries 不算入 count.
+
+        老 2 次 re-expand c_001 + 6 个 continue 把它们推出 window=5, c_001 重新可选.
+        """
+        from explain_engine.schema.state import TraceEntry
+        state = _make_state([("c_001", 1), ("p_001", 0)])
+        # 老 re-expand
+        state.reasoning_trace.append(TraceEntry(
+            tick=0, action="reflect", target_node_id="c_001",
+            gain_delta=0.5, llm_calls=1, timestamp="t",
+            reflection_action="re-expand",
+        ))
+        state.reasoning_trace.append(TraceEntry(
+            tick=1, action="reflect", target_node_id="c_001",
+            gain_delta=0.5, llm_calls=1, timestamp="t",
+            reflection_action="re-expand",
+        ))
+        # 6 个 continue 把老 re-expand 推出 window=5
+        for tick in range(2, 8):
+            state.reasoning_trace.append(TraceEntry(
+                tick=tick, action="reflect", target_node_id=None,
+                gain_delta=0.0, llm_calls=0, timestamp="t",
+                reflection_action="continue",
+            ))
+        # window=5, 倒序前 5 个都是 continue, 看不到老 re-expand
         _mock_reports(mocker, [("c_001", 0.3, 0.5)])
         action, target = reflect(state)
-        assert action == "re-expand"
+        assert action == "re-expand"   # c_001 不再 exhausted
         assert target == "c_001"
 
     def test_exhausted_falls_through_to_prune(self, mocker) -> None:

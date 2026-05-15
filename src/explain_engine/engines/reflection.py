@@ -23,46 +23,42 @@ LOW_ESSENTIALNESS_THRESHOLD: float = 0.05
 CONSISTENCY_STALE_TICKS: int = 3
 """state.tick - last_reflection_change_tick >= 此值 → stop."""
 
+RE_EXPAND_LOOKBACK_WINDOW: int = 5
+"""Wave C 补丁2 v2: 反 thrash 时 reasoning_trace 倒序扫的 reflect-entries 窗口大小."""
+
 RE_EXPAND_THRASH_LIMIT: int = 2
-"""Wave C 补丁2: 同 target 连续 re-expand 上限.
+"""Wave C 补丁2: 同 target 在最近 RE_EXPAND_LOOKBACK_WINDOW 个 reflect entries 里
+出现次数 >= LIMIT 视为 exhausted, 从 re-expand 候选排除.
 
-防 Wave C 设计 bug 死循环: re_expand 加 incoming causes (driver → L1), 但 L1 的
-consistency_score 取决于 outgoing manifests_as (L1 → L0), 改前者不影响后者. 若 reflect
-看到 L1 X 低 consistency 触发 re-expand, X 的 consistency 不变, 下次 reflect 又选 X,
-死循环.
-
-LIMIT=2: 容许一次重试 (第 1 次 + 第 2 次都跑); 第 3 次 attempt 时 X 视为 exhausted,
-fall through to prune/stop/continue.
-
-Phase 8+ 重新设计 reflect/re_expand 语义后可去掉. 当前是 Wave C 落地补丁."""
+v2 改 occurrence-in-window 语义 (v1 用 consecutive, prune 打断 streak 漏 c_003 → re-expand → c_003).
+v2 的 forgetting horizon: 5 ticks 不 pick 后, target 重新可选."""
 
 
 def _exhausted_re_expand_targets(state: CognitiveState) -> set[str]:
-    """找出最近 reasoning_trace 里被连续 re-expand >= RE_EXPAND_THRASH_LIMIT 次的 target.
+    """找出最近 RE_EXPAND_LOOKBACK_WINDOW 个 reflect entries 里 re-expand 同 target
+    出现次数 >= RE_EXPAND_THRASH_LIMIT 的 target id.
 
-    Consecutive 语义: 倒序扫 trace, 跳过 expand entries (不属于 reflect 决策),
-    遇 reflect 但 action != "re-expand" 或 target != streak_target 则 break.
+    Occurrence-in-window 语义 (v2):
+      - 倒序扫 reasoning_trace, expand entries 跳过 (不算 lookback)
+      - 其他 reflect entries (continue/prune/stop/re-expand) 都算 window 大小
+      - 但只有 reflection_action == "re-expand" 且 target_node_id 非空才加 count
+
+    v1 的 consecutive 语义 leak: prune 打断 streak 让 count reset, 实跑 LLM 看到
+    "re-expand X → re-expand X → prune Y → re-expand X..." 仍 thrash.
 
     Returns: 要从 re-expand 候选中排除的 target_id 集合.
     """
     counts: dict[str, int] = {}
-    streak_target: str | None = None
+    seen_reflects = 0
 
     for entry in reversed(state.reasoning_trace):
         if entry.action != "reflect":
-            continue   # expand entries 不影响 streak
-        if entry.reflection_action != "re-expand":
-            break   # 其他 reflect action (continue/prune/stop) 打断 streak
-        target = entry.target_node_id
-        if target is None:
-            break   # malformed entry
-        if streak_target is None:
-            streak_target = target
-            counts[target] = 1
-        elif target == streak_target:
-            counts[target] += 1
-        else:
-            break   # 不同 target, streak 断
+            continue   # expand entries 跳过, 不算 window
+        seen_reflects += 1
+        if seen_reflects > RE_EXPAND_LOOKBACK_WINDOW:
+            break
+        if entry.reflection_action == "re-expand" and entry.target_node_id:
+            counts[entry.target_node_id] = counts.get(entry.target_node_id, 0) + 1
 
     return {t for t, c in counts.items() if c >= RE_EXPAND_THRASH_LIMIT}
 
