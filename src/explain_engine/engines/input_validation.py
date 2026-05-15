@@ -10,10 +10,10 @@ API:
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
+from explain_engine.engines._llm_retry import call_with_retry
 from explain_engine.llm.client import LLMClient, Message
-from explain_engine.llm.errors import SchemaValidationError
 from explain_engine.llm.prompts._loader import load_prompt
 from explain_engine.schema.nodes import VariableNode
 
@@ -80,7 +80,10 @@ async def validate(
         ),
     ]
 
-    return await _call_with_retry(llm, messages)
+    return await call_with_retry(
+        llm, messages, InputAlignmentReport,
+        error_prefix="input_validation 输出 schema 不合规",
+    )
 
 
 def _render_l0_table(l0_nodes: list[VariableNode]) -> str:
@@ -88,24 +91,3 @@ def _render_l0_table(l0_nodes: list[VariableNode]) -> str:
         return "(none)"
     lines = [f"- {n.id}: {n.name} — {n.description}" for n in l0_nodes]
     return "\n".join(lines)
-
-
-async def _call_with_retry(
-    llm: LLMClient,
-    messages: list[Message],
-) -> InputAlignmentReport:
-    last_exc: Exception | None = None
-    for _attempt in range(2):
-        resp = await llm.chat(messages, schema=InputAlignmentReport)
-        if resp.parsed is None:
-            last_exc = SchemaValidationError("LLM 未返回 structured output")
-            continue
-        try:
-            return InputAlignmentReport.model_validate(resp.parsed)
-        except ValidationError as exc:
-            last_exc = SchemaValidationError(
-                f"input_validation 输出 schema 不合规: {exc}"
-            )
-            continue
-    assert last_exc is not None
-    raise last_exc

@@ -34,7 +34,7 @@ class TestReExpand:
         state = _make_already_expanded()
         from explain_engine.engines.expansion import ExpansionOutput, _DriverCandidate
         mocker.patch(
-            "explain_engine.engines.expansion._call_with_retry",
+            "explain_engine.engines.expansion.call_with_retry",
             return_value=ExpansionOutput(drivers=[
                 _DriverCandidate(name="d2", description="d", mechanism="m", plausibility=4),
             ]),
@@ -63,7 +63,7 @@ class TestReExpand:
         state = _make_already_expanded()
         from explain_engine.engines.expansion import ExpansionOutput, _DriverCandidate
         mocker.patch(
-            "explain_engine.engines.expansion._call_with_retry",
+            "explain_engine.engines.expansion.call_with_retry",
             return_value=ExpansionOutput(drivers=[
                 _DriverCandidate(name=f"d{i}", description="d", mechanism="m", plausibility=4)
                 for i in range(5)
@@ -77,7 +77,7 @@ class TestReExpand:
         state = _make_already_expanded()
         from explain_engine.engines.expansion import ExpansionOutput, _DriverCandidate
         mocker.patch(
-            "explain_engine.engines.expansion._call_with_retry",
+            "explain_engine.engines.expansion.call_with_retry",
             return_value=ExpansionOutput(drivers=[
                 _DriverCandidate(name="d2", description="d", mechanism="m", plausibility=4),
             ]),

@@ -38,6 +38,23 @@ class _FakeLLM:
         return _FakeLLMOutput(parsed=self.response)
 
 
+class _FakeLLMSeq:
+    """Returns successive responses on each .chat() call.
+
+    Use to test retry paths (None parsed → retry success / Pydantic error → retry success / both fail).
+    """
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    async def chat(self, messages, schema):
+        if self.calls >= len(self.responses):
+            raise IndexError(f"FakeLLMSeq exhausted at call {self.calls}")
+        r = self.responses[self.calls]
+        self.calls += 1
+        return _FakeLLMOutput(parsed=r)
+
+
 class TestValidate:
     @pytest.mark.asyncio
     async def test_high_overlap_returns_high_score(self) -> None:
@@ -109,6 +126,44 @@ class TestValidate:
         })
         report = await validate("q", [], llm)
         assert report.overlap_score == 0
+
+    @pytest.mark.asyncio
+    async def test_retry_after_none_parsed_succeeds(self) -> None:
+        """First call returns None parsed → retry → success."""
+        valid = {
+            "question_subject": "X",
+            "observation_subjects": ["Y"],
+            "overlap_score": 3,
+            "falsifiable_reason": "ok",
+        }
+        llm = _FakeLLMSeq([None, valid])
+        report = await validate("q", [_l0("o")], llm)
+        assert report.overlap_score == 3
+        assert llm.calls == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_after_invalid_schema_succeeds(self) -> None:
+        """First call returns invalid schema → retry → success."""
+        invalid = {"overlap_score": 99}  # missing required + bad range
+        valid = {
+            "question_subject": "X",
+            "observation_subjects": [],
+            "overlap_score": 2,
+            "falsifiable_reason": "ok",
+        }
+        llm = _FakeLLMSeq([invalid, valid])
+        report = await validate("q", [_l0("o")], llm)
+        assert report.overlap_score == 2
+        assert llm.calls == 2
+
+    @pytest.mark.asyncio
+    async def test_two_failures_raises_schema_error(self) -> None:
+        """Both attempts fail → SchemaValidationError raised after 2 calls."""
+        from explain_engine.llm.errors import SchemaValidationError
+        llm = _FakeLLMSeq([None, None])
+        with pytest.raises(SchemaValidationError):
+            await validate("q", [_l0("o")], llm)
+        assert llm.calls == 2
 
 
 class TestInsufficientObservationsError:

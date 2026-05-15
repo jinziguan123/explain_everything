@@ -40,7 +40,7 @@ def _mock_expansion_output(mocker, drivers: list[dict]):
     async def fake_call_with_retry(*args, **kwargs):
         return output
     mocker.patch(
-        "explain_engine.engines.expansion._call_with_retry",
+        "explain_engine.engines.expansion.call_with_retry",
         side_effect=fake_call_with_retry,
     )
 

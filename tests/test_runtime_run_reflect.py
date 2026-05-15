@@ -47,7 +47,7 @@ def _make_acceptance(per_l1: dict[str, float] | None = None,
 
 
 def _dual_call_side_effect(driver_name: str = "new_d", l0_name: str = "new_l0"):
-    """side_effect for expansion._call_with_retry that returns the right output by model.
+    """side_effect for expansion.call_with_retry that returns the right output by model.
 
     Wave 1 Phase 8: reflect 改用 expand-downward → engines.expand_downward 用
     DownwardExpansionOutput; expand 仍用 ExpansionOutput. mock 需按 schema 分发.
@@ -92,7 +92,7 @@ def _make_state_with_L1() -> CognitiveState:
 async def test_run_with_K2_emits_reflect_action(mocker) -> None:
     state = _make_state_with_L1()
     mocker.patch(
-        "explain_engine.engines.expansion._call_with_retry",
+        "explain_engine.engines.expansion.call_with_retry",
         return_value=ExpansionOutput(drivers=[]),
     )
     mocker.patch(
@@ -118,7 +118,7 @@ async def test_reflect_expand_downward_mutates_graph(mocker) -> None:
         return_value=_make_acceptance(per_l1={"c_001": 0.3}),
     )
     mocker.patch(
-        "explain_engine.engines.expansion._call_with_retry",
+        "explain_engine.engines.expansion.call_with_retry",
         side_effect=_dual_call_side_effect(),
     )
     initial_l0 = sum(
@@ -152,7 +152,7 @@ async def test_reflect_prune_removes_node(mocker) -> None:
         ),
     )
     mocker.patch(
-        "explain_engine.engines.expansion._call_with_retry",
+        "explain_engine.engines.expansion.call_with_retry",
         return_value=ExpansionOutput(drivers=[]),
     )
     await run(state, mocker.AsyncMock(), budget=3,
@@ -165,7 +165,7 @@ async def test_reflect_prune_removes_node(mocker) -> None:
 async def test_on_tick_callback_invoked_each_tick(mocker) -> None:
     state = _make_state_with_L1()
     mocker.patch(
-        "explain_engine.engines.expansion._call_with_retry",
+        "explain_engine.engines.expansion.call_with_retry",
         return_value=ExpansionOutput(drivers=[]),
     )
     mocker.patch(
@@ -209,7 +209,7 @@ async def test_scheduler_driven_reflect_with_non_empty_frontier(mocker) -> None:
     state = CognitiveState(graph=g, budget_remaining=10, root_question="q")
 
     mocker.patch(
-        "explain_engine.engines.expansion._call_with_retry",
+        "explain_engine.engines.expansion.call_with_retry",
         return_value=ExpansionOutput(drivers=[]),
     )
     mocker.patch(
@@ -234,7 +234,7 @@ async def test_reflection_trace_entry_has_action(mocker) -> None:
         return_value=_make_acceptance(per_l1={"c_001": 0.3}),
     )
     mocker.patch(
-        "explain_engine.engines.expansion._call_with_retry",
+        "explain_engine.engines.expansion.call_with_retry",
         side_effect=_dual_call_side_effect(driver_name="x", l0_name="x_l0"),
     )
     await run(state, mocker.AsyncMock(), budget=3,
