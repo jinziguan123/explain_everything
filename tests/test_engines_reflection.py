@@ -165,3 +165,130 @@ class TestNoLLMCalls:
         _mock_reports(mocker, [("c_001", 0.8, 0.5)])
         action, _ = reflect(state)
         assert action in ("continue", "re-expand", "prune", "stop")
+
+
+class TestReExpandAntiThrash:
+    """Wave C 补丁2: re-expand anti-thrash 防死循环."""
+
+    def test_no_trace_not_exhausted(self, mocker) -> None:
+        """空 trace → 没人 exhausted, re-expand 正常工作."""
+        state = _make_state([("c_001", 1), ("p_001", 0)])
+        _mock_reports(mocker, [("c_001", 0.3, 0.5)])
+        action, target = reflect(state)
+        assert action == "re-expand"
+        assert target == "c_001"
+
+    def test_single_re_expand_in_trace_not_exhausted(self, mocker) -> None:
+        """单次 re-expand 不算 exhausted (LIMIT=2, 1 < 2)."""
+        from explain_engine.schema.state import TraceEntry
+        state = _make_state([("c_001", 1), ("p_001", 0)])
+        state.reasoning_trace.append(TraceEntry(
+            tick=0, action="reflect", target_node_id="c_001",
+            gain_delta=0.5, llm_calls=1, timestamp="t",
+            reflection_action="re-expand",
+        ))
+        _mock_reports(mocker, [("c_001", 0.3, 0.5)])
+        action, target = reflect(state)
+        assert action == "re-expand"   # 仍 pick c_001
+        assert target == "c_001"
+
+    def test_two_consecutive_re_expand_exhausts_target(self, mocker) -> None:
+        """连续 2 次 re-expand 同 target → exhausted, 第 3 次不 pick."""
+        from explain_engine.schema.state import TraceEntry
+        state = _make_state([("c_001", 1), ("p_001", 0)])
+        for tick in range(2):
+            state.reasoning_trace.append(TraceEntry(
+                tick=tick, action="reflect", target_node_id="c_001",
+                gain_delta=0.5, llm_calls=1, timestamp="t",
+                reflection_action="re-expand",
+            ))
+        _mock_reports(mocker, [("c_001", 0.3, 0.5)])
+        action, _ = reflect(state)
+        # c_001 exhausted, 但没其他 candidate → fall through to continue
+        assert action != "re-expand"
+
+    def test_expand_entries_do_not_break_streak(self, mocker) -> None:
+        """expand entries 跳过, 不破 streak."""
+        from explain_engine.schema.state import TraceEntry
+        state = _make_state([("c_001", 1), ("p_001", 0)])
+        # re-expand c_001, expand c_999 (interleaved), re-expand c_001 → c_001 应 exhausted
+        state.reasoning_trace.append(TraceEntry(
+            tick=0, action="reflect", target_node_id="c_001",
+            gain_delta=0.5, llm_calls=1, timestamp="t",
+            reflection_action="re-expand",
+        ))
+        state.reasoning_trace.append(TraceEntry(
+            tick=1, action="expand", target_node_id="c_999",
+            gain_delta=0.5, llm_calls=1, timestamp="t",
+        ))
+        state.reasoning_trace.append(TraceEntry(
+            tick=2, action="reflect", target_node_id="c_001",
+            gain_delta=0.5, llm_calls=1, timestamp="t",
+            reflection_action="re-expand",
+        ))
+        _mock_reports(mocker, [("c_001", 0.3, 0.5)])
+        action, _ = reflect(state)
+        assert action != "re-expand"   # c_001 exhausted
+
+    def test_different_target_breaks_streak(self, mocker) -> None:
+        """同 target 1 次 + 不同 target 1 次 + 同 target 1 次 → 不 exhausted (streak 断)."""
+        from explain_engine.schema.state import TraceEntry
+        state = _make_state([("c_001", 1), ("c_002", 1), ("p_001", 0)])
+        state.reasoning_trace.append(TraceEntry(
+            tick=0, action="reflect", target_node_id="c_001",
+            gain_delta=0.5, llm_calls=1, timestamp="t",
+            reflection_action="re-expand",
+        ))
+        state.reasoning_trace.append(TraceEntry(
+            tick=1, action="reflect", target_node_id="c_002",
+            gain_delta=0.5, llm_calls=1, timestamp="t",
+            reflection_action="re-expand",
+        ))
+        # 倒序扫: 最后是 c_002 (count=1), c_001 不同 target → break. c_002 count=1 < 2 不 exhausted.
+        _mock_reports(mocker, [("c_001", 0.3, 0.5), ("c_002", 0.4, 0.5)])
+        action, _ = reflect(state)
+        # c_002 不 exhausted, c_001 也不 exhausted (因为 c_002 在 c_001 后面打断了 c_001 streak)
+        assert action == "re-expand"
+
+    def test_continue_action_breaks_streak(self, mocker) -> None:
+        """reflect=continue 打断 streak."""
+        from explain_engine.schema.state import TraceEntry
+        state = _make_state([("c_001", 1), ("p_001", 0)])
+        state.reasoning_trace.append(TraceEntry(
+            tick=0, action="reflect", target_node_id="c_001",
+            gain_delta=0.5, llm_calls=1, timestamp="t",
+            reflection_action="re-expand",
+        ))
+        state.reasoning_trace.append(TraceEntry(
+            tick=1, action="reflect", target_node_id=None,
+            gain_delta=0.0, llm_calls=0, timestamp="t",
+            reflection_action="continue",
+        ))
+        state.reasoning_trace.append(TraceEntry(
+            tick=2, action="reflect", target_node_id="c_001",
+            gain_delta=0.5, llm_calls=1, timestamp="t",
+            reflection_action="re-expand",
+        ))
+        # 倒序: c_001 (count=1), continue → break. count=1 < 2.
+        _mock_reports(mocker, [("c_001", 0.3, 0.5)])
+        action, target = reflect(state)
+        assert action == "re-expand"
+        assert target == "c_001"
+
+    def test_exhausted_falls_through_to_prune(self, mocker) -> None:
+        """c_001 exhausted + 有 low essentialness L2 → fall to prune."""
+        from explain_engine.schema.state import TraceEntry
+        state = _make_state([("c_001", 1), ("d_001", 2), ("p_001", 0)])
+        for tick in range(2):
+            state.reasoning_trace.append(TraceEntry(
+                tick=tick, action="reflect", target_node_id="c_001",
+                gain_delta=0.5, llm_calls=1, timestamp="t",
+                reflection_action="re-expand",
+            ))
+        _mock_reports(mocker, [
+            ("c_001", 0.3, 0.5),    # 仍 low consistency 但 exhausted
+            ("d_001", 0.7, 0.02),   # low essentialness → prune candidate
+        ])
+        action, target = reflect(state)
+        assert action == "prune"
+        assert target == "d_001"
