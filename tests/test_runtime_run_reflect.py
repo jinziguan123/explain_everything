@@ -83,7 +83,7 @@ async def test_run_with_K2_emits_reflect_action(mocker) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reflect_re_expand_mutates_graph(mocker) -> None:
+async def test_reflect_expand_downward_mutates_graph(mocker) -> None:
     """Wave 1 Phase 8: reflect 在 weak L1 时走 expand-downward → 给 c_001 加 L0 子节点.
 
     改前 (Phase 7): reflect 返 re-expand → re_expand 加 L2 driver, 验 L2 增长.

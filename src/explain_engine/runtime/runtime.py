@@ -85,15 +85,6 @@ async def run(
                 llm_calls = 1
                 target_id = refl_target
                 state.last_reflection_change_tick = state.tick
-            elif refl_action == "re-expand" and refl_target is not None:
-                # Backward compat: 老 session trace 加载后, 旧 reflection_action 仍能
-                # dispatch. 注意: 当前 reflect() 不再产生 re-expand, 这条只服务老 trace.
-                _new_ids, gain_delta = await expansion.re_expand(
-                    state, refl_target, llm
-                )
-                llm_calls = 1
-                target_id = refl_target
-                state.last_reflection_change_tick = state.tick
             elif refl_action == "prune" and refl_target is not None:
                 state.graph.remove_node(refl_target)
                 target_id = refl_target
@@ -110,7 +101,7 @@ async def run(
             # Phase 7 C.2 note: reflect tick 本身算"活动", 不算 no_gain idle —
             # 否则 reflect-only 循环 3 tick 内就被 Phase 5 no_gain_for_3_ticks 误停
             # (reflect tick 是 meta-cognition, 没有 expansion 那种 semantic "gain")。
-            # Wave C.3 用独立的 last_reflection_change_tick (上面 re-expand/prune/stop
+            # Wave C.3 用独立的 last_reflection_change_tick (上面 expand-downward/prune/stop
             # 分支单独维护) 驱动 reflection_signaled_stop signal — gate 与 no_gain 解耦。
             state.last_gain_tick = state.tick
 

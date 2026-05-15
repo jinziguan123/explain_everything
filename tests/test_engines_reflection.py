@@ -71,7 +71,7 @@ class TestReflectEdgeCases:
         assert target is None
 
 
-class TestReExpand:
+class TestExpandDownward:
     def test_single_low_consistency_L1_triggers_re_expand(self, mocker) -> None:
         state = _make_state([("c_001", 1), ("p_001", 0)])
         _mock_reports(mocker, [("c_001", 0.3, 0.5)])
@@ -170,7 +170,7 @@ class TestNoLLMCalls:
         assert action in ("continue", "expand-downward", "re-expand", "prune", "stop")
 
 
-class TestReExpandAntiThrash:
+class TestExpansionAntiThrash:
     """Wave C 补丁2: re-expand anti-thrash 防死循环."""
 
     def test_no_trace_not_exhausted(self, mocker) -> None:

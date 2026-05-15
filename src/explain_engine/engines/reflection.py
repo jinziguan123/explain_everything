@@ -75,10 +75,6 @@ def _exhausted_expansion_targets(state: CognitiveState) -> set[str]:
     return {t for t, c in counts.items() if c >= RE_EXPAND_THRASH_LIMIT}
 
 
-# 保留旧名作 alias (没人调外部, 但保险)
-_exhausted_re_expand_targets = _exhausted_expansion_targets
-
-
 def reflect(state: CognitiveState) -> tuple[ReflectionAction, str | None]:
     """Reflection decision. 0 LLM call.
 
