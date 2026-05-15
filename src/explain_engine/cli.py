@@ -635,6 +635,60 @@ async def _run_counterfactual(session_id: str, intervention_text: str) -> None:
     # 副作用 = 0, 不需要 store.save
 
 
+@app.command()
+def rescore(
+    session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+) -> None:
+    """Phase 7 Wave D: 重评 existing session 的 edge.confidence.
+
+    Wave A acceptance fixture. 用 scoring.yaml prompt 评分 manifests_as + causes edges,
+    写回 edge.confidence = score / 5.0 (跟 Wave A.1/A.2 同 mapping).
+    并发跑 (LLM_MAX_CONCURRENCY=5).
+
+    LLM cost: ~17 manifests_as + ~8 causes ≈ 25 LLM call per session.
+
+    Examples:
+        explain rescore s_f3beb777
+    """
+    asyncio.run(_run_rescore(session_id))
+
+
+async def _run_rescore(session_id: str) -> None:
+    from explain_engine.engines import rescore as rescore_mod
+
+    store = _get_store()
+    try:
+        session = store.load(session_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    llm = make_llm_client()
+    try:
+        new_confs = await rescore_mod.rescore_session(session.state, llm)
+    except (LLMError, SchemaValidationError) as exc:
+        console.print(f"[red]rescore 失败: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    try:
+        store.save(session)
+    except OSError as exc:
+        console.print(f"[red]save 失败 (LLM cost 已消耗): {exc}[/red]")
+        raise typer.Exit(3) from exc
+
+    if not new_confs:
+        console.print(
+            f"[yellow]session {session_id}: 无 manifests_as/causes edges 可 rescore[/yellow]"
+        )
+        return
+
+    avg = sum(new_confs.values()) / len(new_confs)
+    console.print(
+        f"\n[green]Rescored {len(new_confs)} edges in {session_id}[/green]"
+    )
+    console.print(f"  Average new confidence: {avg:.2f}")
+
+
 @app.command(name="list")
 def list_cmd() -> None:
     """列出所有 session（按创建时间降序）。"""
