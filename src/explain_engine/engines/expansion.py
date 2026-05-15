@@ -15,6 +15,7 @@ Phase 5 设计参考 docs/plans/2026-05-13-cognitive-engine-phase-5-design.md §
 from __future__ import annotations
 
 import logging
+from typing import TypeVar
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -26,6 +27,8 @@ from explain_engine.schema.nodes import VariableNode
 from explain_engine.schema.state import CognitiveState
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T", bound=BaseModel)
 
 
 class _DriverCandidate(BaseModel):
@@ -171,7 +174,7 @@ async def expand_downward(
         ),
     ]
 
-    output = await _call_with_retry_downward(llm, messages)
+    output = await _call_with_retry(llm, messages, DownwardExpansionOutput)
     predicted = output.predicted_L0[:max_l0]
 
     next_p_num = _next_phenom_id_num(state)
@@ -238,7 +241,7 @@ async def _do_expansion(
         ),
     ]
 
-    output = await _call_with_retry(llm, messages)
+    output = await _call_with_retry(llm, messages, ExpansionOutput)
     drivers = output.drivers[:max_drivers]
 
     if not drivers:
@@ -326,15 +329,16 @@ def _next_edge_id(state: CognitiveState) -> int:
 async def _call_with_retry(
     llm: LLMClient,
     messages: list[Message],
-) -> ExpansionOutput:
+    output_model: type[T],
+) -> T:
     last_exc: Exception | None = None
     for _attempt in range(2):
-        resp = await llm.chat(messages, schema=ExpansionOutput)
+        resp = await llm.chat(messages, schema=output_model)
         if resp.parsed is None:
             last_exc = SchemaValidationError("LLM 未返回 structured output")
             continue
         try:
-            return ExpansionOutput.model_validate(resp.parsed)
+            return output_model.model_validate(resp.parsed)
         except ValidationError as exc:
             last_exc = SchemaValidationError(f"LLM 输出 schema 不合规: {exc}")
             continue
@@ -367,22 +371,3 @@ def _next_phenom_id_num(state: CognitiveState) -> int:
         if nid.startswith("p_") and nid[2:].isdigit()
     ]
     return (max(existing) + 1) if existing else 1
-
-
-async def _call_with_retry_downward(
-    llm: LLMClient,
-    messages: list[Message],
-) -> DownwardExpansionOutput:
-    last_exc: Exception | None = None
-    for _attempt in range(2):
-        resp = await llm.chat(messages, schema=DownwardExpansionOutput)
-        if resp.parsed is None:
-            last_exc = SchemaValidationError("LLM 未返回 structured output")
-            continue
-        try:
-            return DownwardExpansionOutput.model_validate(resp.parsed)
-        except ValidationError as exc:
-            last_exc = SchemaValidationError(f"LLM 输出 schema 不合规: {exc}")
-            continue
-    assert last_exc is not None
-    raise last_exc

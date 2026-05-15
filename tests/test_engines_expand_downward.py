@@ -118,3 +118,49 @@ class TestExpandDownward:
         high_id = next(nid for nid in new_ids if state.graph.nodes[nid].name == "high")
         assert edges_by_target[low_id] == 0.2
         assert edges_by_target[high_id] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_existing_l0_name_match_reused(self) -> None:
+        """LLM returns L0 with same name as existing → reuse existing id, no new node."""
+        state = _make_state_with_l1("c_001")
+        # Pre-seed an L0 named "phenom_a"
+        state.graph.add_node(VariableNode(
+            id="p_existing", name="phenom_a", description="d_orig",
+            abstraction_level=0, confidence=0.5, epistemic="observation",
+        ))
+        llm = _FakeLLM({
+            "predicted_L0": [
+                {"name": "phenom_a", "description": "d_new", "mechanism": "m", "plausibility": 4},
+            ],
+        })
+        new_ids = await expansion.expand_downward(state, "c_001", llm)
+        # Should reuse existing id, not create new
+        assert new_ids == ["p_existing"]
+        p_nodes = [nid for nid in state.graph.nodes if nid.startswith("p_")]
+        assert len(p_nodes) == 1
+        # New manifests_as edge should still be created (pointing to existing L0)
+        edges = [e for e in state.graph.edges.values()
+                 if e.source_node == "c_001" and e.target_node == "p_existing"]
+        assert len(edges) == 1
+        assert edges[0].confidence == 0.8  # plausibility 4 / 5
+
+    @pytest.mark.asyncio
+    async def test_id_continuation_from_existing_p_nodes(self) -> None:
+        """Pre-seeded p_001/p_002 → new L0 should be p_003 onwards."""
+        state = _make_state_with_l1("c_001")
+        # Pre-seed two existing L0
+        state.graph.add_node(VariableNode(
+            id="p_001", name="prev_a", description="d",
+            abstraction_level=0, confidence=0.5, epistemic="observation",
+        ))
+        state.graph.add_node(VariableNode(
+            id="p_002", name="prev_b", description="d",
+            abstraction_level=0, confidence=0.5, epistemic="observation",
+        ))
+        llm = _FakeLLM({
+            "predicted_L0": [
+                {"name": "new_x", "description": "d", "mechanism": "m", "plausibility": 3},
+            ],
+        })
+        new_ids = await expansion.expand_downward(state, "c_001", llm)
+        assert new_ids == ["p_003"]
