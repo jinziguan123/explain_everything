@@ -4,9 +4,12 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from explain_engine.schema.graph import ExplanationGraph
+
+if TYPE_CHECKING:
+    from explain_engine.engines.simulation import AcceptanceReport
 
 Action = Literal["expand", "compress", "evaluate", "reflect"]
 _VALID_ACTIONS = frozenset({"expand", "compress", "evaluate", "reflect"})
@@ -78,6 +81,10 @@ class CognitiveState:
     reasoning_trace: list[TraceEntry] = field(default_factory=list)
     # Phase 7 Wave C NEW:
     last_reflection_change_tick: int = 0
+    # Phase 8 Wave 2 NEW: 缓存 aggregate report (in-memory; CLI / reflect 共用).
+    # 不持久化到 JSON: (a) 避免序列化 dataclass 嵌套引用环, (b) 重算成本低,
+    # (c) 非业务数据 — runtime 每个 reflect tick 重新刷新, load 后 None 即可.
+    last_acceptance_report: "AcceptanceReport | None" = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.budget_remaining < 0:

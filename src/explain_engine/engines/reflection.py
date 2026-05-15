@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 
-from explain_engine.engines.simulation import check_consistency_batch
 from explain_engine.schema.state import CognitiveState, ReflectionAction
 
 logger = logging.getLogger(__name__)
@@ -76,7 +75,13 @@ def _exhausted_expansion_targets(state: CognitiveState) -> set[str]:
 
 
 def reflect(state: CognitiveState) -> tuple[ReflectionAction, str | None]:
-    """Reflection decision. 0 LLM call.
+    """Reflection decision (Wave 1 + Wave 2 重写). 0 LLM call.
+
+    Wave 2 Task 2.3 改: 优先用 cached state.last_acceptance_report.weak_chain_l1s
+    + per_l2 (runtime 在 reflect tick 之前刷新). fallback 当场调
+    aggregate_acceptance — 兼容老 caller / 单测.
+
+    决策优先级 (Wave 1 改): expand-downward > prune > stop > continue.
 
     Returns: (action, target_id)
       - expand-downward → target_id = lowest-consistency L1 id (Wave 1 Phase 8: 替原 re-expand)
@@ -93,35 +98,36 @@ def reflect(state: CognitiveState) -> tuple[ReflectionAction, str | None]:
     if not L1_L2:
         return ("continue", None)
 
-    reports = check_consistency_batch(state)
-    # Defensive: 过滤已不在 graph 中的 target (e.g. 上一 tick 刚被 prune 的 node)。
-    # 真实 check_consistency_batch 不会返陈旧 target, 但 mock 可能, 避免 KeyError。
-    reports = [r for r in reports if r.target_id in state.graph.nodes]
+    # Wave 2 Task 2.3: 优先 cached report; fallback 当场聚合 (老 caller / test).
+    # Local import 避免 reflection ↔ simulation 循环 (simulation.aggregate_acceptance
+    # 已 import LOW_CONSISTENCY_THRESHOLD).
+    report = state.last_acceptance_report
+    if report is None:
+        from explain_engine.engines.simulation import aggregate_acceptance
+        report = aggregate_acceptance(state)
 
-    # 1. expand-downward 低 consistency L1
     exhausted = _exhausted_expansion_targets(state)
-    low_c = sorted(
-        [r for r in reports
-         if state.graph.nodes[r.target_id].abstraction_level == 1
-         and r.consistency_score < LOW_CONSISTENCY_THRESHOLD
-         and r.target_id not in exhausted],
-        key=lambda r: r.consistency_score,
-    )
-    # Wave 1 Phase 8 fix: 用 expand-downward 替原 re-expand. 见 module docstring.
-    if low_c:
-        return ("expand-downward", low_c[0].target_id)
 
-    # 2. prune 低 essentialness L2
-    low_e = sorted(
-        [r for r in reports
-         if state.graph.nodes[r.target_id].abstraction_level == 2
-         and r.essentialness_score < LOW_ESSENTIALNESS_THRESHOLD],
-        key=lambda r: r.essentialness_score,
-    )
-    if low_e:
-        return ("prune", low_e[0].target_id)
+    # 1. expand-downward 弱 L1 (用 cached weak_chain_l1s, 已按 score 升序).
+    for l1_id in report.weak_chain_l1s:
+        if l1_id in exhausted:
+            continue
+        if l1_id not in state.graph.nodes:
+            continue   # defensive: 上一 tick prune 后 cached report 可能含陈旧 id
+        # Wave 1 Phase 8 fix: expand-downward 替原 re-expand. 见 module docstring.
+        return ("expand-downward", l1_id)
 
-    # 3. stale 检测
+    # 2. prune 低 essentialness L2 (用 report.per_l2).
+    low_l2 = sorted(
+        [(l2, score) for l2, score in report.per_l2.items()
+         if score < LOW_ESSENTIALNESS_THRESHOLD
+         and l2 in state.graph.nodes],
+        key=lambda kv: kv[1],
+    )
+    if low_l2:
+        return ("prune", low_l2[0][0])
+
+    # 3. stale 检测 (不变).
     if state.tick - state.last_reflection_change_tick >= CONSISTENCY_STALE_TICKS:
         return ("stop", None)
 

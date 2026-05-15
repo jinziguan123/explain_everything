@@ -19,6 +19,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from explain_engine.engines import expansion, reflection
+from explain_engine.engines.simulation import aggregate_acceptance
 from explain_engine.llm.client import LLMClient
 from explain_engine.runtime import stop as stop_mod
 from explain_engine.runtime.scheduler import PhaseScheduler
@@ -75,6 +76,11 @@ async def run(
                 action = "reflect"
 
         if action == "reflect":
+            # Wave 2 Phase 8: 刷新 cached acceptance report (reflect + CLI 共用).
+            # reflect() 内部读 state.last_acceptance_report 拿 weak_chain_l1s /
+            # per_l2 — 不再每次重算 check_consistency_batch.
+            state.last_acceptance_report = aggregate_acceptance(state)
+
             refl_action, refl_target = reflection.reflect(state)
             reflection_action = refl_action
 

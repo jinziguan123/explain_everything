@@ -1,4 +1,10 @@
-"""Wave C.2: runtime.run 加 reflect 分支测试."""
+"""Wave C.2 + Phase 8 Wave 2 Task 2.3: runtime.run 加 reflect 分支测试.
+
+Wave 2 改: runtime 在 reflect tick 之前调 aggregate_acceptance 刷 cache,
+reflect() 优先读 cached state.last_acceptance_report. 因此测试 mock target
+从 reflection.check_consistency_batch 改为 runtime.aggregate_acceptance,
+return_value 从 list[ConsistencyReport] 改为 AcceptanceReport.
+"""
 
 import pytest
 
@@ -8,13 +14,36 @@ from explain_engine.engines.expansion import (
     _DriverCandidate,
     _PredictedL0,
 )
-from explain_engine.engines.simulation import ConsistencyReport
+from explain_engine.engines.reflection import LOW_CONSISTENCY_THRESHOLD
+from explain_engine.engines.simulation import AcceptanceReport
 from explain_engine.runtime.runtime import run
 from explain_engine.runtime.scheduler import PhaseScheduler
 from explain_engine.schema.edges import RelationEdge
 from explain_engine.schema.graph import ExplanationGraph
 from explain_engine.schema.nodes import VariableNode
 from explain_engine.schema.state import CognitiveState
+
+
+def _make_acceptance(per_l1: dict[str, float] | None = None,
+                       per_l2: dict[str, float] | None = None) -> AcceptanceReport:
+    """Wave 2 Task 2.3 helper: 由 per_l1 / per_l2 dict 构造 AcceptanceReport,
+    模拟 runtime aggregate_acceptance 的输出.
+
+    weak_chain_l1s = sorted(per_l1 with score < LOW_CONSISTENCY_THRESHOLD).
+    """
+    per_l1 = per_l1 or {}
+    per_l2 = per_l2 or {}
+    weak_chain_l1s = sorted(
+        [tid for tid, s in per_l1.items() if s < LOW_CONSISTENCY_THRESHOLD],
+        key=lambda tid: per_l1[tid],
+    )
+    return AcceptanceReport(
+        avg_consistency=(sum(per_l1.values()) / len(per_l1)) if per_l1 else 0.0,
+        avg_essentialness=(sum(per_l2.values()) / len(per_l2)) if per_l2 else 0.0,
+        per_l1=per_l1,
+        per_l2=per_l2,
+        weak_chain_l1s=weak_chain_l1s,
+    )
 
 
 def _dual_call_side_effect(driver_name: str = "new_d", l0_name: str = "new_l0"):
@@ -67,14 +96,8 @@ async def test_run_with_K2_emits_reflect_action(mocker) -> None:
         return_value=ExpansionOutput(drivers=[]),
     )
     mocker.patch(
-        "explain_engine.engines.reflection.check_consistency_batch",
-        return_value=[
-            ConsistencyReport(
-                target_id="c_001", consistency_score=0.8, essentialness_score=0.5,
-                reachable_L0=["p_001"], weak_chains=[],
-                contribution_breakdown={}, decay_trace=[],
-            ),
-        ],
+        "explain_engine.runtime.runtime.aggregate_acceptance",
+        return_value=_make_acceptance(per_l1={"c_001": 0.8}),
     )
     await run(state, mocker.AsyncMock(), budget=6,
               scheduler=PhaseScheduler(K=2))
@@ -91,14 +114,8 @@ async def test_reflect_expand_downward_mutates_graph(mocker) -> None:
     """
     state = _make_state_with_L1()
     mocker.patch(
-        "explain_engine.engines.reflection.check_consistency_batch",
-        return_value=[
-            ConsistencyReport(
-                target_id="c_001", consistency_score=0.3, essentialness_score=0.5,
-                reachable_L0=["p_001"], weak_chains=[],
-                contribution_breakdown={}, decay_trace=[],
-            ),
-        ],
+        "explain_engine.runtime.runtime.aggregate_acceptance",
+        return_value=_make_acceptance(per_l1={"c_001": 0.3}),
     )
     mocker.patch(
         "explain_engine.engines.expansion._call_with_retry",
@@ -128,24 +145,11 @@ async def test_reflect_prune_removes_node(mocker) -> None:
         relation_type="causes", confidence=0.6, mechanism_description="m",
     ))
     mocker.patch(
-        "explain_engine.engines.reflection.check_consistency_batch",
-        return_value=[
-            ConsistencyReport(
-                target_id="c_001", consistency_score=0.8, essentialness_score=0.5,
-                reachable_L0=["p_001"], weak_chains=[],
-                contribution_breakdown={}, decay_trace=[],
-            ),
-            ConsistencyReport(
-                target_id="d_001", consistency_score=0.7, essentialness_score=0.5,
-                reachable_L0=[], weak_chains=[],
-                contribution_breakdown={}, decay_trace=[],
-            ),
-            ConsistencyReport(
-                target_id="d_002", consistency_score=0.7, essentialness_score=0.02,
-                reachable_L0=[], weak_chains=[],
-                contribution_breakdown={}, decay_trace=[],
-            ),
-        ],
+        "explain_engine.runtime.runtime.aggregate_acceptance",
+        return_value=_make_acceptance(
+            per_l1={"c_001": 0.8},
+            per_l2={"d_001": 0.5, "d_002": 0.02},
+        ),
     )
     mocker.patch(
         "explain_engine.engines.expansion._call_with_retry",
@@ -165,8 +169,8 @@ async def test_on_tick_callback_invoked_each_tick(mocker) -> None:
         return_value=ExpansionOutput(drivers=[]),
     )
     mocker.patch(
-        "explain_engine.engines.reflection.check_consistency_batch",
-        return_value=[],
+        "explain_engine.runtime.runtime.aggregate_acceptance",
+        return_value=_make_acceptance(),
     )
     calls = []
     # Wave C.3 后: fixture 图无 frontier (c_001 已被 d_001 "causes" 覆盖),
@@ -209,14 +213,8 @@ async def test_scheduler_driven_reflect_with_non_empty_frontier(mocker) -> None:
         return_value=ExpansionOutput(drivers=[]),
     )
     mocker.patch(
-        "explain_engine.engines.reflection.check_consistency_batch",
-        return_value=[
-            ConsistencyReport(
-                target_id="c_001", consistency_score=0.8, essentialness_score=0.5,
-                reachable_L0=["p_001"], weak_chains=[],
-                contribution_breakdown={}, decay_trace=[],
-            ),
-        ],
+        "explain_engine.runtime.runtime.aggregate_acceptance",
+        return_value=_make_acceptance(per_l1={"c_001": 0.8}),
     )
     await run(state, mocker.AsyncMock(), budget=3,
               scheduler=PhaseScheduler(K=2))
@@ -232,14 +230,8 @@ async def test_scheduler_driven_reflect_with_non_empty_frontier(mocker) -> None:
 async def test_reflection_trace_entry_has_action(mocker) -> None:
     state = _make_state_with_L1()
     mocker.patch(
-        "explain_engine.engines.reflection.check_consistency_batch",
-        return_value=[
-            ConsistencyReport(
-                target_id="c_001", consistency_score=0.3, essentialness_score=0.5,
-                reachable_L0=["p_001"], weak_chains=[],
-                contribution_breakdown={}, decay_trace=[],
-            ),
-        ],
+        "explain_engine.runtime.runtime.aggregate_acceptance",
+        return_value=_make_acceptance(per_l1={"c_001": 0.3}),
     )
     mocker.patch(
         "explain_engine.engines.expansion._call_with_retry",

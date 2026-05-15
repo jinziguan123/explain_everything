@@ -312,11 +312,16 @@ def check(
             reports = check_consistency_batch(session.state)
             if not reports:
                 console.print("[yellow]graph 无 L1/L2 节点可 check[/yellow]")
+                # 仍然显示 multi-signal (尤其 only-L0 graph 的 rollout_coverage)
+                _render_multi_signal(session.state)
                 return
             _render_batch_reports(reports, session)
         else:
             report = check_consistency(session.state, target_id)
             _render_single_report(report, session, trace_all=trace_all)
+
+        # Wave 2 Phase 8: multi-signal aggregate (always show after per-target view).
+        _render_multi_signal(session.state)
     except ValueError as exc:
         console.print(f"[red]invalid target: {exc}[/red]")
         raise typer.Exit(2) from exc
@@ -403,6 +408,41 @@ def _render_batch_reports(reports, session) -> None:
         )
         if all_weak:
             console.print(f"Weak chains in any: {', '.join(sorted(all_weak))}")
+
+
+def _render_multi_signal(state) -> None:
+    """Wave 2 Phase 8: 渲染 AcceptanceReport multi-signal section.
+
+    显示 6 个 Wave 2 信号 + Wave 3 alignment 占位 (后者目前总是 None,
+    Task 3.2 将在 explain run 集成 input_validation 后填充).
+    """
+    from explain_engine.engines.simulation import aggregate_acceptance
+
+    try:
+        report = aggregate_acceptance(state)
+    except Exception as exc:
+        console.print(f"\n[dim](无法计算 multi-signal: {exc})[/dim]")
+        return
+
+    console.print(
+        "\n[bold cyan]═══ Multi-signal acceptance (Phase 8 Wave 2) ═══[/bold cyan]"
+    )
+    console.print(f"  avg_consistency       {report.avg_consistency:.3f}")
+    console.print(f"  avg_essentialness     {report.avg_essentialness:.3f}")
+    console.print(f"  weak_chain_l1s        {report.weak_chain_l1s}")
+    if report.lowest_l1:
+        l1, score = report.lowest_l1
+        console.print(f"  lowest_l1             {l1} (consistency={score:.3f})")
+    else:
+        console.print("  lowest_l1             (none)")
+    console.print(f"  consistency_spread    {report.consistency_spread:.3f}")
+    console.print(f"  essentialness_spread  {report.essentialness_spread:.3f}")
+    console.print(
+        f"  rollout_coverage      {report.rollout_coverage:.3f} "
+        f"({len(report.missing_l0)} missing L0)"
+    )
+    if report.missing_l0:
+        console.print(f"  missing_l0            {report.missing_l0}")
 
 
 def _render_single_report(report, session, trace_all: bool = False) -> None:
