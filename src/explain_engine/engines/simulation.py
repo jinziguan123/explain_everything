@@ -12,7 +12,7 @@ Pure rule-based, 0 LLM call. L0 不可 check (是 ground truth).
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from explain_engine.engines._propagation import (
     WEAK_CHAIN_THRESHOLD,
@@ -20,6 +20,7 @@ from explain_engine.engines._propagation import (
     get_all_L0,
     get_all_L1_L2,
     propagate,
+    rollout_from_roots,  # NEW Wave 2.1
 )
 from explain_engine.schema.state import CognitiveState
 
@@ -148,3 +149,124 @@ def check_consistency_batch(
         _check_with_baseline(state, tid, baseline_acts)
         for tid in target_id_list
     ]
+
+
+@dataclass(frozen=True)
+class AcceptanceReport:
+    """Wave 2 Task 2.2: aggregate multi-signal acceptance report.
+
+    与 per-target ConsistencyReport 不同, 这是全 graph 的聚合报告.
+    给 reflect / CLI / acceptance verdict 用.
+
+    哲学锚点:
+      - §11.3 "最低 entropy 下的最大解释力" → consistency_spread / essentialness_spread
+      - §8.1 "Explanation 必须能 rollout" → rollout_coverage
+      - §9.4 可证伪性 → input_alignment / falsifiable_reason (Wave 3 注入)
+
+    Note: weak_chain_l1s 与 ConsistencyReport.weak_chains 含义不同:
+      - ConsistencyReport.weak_chains: 单 target 内 reachable_L0 中 activation 弱的 L0
+      - AcceptanceReport.weak_chain_l1s: 全 graph 中 consistency_score 低的 L1
+    """
+
+    # 主信号 (聚合)
+    avg_consistency: float
+    avg_essentialness: float
+
+    # per-node 明细
+    per_l1: dict[str, float] = field(default_factory=dict)
+    per_l2: dict[str, float] = field(default_factory=dict)
+
+    # ── Wave 2 multi-signal (6 字段) ──
+    weak_chain_l1s: list[str] = field(default_factory=list)
+    """consistency < LOW_CONSISTENCY_THRESHOLD 的 L1 id 列表 (按 score 升序)."""
+
+    lowest_l1: tuple[str, float] | None = None
+    """argmin(per_l1) 的 (id, score). 空 graph 返 None."""
+
+    consistency_spread: float = 0.0
+    """max(per_l1) - min(per_l1)."""
+
+    essentialness_spread: float = 0.0
+    """max(per_l2) - min(per_l2)."""
+
+    rollout_coverage: float = 1.0
+    """从 L2 root rollout 触达的 L0 比例. 无 L0 时 trivially 1.0."""
+
+    missing_l0: list[str] = field(default_factory=list)
+    """rollout 没触达的 L0 id 列表 (升序)."""
+
+    # ── Wave 3 alignment 字段 (留位, Wave 3 注入) ──
+    input_alignment: float | None = None
+    """Wave 3 input_validation overlap_score / 5.0. None = 没跑过校验."""
+
+    falsifiable_reason: str | None = None
+    """Wave 3 LLM 给的对齐失败理由."""
+
+
+def aggregate_acceptance(state: CognitiveState) -> AcceptanceReport:
+    """Wave 2 Task 2.2: 全 graph 聚合 multi-signal report.
+
+    流程:
+      1. check_consistency_batch (现有 Phase 6) → list[ConsistencyReport] per-target
+      2. 拆 per_l1 (consistency_score) / per_l2 (essentialness_score) dict
+      3. 算 avg / spread / weak_chains_l1s / lowest_l1
+      4. rollout_from_roots → rollout_coverage / missing_l0
+
+    不调 LLM. 只读, 不改 state.
+    """
+    # Import 在函数体内避免 circular: reflection.py imports from simulation.py
+    from explain_engine.engines.reflection import LOW_CONSISTENCY_THRESHOLD
+
+    L1_L2 = sorted(get_all_L1_L2(state.graph))
+    if not L1_L2:
+        # 空 graph 安全默认
+        return AcceptanceReport(
+            avg_consistency=0.0,
+            avg_essentialness=0.0,
+        )
+
+    reports = check_consistency_batch(state)
+    per_l1: dict[str, float] = {}
+    per_l2: dict[str, float] = {}
+    for r in reports:
+        node = state.graph.nodes.get(r.target_id)
+        if node is None:
+            continue
+        if node.abstraction_level == 1:
+            per_l1[r.target_id] = r.consistency_score
+        elif node.abstraction_level == 2:
+            per_l2[r.target_id] = r.essentialness_score
+
+    avg_consistency = sum(per_l1.values()) / len(per_l1) if per_l1 else 0.0
+    avg_essentialness = sum(per_l2.values()) / len(per_l2) if per_l2 else 0.0
+
+    # Wave 2 multi-signal aggregations
+    weak_chain_l1s = sorted(
+        [l1 for l1, s in per_l1.items() if s < LOW_CONSISTENCY_THRESHOLD],
+        key=lambda l1: per_l1[l1],
+    )
+    lowest_l1 = min(per_l1.items(), key=lambda kv: kv[1]) if per_l1 else None
+    consistency_spread = (
+        (max(per_l1.values()) - min(per_l1.values())) if per_l1 else 0.0
+    )
+    essentialness_spread = (
+        (max(per_l2.values()) - min(per_l2.values())) if per_l2 else 0.0
+    )
+
+    # Wave 2 rollout coverage (Q6.2: 也服务 Wave 3 rollout_alignment)
+    reachable, missing = rollout_from_roots(state.graph)
+    all_l0 = {nid for nid, n in state.graph.nodes.items() if n.abstraction_level == 0}
+    rollout_coverage = (len(reachable) / len(all_l0)) if all_l0 else 1.0
+
+    return AcceptanceReport(
+        avg_consistency=avg_consistency,
+        avg_essentialness=avg_essentialness,
+        per_l1=per_l1,
+        per_l2=per_l2,
+        weak_chain_l1s=weak_chain_l1s,
+        lowest_l1=lowest_l1,
+        consistency_spread=consistency_spread,
+        essentialness_spread=essentialness_spread,
+        rollout_coverage=rollout_coverage,
+        missing_l0=sorted(missing),
+    )
