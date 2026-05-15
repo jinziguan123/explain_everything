@@ -1,7 +1,10 @@
-"""Wave C.1: ReflectionEngine.reflect 测试.
+"""Wave C.1 + Phase 8 Wave 1: ReflectionEngine.reflect 测试.
 
-design §6.2. 0 LLM call, 用 Phase 6 simulation.check_consistency_batch.
-决策优先级: re-expand > prune > stop > continue.
+design §6.2 / Phase 8 design §4. 0 LLM call, 用 Phase 6 simulation.check_consistency_batch.
+决策优先级 (Wave 1 改): expand-downward > prune > stop > continue.
+
+Wave 1 改了 reflect() 在 weak L1 时返 ('expand-downward', target) 而非 ('re-expand', target),
+但 anti-thrash 内部老 trace 仍用 "re-expand" 字串测 backward compat (新+老 trace 都数).
 """
 
 from explain_engine.engines.reflection import (
@@ -73,7 +76,7 @@ class TestReExpand:
         state = _make_state([("c_001", 1), ("p_001", 0)])
         _mock_reports(mocker, [("c_001", 0.3, 0.5)])
         action, target = reflect(state)
-        assert action == "re-expand"
+        assert action == "expand-downward"
         assert target == "c_001"
 
     def test_multi_low_consistency_returns_lowest(self, mocker) -> None:
@@ -83,7 +86,7 @@ class TestReExpand:
             ("c_002", 0.2, 0.5),
         ])
         action, target = reflect(state)
-        assert action == "re-expand"
+        assert action == "expand-downward"
         assert target == "c_002"   # 0.2 < 0.4
 
     def test_threshold_exclusive(self, mocker) -> None:
@@ -91,7 +94,7 @@ class TestReExpand:
         state = _make_state([("c_001", 1), ("p_001", 0)])
         _mock_reports(mocker, [("c_001", LOW_CONSISTENCY_THRESHOLD, 0.5)])
         action, _ = reflect(state)
-        assert action != "re-expand"
+        assert action != "expand-downward"
 
 
 class TestPrune:
@@ -106,14 +109,14 @@ class TestPrune:
         assert target == "d_001"
 
     def test_re_expand_priority_over_prune(self, mocker) -> None:
-        """Same time: low consistency L1 + low essentialness L2 → re-expand 优先."""
+        """Same time: low consistency L1 + low essentialness L2 → expand-downward 优先."""
         state = _make_state([("c_001", 1), ("d_001", 2), ("p_001", 0)])
         _mock_reports(mocker, [
             ("c_001", 0.3, 0.5),
             ("d_001", 0.7, 0.02),
         ])
         action, target = reflect(state)
-        assert action == "re-expand"
+        assert action == "expand-downward"
         assert target == "c_001"
 
     def test_multi_low_essentialness_returns_lowest(self, mocker) -> None:
@@ -164,22 +167,22 @@ class TestNoLLMCalls:
         state = _make_state([("c_001", 1), ("p_001", 0)])
         _mock_reports(mocker, [("c_001", 0.8, 0.5)])
         action, _ = reflect(state)
-        assert action in ("continue", "re-expand", "prune", "stop")
+        assert action in ("continue", "expand-downward", "re-expand", "prune", "stop")
 
 
 class TestReExpandAntiThrash:
     """Wave C 补丁2: re-expand anti-thrash 防死循环."""
 
     def test_no_trace_not_exhausted(self, mocker) -> None:
-        """空 trace → 没人 exhausted, re-expand 正常工作."""
+        """空 trace → 没人 exhausted, expand-downward 正常工作."""
         state = _make_state([("c_001", 1), ("p_001", 0)])
         _mock_reports(mocker, [("c_001", 0.3, 0.5)])
         action, target = reflect(state)
-        assert action == "re-expand"
+        assert action == "expand-downward"
         assert target == "c_001"
 
     def test_single_re_expand_in_trace_not_exhausted(self, mocker) -> None:
-        """单次 re-expand 不算 exhausted (LIMIT=2, 1 < 2)."""
+        """单次 expansion 不算 exhausted (LIMIT=2, 1 < 2). 用老 re-expand 字串测 backward compat."""
         from explain_engine.schema.state import TraceEntry
         state = _make_state([("c_001", 1), ("p_001", 0)])
         state.reasoning_trace.append(TraceEntry(
@@ -189,11 +192,11 @@ class TestReExpandAntiThrash:
         ))
         _mock_reports(mocker, [("c_001", 0.3, 0.5)])
         action, target = reflect(state)
-        assert action == "re-expand"   # 仍 pick c_001
+        assert action == "expand-downward"   # 仍 pick c_001
         assert target == "c_001"
 
     def test_two_consecutive_re_expand_exhausts_target(self, mocker) -> None:
-        """连续 2 次 re-expand 同 target → exhausted, 第 3 次不 pick."""
+        """连续 2 次 expansion 同 target → exhausted, 第 3 次不 pick (老 re-expand 字串测 backward compat)."""
         from explain_engine.schema.state import TraceEntry
         state = _make_state([("c_001", 1), ("p_001", 0)])
         for tick in range(2):
@@ -205,6 +208,7 @@ class TestReExpandAntiThrash:
         _mock_reports(mocker, [("c_001", 0.3, 0.5)])
         action, _ = reflect(state)
         # c_001 exhausted, 但没其他 candidate → fall through to continue
+        assert action != "expand-downward"
         assert action != "re-expand"
 
     def test_expand_entries_do_not_break_streak(self, mocker) -> None:
@@ -228,7 +232,8 @@ class TestReExpandAntiThrash:
         ))
         _mock_reports(mocker, [("c_001", 0.3, 0.5)])
         action, _ = reflect(state)
-        assert action != "re-expand"   # c_001 exhausted
+        assert action != "expand-downward"   # c_001 exhausted
+        assert action != "re-expand"
 
     def test_different_target_breaks_streak(self, mocker) -> None:
         """同 target 1 次 + 不同 target 1 次 + 同 target 1 次 → 不 exhausted (streak 断)."""
@@ -248,7 +253,7 @@ class TestReExpandAntiThrash:
         _mock_reports(mocker, [("c_001", 0.3, 0.5), ("c_002", 0.4, 0.5)])
         action, _ = reflect(state)
         # c_002 不 exhausted, c_001 也不 exhausted (因为 c_002 在 c_001 后面打断了 c_001 streak)
-        assert action == "re-expand"
+        assert action == "expand-downward"
 
     def test_continue_action_does_not_break_count_within_window(self, mocker) -> None:
         """v2: continue 是 reflect entry, 算 window 大小但不加 c_001 count.
@@ -275,7 +280,8 @@ class TestReExpandAntiThrash:
         ))
         _mock_reports(mocker, [("c_001", 0.3, 0.5)])
         action, _ = reflect(state)
-        assert action != "re-expand"   # c_001 occurrence count=2 在 window=5 内, exhausted
+        assert action != "expand-downward"   # c_001 occurrence count=2 在 window=5 内, exhausted
+        assert action != "re-expand"
 
     def test_prune_between_re_expands_does_not_break_count(self, mocker) -> None:
         """v2 修 v1 leak: prune 不该 reset 同 target re-expand 计数.
@@ -301,7 +307,8 @@ class TestReExpandAntiThrash:
             ))
         _mock_reports(mocker, [("c_001", 0.3, 0.5)])
         action, _ = reflect(state)
-        assert action != "re-expand"   # 修 v1 leak
+        assert action != "expand-downward"   # 修 v1 leak
+        assert action != "re-expand"
 
     def test_old_re_expand_outside_window_forgotten(self, mocker) -> None:
         """超出 LOOKBACK_WINDOW 的 re-expand entries 不算入 count.
@@ -331,7 +338,7 @@ class TestReExpandAntiThrash:
         # window=5, 倒序前 5 个都是 continue, 看不到老 re-expand
         _mock_reports(mocker, [("c_001", 0.3, 0.5)])
         action, target = reflect(state)
-        assert action == "re-expand"   # c_001 不再 exhausted
+        assert action == "expand-downward"   # c_001 不再 exhausted (Wave 1 改用 expand-downward)
         assert target == "c_001"
 
     def test_exhausted_falls_through_to_prune(self, mocker) -> None:

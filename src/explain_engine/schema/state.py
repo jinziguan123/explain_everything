@@ -11,7 +11,8 @@ from explain_engine.schema.graph import ExplanationGraph
 Action = Literal["expand", "compress", "evaluate", "reflect"]
 _VALID_ACTIONS = frozenset({"expand", "compress", "evaluate", "reflect"})
 
-ReflectionAction = Literal["continue", "re-expand", "prune", "stop"]
+ReflectionAction = Literal["continue", "re-expand", "expand-downward", "prune", "stop"]
+# Wave 1 加 "expand-downward". "re-expand" 保留供 backward compat (老 session JSON trace).
 
 
 @dataclass

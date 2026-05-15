@@ -2,7 +2,12 @@
 
 import pytest
 
-from explain_engine.engines.expansion import ExpansionOutput, _DriverCandidate
+from explain_engine.engines.expansion import (
+    DownwardExpansionOutput,
+    ExpansionOutput,
+    _DriverCandidate,
+    _PredictedL0,
+)
 from explain_engine.engines.simulation import ConsistencyReport
 from explain_engine.runtime.runtime import run
 from explain_engine.runtime.scheduler import PhaseScheduler
@@ -10,6 +15,23 @@ from explain_engine.schema.edges import RelationEdge
 from explain_engine.schema.graph import ExplanationGraph
 from explain_engine.schema.nodes import VariableNode
 from explain_engine.schema.state import CognitiveState
+
+
+def _dual_call_side_effect(driver_name: str = "new_d", l0_name: str = "new_l0"):
+    """side_effect for expansion._call_with_retry that returns the right output by model.
+
+    Wave 1 Phase 8: reflect 改用 expand-downward → engines.expand_downward 用
+    DownwardExpansionOutput; expand 仍用 ExpansionOutput. mock 需按 schema 分发.
+    """
+    async def _impl(_llm, _messages, output_model):
+        if output_model is DownwardExpansionOutput:
+            return DownwardExpansionOutput(predicted_L0=[
+                _PredictedL0(name=l0_name, description="d", mechanism="m", plausibility=4),
+            ])
+        return ExpansionOutput(drivers=[
+            _DriverCandidate(name=driver_name, description="d", mechanism="m", plausibility=4),
+        ])
+    return _impl
 
 
 def _make_state_with_L1() -> CognitiveState:
@@ -62,6 +84,11 @@ async def test_run_with_K2_emits_reflect_action(mocker) -> None:
 
 @pytest.mark.asyncio
 async def test_reflect_re_expand_mutates_graph(mocker) -> None:
+    """Wave 1 Phase 8: reflect 在 weak L1 时走 expand-downward → 给 c_001 加 L0 子节点.
+
+    改前 (Phase 7): reflect 返 re-expand → re_expand 加 L2 driver, 验 L2 增长.
+    改后 (Wave 1): reflect 返 expand-downward → expand_downward 加 L0 child, 验 L0 增长.
+    """
     state = _make_state_with_L1()
     mocker.patch(
         "explain_engine.engines.reflection.check_consistency_batch",
@@ -75,19 +102,17 @@ async def test_reflect_re_expand_mutates_graph(mocker) -> None:
     )
     mocker.patch(
         "explain_engine.engines.expansion._call_with_retry",
-        return_value=ExpansionOutput(drivers=[
-            _DriverCandidate(name="new_d", description="d", mechanism="m", plausibility=4),
-        ]),
+        side_effect=_dual_call_side_effect(),
     )
-    initial_drivers = sum(
-        1 for n in state.graph.nodes.values() if n.abstraction_level == 2
+    initial_l0 = sum(
+        1 for n in state.graph.nodes.values() if n.abstraction_level == 0
     )
     await run(state, mocker.AsyncMock(), budget=3,
               scheduler=PhaseScheduler(K=2))
-    final_drivers = sum(
-        1 for n in state.graph.nodes.values() if n.abstraction_level == 2
+    final_l0 = sum(
+        1 for n in state.graph.nodes.values() if n.abstraction_level == 0
     )
-    assert final_drivers > initial_drivers
+    assert final_l0 > initial_l0
 
 
 @pytest.mark.asyncio
@@ -218,12 +243,13 @@ async def test_reflection_trace_entry_has_action(mocker) -> None:
     )
     mocker.patch(
         "explain_engine.engines.expansion._call_with_retry",
-        return_value=ExpansionOutput(drivers=[
-            _DriverCandidate(name="x", description="d", mechanism="m", plausibility=4),
-        ]),
+        side_effect=_dual_call_side_effect(driver_name="x", l0_name="x_l0"),
     )
     await run(state, mocker.AsyncMock(), budget=3,
               scheduler=PhaseScheduler(K=2))
     reflect_entries = [e for e in state.reasoning_trace if e.action == "reflect"]
     assert len(reflect_entries) >= 1
-    assert reflect_entries[0].reflection_action in ("re-expand", "prune", "stop", "continue")
+    # Wave 1 Phase 8: 加 "expand-downward" (re-expand 保留作 backward compat).
+    assert reflect_entries[0].reflection_action in (
+        "expand-downward", "re-expand", "prune", "stop", "continue",
+    )

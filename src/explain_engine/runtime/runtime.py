@@ -78,7 +78,16 @@ async def run(
             refl_action, refl_target = reflection.reflect(state)
             reflection_action = refl_action
 
-            if refl_action == "re-expand" and refl_target is not None:
+            if refl_action == "expand-downward" and refl_target is not None:
+                # Wave 1 Phase 8: 替原 re-expand. expand_downward 给 L1 加
+                # manifests_as L0 子节点 (修死循环根因).
+                _new_l0_ids = await expansion.expand_downward(state, refl_target, llm)
+                llm_calls = 1
+                target_id = refl_target
+                state.last_reflection_change_tick = state.tick
+            elif refl_action == "re-expand" and refl_target is not None:
+                # Backward compat: 老 session trace 加载后, 旧 reflection_action 仍能
+                # dispatch. 注意: 当前 reflect() 不再产生 re-expand, 这条只服务老 trace.
                 _new_ids, gain_delta = await expansion.re_expand(
                     state, refl_target, llm
                 )
