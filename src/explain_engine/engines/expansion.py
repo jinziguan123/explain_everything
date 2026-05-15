@@ -41,6 +41,19 @@ class ExpansionOutput(BaseModel):
     drivers: list[_DriverCandidate]
 
 
+class _PredictedL0(BaseModel):
+    name: str
+    description: str
+    mechanism: str
+    plausibility: int = Field(ge=1, le=5)
+
+
+class DownwardExpansionOutput(BaseModel):
+    """expansion_downward.yaml prompt 的 structured output."""
+
+    predicted_L0: list[_PredictedL0] = Field(min_length=1, max_length=5)
+
+
 async def expand_one_frontier(
     state: CognitiveState,
     target_id: str,
@@ -100,6 +113,104 @@ async def re_expand(
         )
 
     return await _do_expansion(state, target_id, llm, max_drivers=max_drivers)
+
+
+async def expand_downward(
+    state: CognitiveState,
+    l1_id: str,
+    llm: LLMClient,
+    max_l0: int = 3,
+) -> list[str]:
+    """Wave 1 Task 1.1: 给 L1 加 outgoing manifests_as L0 子节点.
+
+    与 expand_one_frontier (Phase 5) 对称但反方向:
+      - expand_one_frontier: 给 L1 加 incoming causes (driver → L1)
+      - expand_downward: 给 L1 加 outgoing manifests_as (L1 → L0)
+
+    哲学锚点 §8.1: Explanation 必须能 rollout. L1 consistency 低意味着 L1 难 propagate
+    出 L0; 让 L1 自己说"我会带来什么 concrete 现象", Wave 2 simulation 重新打分.
+
+    Args:
+        state: 当前 cognitive state.
+        l1_id: L1 node id (abstraction_level == 1).
+        llm: LLM client.
+        max_l0: 输出 L0 数量上限 (1-3 推荐).
+
+    Returns:
+        新加的 L0 node id 列表 (长度 1-max_l0).
+
+    Raises:
+        ValueError: l1_id 不存在 / 不是 L1.
+        SchemaValidationError: LLM 输出不合规 (retry 1 次仍失败).
+    """
+    if l1_id not in state.graph.nodes:
+        raise ValueError(f"target {l1_id!r} not found in graph")
+    target = state.graph.nodes[l1_id]
+    if target.abstraction_level != 1:
+        raise ValueError(
+            f"target {l1_id!r} has level={target.abstraction_level}, must be 1"
+        )
+
+    prompt = load_prompt("expansion_downward")
+    existing_l0_text = _render_existing_l0(state)
+    existing_l1_l2_text = _render_existing_l1_l2(state)
+
+    messages = [
+        Message(role="system", content=prompt["system"]),
+        Message(
+            role="user",
+            content=prompt["user_template"].format(
+                question=state.root_question,
+                l1_id=l1_id,
+                l1_name=target.name,
+                l1_description=target.description,
+                existing_l0_table=existing_l0_text,
+                existing_l1_l2_table=existing_l1_l2_text,
+                max_l0=max_l0,
+            ),
+        ),
+    ]
+
+    output = await _call_with_retry_downward(llm, messages)
+    predicted = output.predicted_L0[:max_l0]
+
+    next_p_num = _next_phenom_id_num(state)
+    next_edge_id = _next_edge_id(state)
+    new_ids: list[str] = []
+    existing_name_to_id = {n.name: nid for nid, n in state.graph.nodes.items()}
+
+    for pl0 in predicted:
+        if pl0.name in existing_name_to_id:
+            l0_id = existing_name_to_id[pl0.name]
+        else:
+            l0_id = f"p_{next_p_num:03d}"
+            next_p_num += 1
+            state.graph.add_node(
+                VariableNode(
+                    id=l0_id,
+                    name=pl0.name,
+                    description=pl0.description,
+                    abstraction_level=0,
+                    confidence=pl0.plausibility / 5.0,
+                    epistemic="speculation",
+                    source="llm",
+                )
+            )
+
+        state.graph.add_edge(
+            RelationEdge(
+                id=f"e_{next_edge_id:03d}",
+                source_node=l1_id,
+                target_node=l0_id,
+                relation_type="manifests_as",
+                confidence=pl0.plausibility / 5.0,
+                mechanism_description=pl0.mechanism,
+            )
+        )
+        next_edge_id += 1
+        new_ids.append(l0_id)
+
+    return new_ids
 
 
 async def _do_expansion(
@@ -224,6 +335,52 @@ async def _call_with_retry(
             continue
         try:
             return ExpansionOutput.model_validate(resp.parsed)
+        except ValidationError as exc:
+            last_exc = SchemaValidationError(f"LLM 输出 schema 不合规: {exc}")
+            continue
+    assert last_exc is not None
+    raise last_exc
+
+
+def _render_existing_l0(state: CognitiveState) -> str:
+    lines = [
+        f"- {nid}: {n.name} — {n.description}"
+        for nid, n in state.graph.nodes.items()
+        if n.abstraction_level == 0
+    ]
+    return "\n".join(lines) if lines else "(none)"
+
+
+def _render_existing_l1_l2(state: CognitiveState) -> str:
+    lines = [
+        f"- {nid}: {n.name} (L{n.abstraction_level}) — {n.description}"
+        for nid, n in state.graph.nodes.items()
+        if n.abstraction_level >= 1
+    ]
+    return "\n".join(lines) if lines else "(none)"
+
+
+def _next_phenom_id_num(state: CognitiveState) -> int:
+    existing = [
+        int(nid.split("_")[1])
+        for nid in state.graph.nodes
+        if nid.startswith("p_") and nid[2:].isdigit()
+    ]
+    return (max(existing) + 1) if existing else 1
+
+
+async def _call_with_retry_downward(
+    llm: LLMClient,
+    messages: list[Message],
+) -> DownwardExpansionOutput:
+    last_exc: Exception | None = None
+    for _attempt in range(2):
+        resp = await llm.chat(messages, schema=DownwardExpansionOutput)
+        if resp.parsed is None:
+            last_exc = SchemaValidationError("LLM 未返回 structured output")
+            continue
+        try:
+            return DownwardExpansionOutput.model_validate(resp.parsed)
         except ValidationError as exc:
             last_exc = SchemaValidationError(f"LLM 输出 schema 不合规: {exc}")
             continue
