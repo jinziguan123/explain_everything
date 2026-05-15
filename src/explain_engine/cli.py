@@ -284,7 +284,7 @@ def run(
                 )
         except InsufficientObservationsError as exc:
             console.print(
-                f"\n[red]❌ Input validation failed "
+                f"\n[red]❌ 入口对齐校验失败 "
                 f"(overlap={exc.overlap_score}/5)[/red]\n"
             )
             console.print(f"Question 主体: {exc.question_subject}")
@@ -293,13 +293,17 @@ def run(
                 console.print(f"  - {s}")
             console.print(f"\n理由: {exc.falsifiable_reason}")
             console.print(
-                "\n[dim]💡 If you believe this is a false positive, "
-                "retry with --no-input-check[/dim]"
+                "\n[dim]💡 若认为是误杀, 用 --no-input-check 重试[/dim]"
             )
             raise typer.Exit(2) from exc
         except (LLMError, SchemaValidationError) as exc:
             console.print(f"[red]input validation LLM 失败: {exc}[/red]")
             raise typer.Exit(1) from exc
+    elif session.state.tick > 0:
+        console.print(
+            f"[dim](resuming at tick={session.state.tick}, "
+            f"skipping input validation)[/dim]"
+        )
 
     def on_tick(_state: CognitiveState) -> None:
         store.save(session)
@@ -494,14 +498,26 @@ def _render_multi_signal(state) -> None:
     if report.missing_l0:
         console.print(f"  missing_l0            {report.missing_l0}")
 
-    # Wave 3 Phase 8: alignment section (when populated by input_validation)
+    # Wave 3 Phase 8: Falsifiability section — always shown to make 3 None cases visible:
+    # (a) 旧 session 没跑过 input_validation
+    # (b) --no-input-check 跳过
+    # (c) tick > 0 resume 跳过
+    console.print(
+        "\n[bold cyan]═══ Falsifiability (Phase 8 Wave 3) ═══[/bold cyan]"
+    )
     if report.input_alignment is not None:
         score = round(report.input_alignment * 5)
-        console.print(
-            "\n[bold cyan]═══ Falsifiability (Phase 8 Wave 3) ═══[/bold cyan]"
-        )
         console.print(f"  input_alignment       {score}/5")
         console.print(f"  falsifiable_reason    {report.falsifiable_reason}")
+    else:
+        console.print(
+            "  input_alignment       [dim](not checked; "
+            "use `explain run` at tick 0 without --no-input-check)[/dim]"
+        )
+    console.print(
+        f"  rollout_alignment     {report.rollout_coverage:.3f}  "
+        f"(= rollout_coverage; same算法, Q6.2 共用)"
+    )
 
 
 def _render_single_report(report, session, trace_all: bool = False) -> None:

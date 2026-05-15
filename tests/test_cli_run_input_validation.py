@@ -100,11 +100,8 @@ class TestRunInputValidation:
         runner = CliRunner()
         result = runner.invoke(app, ["run", sid, "--budget", "2"])
         assert result.exit_code == 2
-        # Friendly error markers in stderr/stdout
-        assert (
-            "Input validation failed" in result.output
-            or "0/5" in result.output
-        )
+        # 中文 error message + score (一个在就行)
+        assert "校验失败" in result.output or "0/5" in result.output
         assert "completely unrelated" in result.output
 
     def test_no_input_check_flag_skips_validation(
@@ -136,7 +133,7 @@ class TestRunInputValidation:
         # validate should NOT be called
         assert validate_mock.call_count == 0
         # Should NOT exit 2 from validation
-        assert "Input validation failed" not in result.output
+        assert "校验失败" not in result.output
 
     def test_high_overlap_proceeds_normally(
         self, tmp_path, monkeypatch, mocker
@@ -162,7 +159,7 @@ class TestRunInputValidation:
         runner = CliRunner()
         result = runner.invoke(app, ["run", sid, "--budget", "1"])
         # validation passed, no fail-fast
-        assert "Input validation failed" not in result.output
+        assert "校验失败" not in result.output
 
     def test_validate_only_runs_at_tick_zero(
         self, tmp_path, monkeypatch, mocker
@@ -193,6 +190,62 @@ class TestRunInputValidation:
         runner.invoke(app, ["run", sid, "--budget", "1"])
         # validate should NOT be called (tick > 0)
         assert validate_mock.call_count == 0
+
+    def test_high_overlap_alignment_visible_in_aggregate_acceptance(
+        self, tmp_path, monkeypatch, mocker
+    ) -> None:
+        """End-to-end: validate writes to state → aggregate_acceptance picks it up.
+
+        Locks the load-bearing chain: cli.run sets state.last_input_alignment_report,
+        and any subsequent aggregate_acceptance call will inject input_alignment
+        into AcceptanceReport. Without this test, accidentally deleting the
+        cli.py assignment line would not be caught (state field is in-memory).
+        """
+        monkeypatch.setenv("SESSIONS_DIR", str(tmp_path))
+        _store, sid = _build_done_session(tmp_path)
+
+        # Patch validate_input
+        captured: dict = {}
+
+        async def _capturing_validate(question, l0_nodes, llm):
+            return InputAlignmentReport(
+                question_subject="X",
+                observation_subjects=["Y"],
+                overlap_score=4,  # high enough to pass
+                falsifiable_reason="aligned for test",
+            )
+
+        mocker.patch(
+            "explain_engine.cli.validate_input",
+            side_effect=_capturing_validate,
+        )
+        mocker.patch(
+            "explain_engine.cli.make_llm_client", return_value=mocker.MagicMock()
+        )
+
+        # Stub runtime.run that ALSO captures state to verify the alignment field was set.
+        async def _capturing_runtime_run(
+            state, llm, budget=10, on_tick=None, scheduler=None
+        ):
+            captured["last_input_alignment_report"] = state.last_input_alignment_report
+            return "budget_exhausted"
+
+        mocker.patch(
+            "explain_engine.runtime.runtime.run",
+            side_effect=_capturing_runtime_run,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["run", sid, "--budget", "1"])
+        assert result.exit_code == 0, result.output
+
+        # Verify validate result was written to state BEFORE runtime.run was called
+        assert captured["last_input_alignment_report"] is not None
+        assert captured["last_input_alignment_report"].overlap_score == 4
+        assert (
+            captured["last_input_alignment_report"].falsifiable_reason
+            == "aligned for test"
+        )
 
 
 class TestAcceptanceReportInjectsAlignment:

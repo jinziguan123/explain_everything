@@ -74,3 +74,48 @@ class TestCheckMultiSignalSection:
         result = runner.invoke(app, ["check", sid])
         assert result.exit_code == 0
         assert "weak_chain_l1s" in result.output or "c_001" in result.output
+
+
+class TestCheckFalsifiabilitySection:
+    def test_check_renders_falsifiability_section_with_alignment(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """When state has last_input_alignment_report (in-memory only), check shows
+        Falsifiability with score/5 OR (after disk reload) the (not checked) fallback.
+
+        Note: alignment field is in-memory only, NOT persisted. After save+reload
+        last_input_alignment_report = None, so we expect the "(not checked)"
+        fallback message instead of the score.
+        """
+        from explain_engine.engines.input_validation import InputAlignmentReport
+
+        monkeypatch.setenv("SESSIONS_DIR", str(tmp_path))
+        sid = _build_session_with_l1_l0(tmp_path)
+        store = SessionStore(directory=tmp_path)
+        sess = store.load(sid)
+        sess.state.last_input_alignment_report = InputAlignmentReport(
+            question_subject="X",
+            observation_subjects=["Y"],
+            overlap_score=3,
+            falsifiable_reason="partial alignment",
+        )
+        store.save(sess)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["check", sid])
+        assert result.exit_code == 0
+        assert "Falsifiability" in result.output
+        assert "not checked" in result.output  # in-memory eviction → fallback shown
+
+    def test_check_renders_falsifiability_not_checked_for_old_session(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Old session (never validated) shows '(not checked)' fallback."""
+        monkeypatch.setenv("SESSIONS_DIR", str(tmp_path))
+        sid = _build_session_with_l1_l0(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["check", sid])
+        assert result.exit_code == 0
+        assert "Falsifiability" in result.output
+        assert "not checked" in result.output
