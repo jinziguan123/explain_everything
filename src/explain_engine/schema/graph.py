@@ -117,6 +117,9 @@ class ExplanationGraph:
         AbstractionLevel Literal 不支持 3)。Phase 6 扩 Literal 时改 condition
         为 level >= 1。
 
+        Wave 4 Task 4.2: 跳过 lifecycle_state == "decayed" 的 L1 (soft delete,
+        不参与 graph 演化, 避免 runtime 在 expand tick 调 LLM 后被 expand_downward 拒).
+
         Returns:
             按 node id 字符串升序的 list。
         """
@@ -128,7 +131,11 @@ class ExplanationGraph:
         return sorted(
             nid
             for nid, n in self._nodes.items()
-            if n.abstraction_level == 1 and nid not in incoming_causes_targets
+            if (
+                n.abstraction_level == 1
+                and nid not in incoming_causes_targets
+                and getattr(n, "lifecycle_state", "active") != "decayed"
+            )
         )
 
     def outgoing_edges(self, node_id: str) -> Iterator[RelationEdge]:

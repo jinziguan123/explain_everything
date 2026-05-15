@@ -110,3 +110,74 @@ def compute_fitness(node: VariableNode, state: CognitiveState) -> float:
         - redundancy
     )
     return max(0.0, fitness)
+
+
+def update_lifecycle(
+    state: CognitiveState,
+    current_tick: int,
+) -> dict[str, str]:
+    """Wave 4 Task 4.2: 在每个 reflect tick 推进所有 L1+L2 节点的 lifecycle.
+
+    状态机:
+        active → stale: fitness < STALE_THRESHOLD
+        stale → decayed: stale 累积 ≥ STALE_TO_DECAYED_TICKS
+        stale → active: fitness 回到 ≥ STALE_THRESHOLD (复活)
+        decayed → ?  (Phase 8 不复活; Phase 9 memory consolidation 处理)
+
+    L0 nodes 跳过 (Task 4.1 M4 contract: L0 是 ground truth, 不参与 lifecycle).
+
+    副作用:
+        - 更新 node.lifecycle_state
+        - 更新 node.age_ticks (= current_tick 简化, Phase 9 加 birth_tick)
+        - 在 state 上挂 _stale_since_ticks dict (in-memory only, 不持久化)
+
+    Returns:
+        {node_id: new_state} 变更日志 (只含状态变更的节点).
+    """
+    changes: dict[str, str] = {}
+    if not hasattr(state, "_stale_since_ticks"):
+        state._stale_since_ticks = {}
+
+    for nid, node in state.graph.nodes.items():
+        # L0 跳过 (Task 4.1 M4 contract)
+        if node.abstraction_level == 0:
+            continue
+
+        node.age_ticks = current_tick
+
+        if node.lifecycle_state == "decayed":
+            continue  # Phase 8 决定: decayed 不复活
+
+        fitness = compute_fitness(node, state)
+
+        if node.lifecycle_state == "active":
+            if fitness < STALE_THRESHOLD:
+                node.lifecycle_state = "stale"
+                state._stale_since_ticks[nid] = current_tick
+                changes[nid] = "stale"
+
+        elif node.lifecycle_state == "stale":
+            if fitness >= STALE_THRESHOLD:
+                node.lifecycle_state = "active"
+                state._stale_since_ticks.pop(nid, None)
+                changes[nid] = "active"
+            else:
+                stale_since = state._stale_since_ticks.get(nid, current_tick)
+                if current_tick - stale_since >= STALE_TO_DECAYED_TICKS:
+                    node.lifecycle_state = "decayed"
+                    changes[nid] = "decayed"
+
+    return changes
+
+
+def soft_decay(state: CognitiveState, node_id: str) -> None:
+    """Wave 4 Task 4.2: reflect decay action — 标记节点 decayed (soft delete).
+
+    哲学锚点 §9.3: 不删 node, 不删 trace. propagation/expand 跳过.
+
+    Raises:
+        ValueError: node_id 不存在.
+    """
+    if node_id not in state.graph.nodes:
+        raise ValueError(f"node {node_id!r} not found in graph")
+    state.graph.nodes[node_id].lifecycle_state = "decayed"

@@ -15,9 +15,12 @@ if TYPE_CHECKING:
 Action = Literal["expand", "compress", "evaluate", "reflect"]
 _VALID_ACTIONS = frozenset({"expand", "compress", "evaluate", "reflect"})
 
-ReflectionAction = Literal["continue", "re-expand", "expand-downward", "prune", "stop"]
+ReflectionAction = Literal[
+    "continue", "re-expand", "expand-downward", "decay", "prune", "stop",
+]
 # Wave 1 (Phase 8) 加 "expand-downward". "re-expand" 保留供 backward compat
 # (老 session JSON trace 反序列化时仍能落入 Literal 范围, 即使 reflect() 不再产生).
+# Wave 4 (Phase 8) 加 "decay" — soft delete 低 fitness 节点.
 # Note: action 字符串用 kebab-case (与 'continue'/'prune'/'re-expand' 对齐);
 #       engine 函数名 expand_downward 用 snake_case (PEP-8). 不一致是有意.
 

@@ -67,8 +67,23 @@ def propagate(
         # 1. 收集本层 propagation 候选
         candidates: list[tuple[str, str, RelationEdge, float]] = []
         for src in sorted(frontier):
+            # Wave 4 Task 4.2: decayed source 不向下传 (initial activation 保留,
+            # 但 out-edges blocked — 哲学锚点 §9.3 soft delete).
+            src_node = graph.nodes.get(src)
+            if (
+                src_node is not None
+                and getattr(src_node, "lifecycle_state", "active") == "decayed"
+            ):
+                continue
             for edge in graph.outgoing_edges(src):
                 if edge.relation_type not in FORWARD_RELATIONS:
+                    continue
+                # Wave 4 Task 4.2: 跳过 decayed target (不接收激活).
+                tgt_node = graph.nodes.get(edge.target_node)
+                if (
+                    tgt_node is not None
+                    and getattr(tgt_node, "lifecycle_state", "active") == "decayed"
+                ):
                     continue
                 propagated = activations[src] * edge.confidence
                 if propagated < PROPAGATION_THRESHOLD:

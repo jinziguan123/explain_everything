@@ -14,6 +14,10 @@ from __future__ import annotations
 
 import logging
 
+from explain_engine.engines.lifecycle import (
+    DECAY_THRESHOLD,
+    compute_fitness,
+)
 from explain_engine.schema.state import CognitiveState, ReflectionAction
 
 logger = logging.getLogger(__name__)
@@ -74,21 +78,47 @@ def _exhausted_expansion_targets(state: CognitiveState) -> set[str]:
     return {t for t, c in counts.items() if c >= RE_EXPAND_THRASH_LIMIT}
 
 
+def pick_decay_target(state: CognitiveState) -> str | None:
+    """Wave 4 Task 4.2: 选 fitness 最低且 < DECAY_THRESHOLD 的非 decayed L1+L2 节点.
+
+    L0 nodes 跳过 (Task 4.1 M4 contract: L0 是 ground truth).
+    """
+    if not state.graph.nodes:
+        return None
+
+    candidates: list[tuple[str, float]] = []
+    for nid, node in state.graph.nodes.items():
+        if node.abstraction_level == 0:
+            continue  # L0 跳过
+        if node.lifecycle_state == "decayed":
+            continue
+        f = compute_fitness(node, state)
+        if f < DECAY_THRESHOLD:
+            candidates.append((nid, f))
+
+    if not candidates:
+        return None
+    return min(candidates, key=lambda kv: kv[1])[0]
+
+
 def reflect(state: CognitiveState) -> tuple[ReflectionAction, str | None]:
-    """Reflection decision (Wave 1 + Wave 2 重写). 0 LLM call.
+    """Reflection decision (Wave 1 + Wave 2 + Wave 4 重写). 0 LLM call.
 
     Wave 2 Task 2.3 改: 优先用 cached state.last_acceptance_report 的
     weak_chain_l1s + per_l2 (production runtime 在 reflect tick 前必刷新,
     见 runtime.run). Fallback 当场调 aggregate_acceptance — 仅供 unit test
     直接调 reflect() 跳过 runtime orchestration; production 路径不会触发.
 
-    决策优先级 (Wave 1 改): expand-downward > prune > stop > continue.
+    Wave 4 Task 4.2 加 decay 分支:
+      决策优先级: expand-downward > decay > prune > stop > continue.
+      expand-downward + prune 都跳过 lifecycle_state == "decayed" 的节点.
 
     Returns: (action, target_id)
-      - expand-downward → target_id = lowest-consistency L1 id (Wave 1 Phase 8: 替原 re-expand)
-      - prune → target_id = lowest-essentialness L2 id
-      - stop → target_id = None
-      - continue → target_id = None
+      - expand-downward → target_id = lowest-consistency L1 id
+      - decay           → target_id = lowest-fitness L1/L2 id (新 Wave 4)
+      - prune           → target_id = lowest-essentialness L2 id
+      - stop            → target_id = None
+      - continue        → target_id = None
     """
     if not state.graph.nodes:
         return ("continue", None)
@@ -115,20 +145,29 @@ def reflect(state: CognitiveState) -> tuple[ReflectionAction, str | None]:
             continue
         if l1_id not in state.graph.nodes:
             continue   # defensive: 上一 tick prune 后 cached report 可能含陈旧 id
+        node = state.graph.nodes[l1_id]
+        if node.lifecycle_state == "decayed":
+            continue   # Wave 4: 跳过 decayed
         # Wave 1 Phase 8 fix: expand-downward 替原 re-expand. 见 module docstring.
         return ("expand-downward", l1_id)
 
-    # 2. prune 低 essentialness L2 (用 report.per_l2).
+    # 2. decay 极低 fitness L1/L2 (Wave 4 NEW).
+    decay_target = pick_decay_target(state)
+    if decay_target is not None:
+        return ("decay", decay_target)
+
+    # 3. prune 低 essentialness L2 (用 report.per_l2; Wave 4: 跳过 decayed).
     low_l2 = sorted(
         [(l2, score) for l2, score in report.per_l2.items()
          if score < LOW_ESSENTIALNESS_THRESHOLD
-         and l2 in state.graph.nodes],
+         and l2 in state.graph.nodes
+         and state.graph.nodes[l2].lifecycle_state != "decayed"],
         key=lambda kv: kv[1],
     )
     if low_l2:
         return ("prune", low_l2[0][0])
 
-    # 3. stale 检测 (不变).
+    # 4. stale 检测 (不变).
     if state.tick - state.last_reflection_change_tick >= CONSISTENCY_STALE_TICKS:
         return ("stop", None)
 

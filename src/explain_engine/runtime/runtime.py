@@ -19,6 +19,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from explain_engine.engines import expansion, reflection
+from explain_engine.engines import lifecycle as lifecycle_mod
 from explain_engine.engines.simulation import aggregate_acceptance
 from explain_engine.llm.client import LLMClient
 from explain_engine.runtime import stop as stop_mod
@@ -81,6 +82,10 @@ async def run(
             # per_l2 — 不再每次重算 check_consistency_batch.
             state.last_acceptance_report = aggregate_acceptance(state)
 
+            # Wave 4 Phase 8: 推进所有 L1+L2 lifecycle (active → stale → decayed).
+            # 必须在 reflect() 之前 — pick_decay_target 读 lifecycle_state.
+            lifecycle_mod.update_lifecycle(state, current_tick=state.tick)
+
             refl_action, refl_target = reflection.reflect(state)
             reflection_action = refl_action
 
@@ -89,6 +94,12 @@ async def run(
                 # manifests_as L0 子节点 (修死循环根因).
                 _new_l0_ids = await expansion.expand_downward(state, refl_target, llm)
                 llm_calls = 1
+                target_id = refl_target
+                state.last_reflection_change_tick = state.tick
+            elif refl_action == "decay" and refl_target is not None:
+                # Wave 4 NEW: soft delete (lifecycle_state = "decayed").
+                # 不删 node, 不删 edge, 不删 trace. propagation/expand 跳过.
+                lifecycle_mod.soft_decay(state, refl_target)
                 target_id = refl_target
                 state.last_reflection_change_tick = state.tick
             elif refl_action == "prune" and refl_target is not None:

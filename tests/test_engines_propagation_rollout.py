@@ -3,8 +3,6 @@
 design §5.3.1: 从 L2 root 沿 causes ↓ manifests_as ↓ BFS, 收集 reachable L0.
 """
 
-import pytest
-
 from explain_engine.engines._propagation import rollout_from_roots
 from explain_engine.schema.edges import RelationEdge
 from explain_engine.schema.graph import ExplanationGraph
@@ -85,9 +83,19 @@ class TestRolloutFromRoots:
         assert missing == set()
 
     def test_skips_decayed_nodes_when_present(self) -> None:
-        """Wave 4 集成预留: lifecycle_state == decayed 不参与 rollout.
+        """Wave 4 Task 4.2 启用: lifecycle_state == decayed 不参与 rollout."""
+        g = ExplanationGraph(root_question="q")
+        g.add_node(_node("d_001", 2))
+        g.add_node(VariableNode(
+            id="c_001", name="c_001", description="d",
+            abstraction_level=1, confidence=0.7, epistemic="insight",
+            lifecycle_state="decayed",
+        ))
+        g.add_node(_node("p_001", 0))
+        g.add_edge(_edge("e_001", "d_001", "c_001", "causes"))
+        g.add_edge(_edge("e_002", "c_001", "p_001", "manifests_as"))
 
-        Wave 2 阶段 lifecycle_state 字段还没加, 这个 test 暂时 skip,
-        Wave 4 Task 4.1 启用.
-        """
-        pytest.skip("Wave 4 Task 4.1 启用: VariableNode lifecycle_state 字段")
+        reachable, missing = rollout_from_roots(g)
+        # c_001 decayed → p_001 不可达 (rollout 路径断)
+        assert "p_001" in missing
+        assert "p_001" not in reachable

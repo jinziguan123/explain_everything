@@ -84,6 +84,9 @@ async def expand_one_frontier(
         raise ValueError(
             f"target {target_id!r} already has incoming causes edge (not a frontier)"
         )
+    # Wave 4 Task 4.2: decayed L1 不能 expand.
+    if target.lifecycle_state == "decayed":
+        raise ValueError(f"cannot expand decayed node {target_id!r}")
 
     return await _do_expansion(state, target_id, llm, max_drivers=max_drivers)
 
@@ -100,7 +103,7 @@ async def re_expand(
     default max_drivers=2 (re-expand 比首次 expand 更保守,避免膨胀)。
 
     Raises:
-        ValueError: target_id 不在 graph / target 不是 level==1
+        ValueError: target_id 不在 graph / target 不是 level==1 / target 已 decayed
         LLMError: LLM 调用失败 (provider 抛出,本函数不捕)
         SchemaValidationError: LLM 输出 schema 不合规 (retry 1 次后仍失败)
     """
@@ -111,6 +114,9 @@ async def re_expand(
         raise ValueError(
             f"target {target_id!r} has level={target.abstraction_level}, must be 1"
         )
+    # Wave 4 Task 4.2: decayed L1 不能 expand.
+    if target.lifecycle_state == "decayed":
+        raise ValueError(f"cannot expand decayed node {target_id!r}")
 
     return await _do_expansion(state, target_id, llm, max_drivers=max_drivers)
 
@@ -150,6 +156,9 @@ async def expand_downward(
         raise ValueError(
             f"target {l1_id!r} has level={target.abstraction_level}, must be 1"
         )
+    # Wave 4 Task 4.2: decayed L1 不能 expand (soft-deleted, 不参与 graph 演化).
+    if target.lifecycle_state == "decayed":
+        raise ValueError(f"cannot expand decayed node {l1_id!r}")
 
     prompt = load_prompt("expansion_downward")
     existing_l0_text = _render_existing_l0(state)
