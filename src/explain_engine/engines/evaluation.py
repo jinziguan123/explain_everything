@@ -9,6 +9,7 @@ compression_gain = representation_reduction × explanatory_preservation
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -20,6 +21,11 @@ from explain_engine.llm.prompts._loader import load_prompt
 from explain_engine.schema.state import CognitiveState
 
 logger = logging.getLogger(__name__)
+
+
+LLM_MAX_CONCURRENCY: int = 5
+"""Max concurrent LLM calls in score_all. Test via monkeypatch.setattr.
+Phase 8 may move to env var."""
 
 
 class _ScoringOutput(BaseModel):
@@ -46,7 +52,8 @@ async def score_all(state: CognitiveState, llm: LLMClient) -> dict[str, float]:
     gains: dict[str, float] = {}
     prompt = load_prompt("scoring")
 
-    for cid in state.insight_candidates:
+    n_candidates = len(state.insight_candidates)
+    for cand_idx, cid in enumerate(state.insight_candidates):
         cand = state.graph.nodes[cid]
         out_edges = [
             e
@@ -60,21 +67,43 @@ async def score_all(state: CognitiveState, llm: LLMClient) -> dict[str, float]:
         covered = len(out_edges)
         representation_reduction = covered / total_concrete
 
-        scores: list[int] = []
-        scores_by_edge: dict[str, int] = {}   # Wave A: 记录 per-edge score
-        for e in out_edges:
-            concrete = state.graph.nodes[e.target_node]
-            score = await _score_edge(
-                llm,
-                prompt,
-                abstract_name=cand.name,
-                abstract_description=cand.description,
-                concrete_name=concrete.name,
-                concrete_description=concrete.description,
-                mechanism=e.mechanism_description,
-            )
-            scores.append(score)
-            scores_by_edge[e.id] = score        # Wave A: 累计
+        n_edges = len(out_edges)
+        logger.info(
+            f"[score_all] candidate {cand_idx+1}/{n_candidates} "
+            f"({cid}): scoring {n_edges} edges concurrently "
+            f"(max {LLM_MAX_CONCURRENCY} parallel)..."
+        )
+
+        # Phase 7 Wave C 补丁: 并发 scoring (原 for-await 串行 → asyncio.gather + Semaphore)
+        sem = asyncio.Semaphore(LLM_MAX_CONCURRENCY)
+        completed = 0
+
+        # 注: cid / cand / n_edges / sem 通过 default arg 绑当前 loop iteration 的值
+        # (避免 ruff B023 closure 闭包陷阱; 当前 score_all 内只有一个 candidate
+        # 在跑, 但 default arg 是 Python 习惯的安全写法)
+        async def _score_one(e, *, _cid=cid, _cand=cand, _n_edges=n_edges, _sem=sem):
+            nonlocal completed
+            async with _sem:
+                concrete = state.graph.nodes[e.target_node]
+                score = await _score_edge(
+                    llm,
+                    prompt,
+                    abstract_name=_cand.name,
+                    abstract_description=_cand.description,
+                    concrete_name=concrete.name,
+                    concrete_description=concrete.description,
+                    mechanism=e.mechanism_description,
+                )
+                completed += 1
+                logger.info(
+                    f"[score_all]   {_cid}: {completed}/{_n_edges} "
+                    f"(edge {e.id} → {concrete.name[:20]}, score={score})"
+                )
+                return e.id, score
+
+        results = await asyncio.gather(*[_score_one(e) for e in out_edges])
+        scores_by_edge = dict(results)
+        scores = list(scores_by_edge.values())
 
         explanatory_preservation = (sum(scores) / len(scores)) / 5.0
         gains[cid] = representation_reduction * explanatory_preservation

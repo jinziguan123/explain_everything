@@ -110,10 +110,12 @@ class TestScoreAll:
             model="test",
             usage={"input_tokens": 0, "output_tokens": 0},
         )
-        llm.chat.side_effect = [bad, bad]
+        # Wave C 补丁: 并发后两 edge 同时跑, 都会重试 2 次 -> 至多 4 个 bad response.
+        llm.chat.side_effect = [bad, bad, bad, bad]
         with pytest.raises(SchemaValidationError):
             await score_all(state, llm)
-        assert llm.chat.await_count == 2
+        # 单 edge 至多重试 2 次; 并发后 2 edges -> at most 4, at least 2 (一 edge 必须 retry 满)
+        assert 2 <= llm.chat.await_count <= 4
 
     async def test_retry_succeeds_on_second_attempt(self) -> None:
         """第一次返坏数据（score=99），retry → 第二次返好数据（score=4）→ 成功。"""

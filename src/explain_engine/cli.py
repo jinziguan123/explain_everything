@@ -10,6 +10,7 @@ Phase 3 v0.1 / Phase 4。
 """
 
 import asyncio
+import logging
 from datetime import datetime
 
 import typer
@@ -25,6 +26,12 @@ from explain_engine.hitl.cli_interactive import review_insights, review_phenomen
 from explain_engine.llm.errors import LLMError, SchemaValidationError
 from explain_engine.persistence.session import Session, SessionMeta, SessionStore
 from explain_engine.schema.state import CognitiveState
+
+# Phase 7 Wave C 补丁: 让 score_all 等 engine 的 progress logger.info 显示出来
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+)
 
 app = typer.Typer(
     help="Cognitive Engine for explanation-centric reasoning",
