@@ -25,6 +25,28 @@
 🚧 **Pre-alpha** — Phase 0+1+2（scaffold + schema + LLM client）实施中。
 Phase 3-6（Engine + Runtime + CLI + 评估）后续规划。
 
+## Phase 7 (2026-05-15) — Confidence + Forward Prediction + Reflection
+
+新命令:
+
+- `explain predict <sid> "<intervention>"` — 自然语言 forward prediction（B3 parser + LLM 生 predicted L0）
+- `explain counterfactual <sid> "<substitute>"` — counterfactual 替换 / 删除（副作用 = 0）
+- `explain rescore <sid>` — 重评 edge confidence（Wave A acceptance fixture, 重评后 Phase 6 simulation 真信号化）
+
+`explain run` 现含 Reflection: loop 内动态决定 re-expand / prune / stop。1 round = K expand + 1 reflect。
+
+边界（跟 Phase 6 一致）:
+
+- 系统适合: 历史 / 常识 / 结构性 why-questions
+- 系统不适合: 实时分析 / 强时效议题 / 依赖具体新近数据（LLM 易 hallucinate）
+- Phase 7 forward prediction 适合 structural-mechanism 议题（"如果加入 X / 移除 Y"）; 不适合时事预测
+
+Phase 7 数据点（详见 [Phase 7 acceptance evidence](docs/plans/2026-05-15-cognitive-engine-phase-7-acceptance.md)）:
+
+- Wave A 真信号化生效, 但单 mechanism-scoring signal 区分 hallucinated 较弱（0.036 vs 0.15 设计阈值）。Multi-signal（weak_chains count）更强。
+- Wave B 自然语言 intervention parser + forward predict + counterfactual user-facing 跑通。
+- Wave C reflection 闭环（4 action: continue/re-expand/prune/stop）, anti-thrash 防死循环。
+
 ## 开发
 
 ```bash
