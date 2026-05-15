@@ -22,8 +22,10 @@
 
 ## Status
 
-🚧 **Pre-alpha** — Phase 0+1+2（scaffold + schema + LLM client）实施中。
-Phase 3-6（Engine + Runtime + CLI + 评估）后续规划。
+**Phase 7 milestone (2026-05-15)** — Confidence + Forward Prediction + Reflection。
+389 tests pass，ruff 0。Phase 0-7 全部实施完，Phase 8 直接 motivation：
+multi-signal acceptance + reflect/re_expand 重设计 + question-graph alignment
+（详见 [Phase 7 acceptance evidence](docs/plans/2026-05-15-cognitive-engine-phase-7-acceptance.md)）。
 
 ## Phase 7 (2026-05-15) — Confidence + Forward Prediction + Reflection
 

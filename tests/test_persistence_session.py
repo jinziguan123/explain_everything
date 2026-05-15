@@ -137,3 +137,28 @@ class TestSessionStore:
         metas = store.list()
         assert len(metas) == 1
         assert metas[0].session_id == good.meta.session_id
+
+    def test_list_excludes_backup_snapshot_files(self, tmp_sessions_dir):
+        """s_xxx.before-Y.json 等 backup snapshot 文件不该被 list 返."""
+        store = SessionStore(directory=tmp_sessions_dir)
+        # 写一个真实 session
+        real_session = Session(
+            meta=SessionMeta(
+                session_id="s_a1b2c3d4",
+                question="q",
+                stage="converged",
+                created_at=1234567890.0,
+                updated_at=1234567890.0,
+            ),
+            state=CognitiveState.bootstrap("q", budget=0),
+        )
+        store.save(real_session)
+        # 写一个 backup snapshot 文件 (典型 user 备份 workflow)
+        real_path = tmp_sessions_dir / "s_a1b2c3d4.json"
+        backup_path = tmp_sessions_dir / "s_a1b2c3d4.before-rescore.json"
+        backup_path.write_text(real_path.read_text())
+
+        metas = store.list()
+        # 应该只返回真实 session, 不返回 backup
+        assert len(metas) == 1
+        assert metas[0].session_id == "s_a1b2c3d4"

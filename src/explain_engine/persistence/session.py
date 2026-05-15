@@ -26,6 +26,8 @@ Stage = Literal[
 ]
 
 _SESSION_ID_RE = re.compile(r"^s_[0-9a-f]{8}$")
+_SESSION_FILE_RE = re.compile(r"^s_[0-9a-f]{8}\.json$")
+"""严格匹配 session 主文件名, 排除 backup snapshots (e.g. s_xxx.before-rescore.json)."""
 _VALID_STAGES = frozenset({"bootstrap_pending", "insight_pending", "done", "converged"})
 
 
@@ -105,8 +107,11 @@ class SessionStore:
         return Session.from_dict(json.loads(p.read_text()))
 
     def list(self) -> list[SessionMeta]:
+        """List all session metas (excludes backup snapshots like .before-X.json)."""
         metas: list[SessionMeta] = []
         for p in self.directory.glob("s_*.json"):
+            if not _SESSION_FILE_RE.match(p.name):
+                continue   # skip backup snapshots (e.g., s_xxx.before-rescore.json)
             try:
                 d = json.loads(p.read_text())
                 metas.append(SessionMeta(**d["meta"]))

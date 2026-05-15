@@ -95,6 +95,13 @@ def reflect(state: CognitiveState) -> tuple[ReflectionAction, str | None]:
          and r.target_id not in exhausted],
         key=lambda r: r.consistency_score,
     )
+    # WARNING Phase 8 设计 bug (acceptance evidence §"反直觉发现"):
+    # re_expand 加 incoming causes (driver → L1) 但 consistency_score 测 outgoing
+    # manifests_as (L1 → L0). 加 driver 不影响 L1 outgoing edges, 所以 re-expand
+    # 永远不能改善触发它的 consistency 分数 → 死循环.
+    # 当前用 anti-thrash (RE_EXPAND_THRASH_LIMIT=2 + LOOKBACK=5) bound 死循环到
+    # ~20% leak rate, 但根本不修. Phase 8 重设计: split into "outgoing leak"
+    # (re-generate manifests_as children) vs "incoming missing" (current behavior).
     if low_c:
         return ("re-expand", low_c[0].target_id)
 
