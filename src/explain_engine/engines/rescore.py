@@ -31,6 +31,13 @@ async def rescore_session(
         state.graph.edges[edge_id].confidence = score / 5.0 in-place.
     """
     prompt = load_prompt("scoring")
+    # TODO Phase 8: 用专属 rescoring_causes.yaml 替换简化 mapping.
+    # 当前对 causes edge 复用 scoring.yaml (design §7.2.1 简化决定):
+    # 把 source (driver L2) 当 "abstract" 字段, target (L1) 当 "concrete" 字段
+    # 传给 _score_edge. 但 scoring.yaml 的 prompt 是为 manifests_as 写的
+    # (语境是 "abstract→concrete observation"), 用在 causes 上 LLM 可能 systematically
+    # under-score. Wave D.2 acceptance 若发现 causes-edge confidence range 偏低,
+    # 这里是 prime suspect. 真修需新 rescoring_causes.yaml.
     edges_to_score = [
         e for e in state.graph.edges.values()
         if e.relation_type in ("manifests_as", "causes")

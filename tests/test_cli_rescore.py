@@ -184,3 +184,29 @@ class TestCLIRescore:
         )
         result = runner.invoke(app, ["rescore", "s_fa110001"])
         assert result.exit_code == 1
+
+    def test_rescore_save_failure_exits_3(
+        self, cli_env, runner, monkeypatch
+    ) -> None:
+        """OSError on save → exit 3, error message 含 'LLM cost 已消耗'."""
+        _save_session_with_default_conf(cli_env, "s_99887766")
+
+        async def fake_rescore(state, llm):
+            return {"e_001": 0.8}
+
+        monkeypatch.setattr(
+            "explain_engine.engines.rescore.rescore_session", fake_rescore,
+        )
+        monkeypatch.setattr(
+            "explain_engine.cli.make_llm_client", lambda: MagicMock(),
+        )
+        # Patch SessionStore.save 抛 OSError
+        def fake_save(self, session):
+            raise OSError("disk full")
+        monkeypatch.setattr(
+            "explain_engine.persistence.session.SessionStore.save",
+            fake_save,
+        )
+        result = runner.invoke(app, ["rescore", "s_99887766"])
+        assert result.exit_code == 3
+        assert "LLM cost" in result.output or "save" in result.output.lower()
