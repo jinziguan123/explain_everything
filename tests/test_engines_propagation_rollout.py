@@ -99,3 +99,51 @@ class TestRolloutFromRoots:
         # c_001 decayed → p_001 不可达 (rollout 路径断)
         assert "p_001" in missing
         assert "p_001" not in reachable
+
+
+class TestAllDecayedL2FallbackToL1:
+    """Phase 9 E.2 A regression: when all L2 decayed, fallback to active L1.
+
+    Without this fix, rollout_coverage=0 even when graph is healthy (just
+    has fully-decayed L2 layer).
+    """
+
+    def test_all_l2_decayed_falls_back_to_l1(self):
+        from explain_engine.engines._propagation import rollout_from_roots
+        from explain_engine.schema.edges import RelationEdge
+        from explain_engine.schema.graph import ExplanationGraph
+        from explain_engine.schema.nodes import VariableNode
+
+        g = ExplanationGraph(root_question="q")
+        # L2 nodes (all decayed)
+        for nid in ("d_001", "d_002"):
+            g.add_node(VariableNode(
+                id=nid, name=nid, description="d",
+                abstraction_level=2, confidence=0.7, epistemic="inference",
+                lifecycle_state="decayed",
+            ))
+        # Active L1
+        g.add_node(VariableNode(
+            id="c_001", name="c", description="d",
+            abstraction_level=1, confidence=0.7, epistemic="insight",
+        ))
+        # L0 reachable from L1
+        g.add_node(VariableNode(
+            id="p_001", name="p", description="d",
+            abstraction_level=0, confidence=0.7, epistemic="observation",
+        ))
+        # L1 → L0 manifests_as
+        g.add_edge(RelationEdge(
+            id="e_001", source_node="c_001", target_node="p_001",
+            relation_type="manifests_as", confidence=0.7, mechanism_description="m",
+        ))
+        # D_001 → C_001 causes (but d_001 decayed, won't BFS from)
+        g.add_edge(RelationEdge(
+            id="e_002", source_node="d_001", target_node="c_001",
+            relation_type="causes", confidence=0.7, mechanism_description="m",
+        ))
+
+        reachable, missing = rollout_from_roots(g)
+        # E.2 A fix: fallback to active L1 → p_001 reachable
+        assert "p_001" in reachable
+        assert missing == set()

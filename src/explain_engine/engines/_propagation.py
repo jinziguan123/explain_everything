@@ -186,20 +186,31 @@ def rollout_from_roots(graph: ExplanationGraph) -> tuple[set[str], set[str]]:
     if not all_l0:
         return set(), set()
 
-    roots = {nid for nid, n in graph.nodes.items() if n.abstraction_level == 2}
-    if not roots:
-        # 退化: 无 L2 用 L1 作 roots
-        roots = {nid for nid, n in graph.nodes.items() if n.abstraction_level == 1}
-    if not roots:
-        # 纯 L0 graph
-        return set(), all_l0
-
     # Wave 4 hook: 跳过 decayed (forward-compat)
     def _is_decayed(nid: str) -> bool:
         node = graph.nodes.get(nid)
         if node is None:
             return False
         return getattr(node, "lifecycle_state", "active") == "decayed"
+
+    # Phase 9 E.2 A fix: 区分 "L2 在 graph" 和 "L2 可用 (active)".
+    # 原逻辑 fallback to L1 only when L2 集合空; 但若 L2 全 decayed 则集合
+    # 非空, BFS 跳过所有 root, reachable=0 即使 L1 仍 active. 真实场景:
+    # 长跑 chat session 所有 L2 都被 lifecycle decayed 时 rollout_coverage=0.
+    # 修: 先 filter active, 空 → fallback to active L1.
+    l2_ids = {nid for nid, n in graph.nodes.items() if n.abstraction_level == 2}
+    active_l2 = {nid for nid in l2_ids if not _is_decayed(nid)}
+    if active_l2:
+        roots = active_l2
+    else:
+        # 退化: 无 active L2 (空 set 或全 decayed) → 用 active L1
+        l1_ids = {nid for nid, n in graph.nodes.items() if n.abstraction_level == 1}
+        active_l1 = {nid for nid in l1_ids if not _is_decayed(nid)}
+        if active_l1:
+            roots = active_l1
+        else:
+            # 纯 L0 graph 或 L1+L2 全 decayed
+            return set(), all_l0
 
     visited: set[str] = set()
     queue: list[str] = []

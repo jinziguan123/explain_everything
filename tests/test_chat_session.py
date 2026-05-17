@@ -170,3 +170,30 @@ class TestChatSessionDIRemoval:
         params = list(sig.parameters.keys())
         # self + sid only
         assert params == ["self", "sid"]
+
+
+class TestAlignmentPersistenceE2B:
+    """E.2 B regression: state.last_input_alignment_report persists via chat_state."""
+
+    def test_alignment_set_then_persist_then_reload(self):
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.engines.input_validation import InputAlignmentReport
+        # Helper from existing tests
+        _make_done_session("s_a11ec001")
+
+        chat = ChatSession("s_a11ec001")
+        # Simulate alignment validation result
+        report = InputAlignmentReport(
+            question_subject="Q主体",
+            observation_subjects=["O1", "O2"],
+            overlap_score=4,
+            falsifiable_reason="aligned well",
+        )
+        chat.state.last_input_alignment_report = report
+        chat.close()
+
+        # Reload — new ChatSession instance, fresh memory
+        chat2 = ChatSession("s_a11ec001")
+        assert chat2.state.last_input_alignment_report is not None
+        assert chat2.state.last_input_alignment_report.overlap_score == 4
+        assert chat2.state.last_input_alignment_report.question_subject == "Q主体"

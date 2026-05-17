@@ -144,6 +144,27 @@ class ChatSession:
             else ChatStateDict()
         )
 
+        # Phase 9 E.2 B fix: hydrate state.last_input_alignment_report from
+        # persisted chat_state.last_input_alignment dict. Phase 8 留下的 in-memory
+        # only 限制现在通过 chat_state sidecar 跨进程持久化 (用户 Layer 1 真 LLM
+        # run 后 explain check 看到 "(not checked)" fallback bug 由此修复).
+        if self.chat_state.last_input_alignment is not None:
+            try:
+                from explain_engine.engines.input_validation import (
+                    InputAlignmentReport,
+                )
+                self.state.last_input_alignment_report = (
+                    InputAlignmentReport.model_validate(
+                        self.chat_state.last_input_alignment
+                    )
+                )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"failed to hydrate last_input_alignment for {sid}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
         # Wave D.2: hint set by reflect_post_turn 上一 turn, 下一 turn 的
         # assemble_system_prompt 读取 → 用一次后清 None (one-shot consumption,
         # 防 LLM 一直被同一 stale hint 干扰).
@@ -255,6 +276,20 @@ class ChatSession:
         since graphs small. 考虑 5-sec debounce 或 persist-on-TurnComplete-only
         after C.2 + D.1 land.
         """
+        # Phase 9 E.2 B fix: serialize state.last_input_alignment_report →
+        # chat_state.last_input_alignment dict (使下次 __init__ 可 hydrate 回来).
+        if self.state.last_input_alignment_report is not None:
+            try:
+                self.chat_state.last_input_alignment = (
+                    self.state.last_input_alignment_report.model_dump()
+                )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"failed to serialize last_input_alignment for {self.sid}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
         chat_state_dict = {
             "budget_per_turn_remaining": self.chat_state.budget_per_turn_remaining,
             "budget_per_session_remaining": self.chat_state.budget_per_session_remaining,
