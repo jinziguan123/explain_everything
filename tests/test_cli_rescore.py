@@ -1,6 +1,5 @@
 """Wave D.1: explain rescore CLI 测试."""
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -24,52 +23,54 @@ def runner() -> CliRunner:
 
 
 def _save_session_with_default_conf(sessions_dir: Path, sid: str) -> None:
-    """灌一个 session: c_001 + 1 manifests_as edge, d_001 + 1 causes edge."""
-    payload = {
-        "meta": {
-            "session_id": sid, "question": "q", "stage": "converged",
-            "created_at": 1234567890.0, "updated_at": 1234567890.0,
-        },
-        "state": {
-            "graph": {
-                "root_question": "q",
-                "nodes": {
-                    "p_001": {
-                        "id": "p_001", "name": "p", "description": "d",
-                        "abstraction_level": 0, "confidence": 0.7,
-                        "epistemic": "observation",
-                    },
-                    "c_001": {
-                        "id": "c_001", "name": "c", "description": "d",
-                        "abstraction_level": 1, "confidence": 0.7,
-                        "epistemic": "insight",
-                    },
-                    "d_001": {
-                        "id": "d_001", "name": "d", "description": "d",
-                        "abstraction_level": 2, "confidence": 0.6,
-                        "epistemic": "inference",
-                    },
+    """Phase 9: 拆 legacy payload → storage_v2 (sessions_dir 仅作 fixture 签名)."""
+    del sessions_dir  # 不再使用 (storage_v2 走 EXPLAIN_HOME)
+    from explain_engine.persistence.storage_v2 import StorageV2
+    meta = {
+        "session_id": sid, "question": "q", "stage": "converged",
+        "created_at": 1234567890.0, "updated_at": 1234567890.0,
+    }
+    state = {
+        "graph": {
+            "root_question": "q",
+            "nodes": {
+                "p_001": {
+                    "id": "p_001", "name": "p", "description": "d",
+                    "abstraction_level": 0, "confidence": 0.7,
+                    "epistemic": "observation",
                 },
-                "edges": {
-                    "e_001": {
-                        "id": "e_001", "source_node": "c_001", "target_node": "p_001",
-                        "relation_type": "manifests_as",
-                        "confidence": 0.7, "mechanism_description": "m1",
-                    },
-                    "e_002": {
-                        "id": "e_002", "source_node": "d_001", "target_node": "c_001",
-                        "relation_type": "causes",
-                        "confidence": 0.6, "mechanism_description": "m2",
-                    },
+                "c_001": {
+                    "id": "c_001", "name": "c", "description": "d",
+                    "abstraction_level": 1, "confidence": 0.7,
+                    "epistemic": "insight",
+                },
+                "d_001": {
+                    "id": "d_001", "name": "d", "description": "d",
+                    "abstraction_level": 2, "confidence": 0.6,
+                    "epistemic": "inference",
                 },
             },
-            "budget_remaining": 0, "root_question": "q",
-            "active_frontier": [], "insight_candidates": ["c_001"],
-            "tick": 0, "last_gain_tick": 0,
-            "last_gains": {}, "reasoning_trace": [],
+            "edges": {
+                "e_001": {
+                    "id": "e_001", "source_node": "c_001", "target_node": "p_001",
+                    "relation_type": "manifests_as",
+                    "confidence": 0.7, "mechanism_description": "m1",
+                },
+                "e_002": {
+                    "id": "e_002", "source_node": "d_001", "target_node": "c_001",
+                    "relation_type": "causes",
+                    "confidence": 0.6, "mechanism_description": "m2",
+                },
+            },
         },
+        "budget_remaining": 0, "root_question": "q",
+        "active_frontier": [], "insight_candidates": ["c_001"],
+        "tick": 0, "last_gain_tick": 0,
+        "last_gains": {}, "reasoning_trace": [],
     }
-    (sessions_dir / f"{sid}.json").write_text(json.dumps(payload, ensure_ascii=False))
+    sv2 = StorageV2()
+    sv2.save_metadata(sid, meta)
+    sv2.save_graph(sid, state)
 
 
 class TestCLIRescore:
@@ -131,28 +132,28 @@ class TestCLIRescore:
         self, cli_env, runner, monkeypatch
     ) -> None:
         """空 graph (无 edges) → yellow message, exit 0."""
+        del cli_env  # storage_v2 走 EXPLAIN_HOME
+        from explain_engine.persistence.storage_v2 import StorageV2
         # 灌一个 graph 无 edges
-        payload = {
-            "meta": {
-                "session_id": "s_c9d8e7f6", "question": "q",
-                "stage": "converged", "created_at": 1234567890.0,
-                "updated_at": 1234567890.0,
-            },
-            "state": {
-                "graph": {
-                    "root_question": "q",
-                    "nodes": {},
-                    "edges": {},
-                },
-                "budget_remaining": 0, "root_question": "q",
-                "active_frontier": [], "insight_candidates": [],
-                "tick": 0, "last_gain_tick": 0,
-                "last_gains": {}, "reasoning_trace": [],
-            },
+        meta = {
+            "session_id": "s_c9d8e7f6", "question": "q",
+            "stage": "converged", "created_at": 1234567890.0,
+            "updated_at": 1234567890.0,
         }
-        (cli_env / "s_c9d8e7f6.json").write_text(
-            json.dumps(payload, ensure_ascii=False)
-        )
+        state = {
+            "graph": {
+                "root_question": "q",
+                "nodes": {},
+                "edges": {},
+            },
+            "budget_remaining": 0, "root_question": "q",
+            "active_frontier": [], "insight_candidates": [],
+            "tick": 0, "last_gain_tick": 0,
+            "last_gains": {}, "reasoning_trace": [],
+        }
+        sv2 = StorageV2()
+        sv2.save_metadata("s_c9d8e7f6", meta)
+        sv2.save_graph("s_c9d8e7f6", state)
 
         async def fake_rescore(state, llm):
             return {}

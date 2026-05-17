@@ -75,16 +75,24 @@ class TestSessionStore:
         assert metas[0].created_at >= metas[1].created_at >= metas[2].created_at
 
     def test_save_writes_json_file(self, tmp_sessions_dir):
+        """Phase 9: save 应写 metadata.json + graph.json 到 storage_v2 session_dir."""
+        from explain_engine.persistence.storage_v2 import StorageV2
+
         store = SessionStore(directory=tmp_sessions_dir)
         session = Session(
             meta=SessionMeta.new(question="why?"),
             state=CognitiveState.bootstrap("why?", budget=10),
         )
         store.save(session)
-        path = tmp_sessions_dir / f"{session.meta.session_id}.json"
-        assert path.exists()
-        # 文件是合法 JSON
-        json.loads(path.read_text())
+        sid = session.meta.session_id
+        sdir = StorageV2().session_dir(sid)
+        meta_path = sdir / "metadata.json"
+        graph_path = sdir / "graph.json"
+        assert meta_path.exists()
+        assert graph_path.exists()
+        # 两文件都是合法 JSON
+        json.loads(meta_path.read_text())
+        json.loads(graph_path.read_text())
 
     def test_update_session_overwrites(self, tmp_sessions_dir):
         store = SessionStore(directory=tmp_sessions_dir)
@@ -104,10 +112,17 @@ class TestSessionStore:
         assert loaded.meta.stage == "insight_pending"
 
     def test_load_invalid_json_raises(self, tmp_sessions_dir):
+        """Phase 9: 写 invalid state 到 storage_v2 graph.json → load 抛 ValueError."""
+        from explain_engine.persistence.storage_v2 import StorageV2
+
         store = SessionStore(directory=tmp_sessions_dir)
-        # 写一个非法 session 文件
-        bad_path = tmp_sessions_dir / "s_00000000.json"
-        bad_path.write_text('{"meta": {"session_id": "s_00000000"}, "state": "not a dict"}')
+        sv2 = StorageV2()
+        # 合法 metadata + 非法 state (state['graph'] 必须是 dict)
+        sv2.save_metadata("s_00000000", {
+            "session_id": "s_00000000", "question": "q", "stage": "done",
+            "created_at": 1.0, "updated_at": 1.0,
+        })
+        sv2.save_graph("s_00000000", "not a dict")  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="invalid session dict"):
             store.load("s_00000000")
 
@@ -138,8 +153,10 @@ class TestSessionStore:
         assert len(metas) == 1
         assert metas[0].session_id == good.meta.session_id
 
-    def test_list_excludes_backup_snapshot_files(self, tmp_sessions_dir):
-        """s_xxx.before-Y.json 等 backup snapshot 文件不该被 list 返."""
+    def test_list_excludes_dotdirs(self, tmp_sessions_dir):
+        """Phase 9: storage_v2 list_sessions 跳过 .xxx dirs (如 .legacy/, .backups/)."""
+        from explain_engine.persistence.storage_v2 import StorageV2
+
         store = SessionStore(directory=tmp_sessions_dir)
         # 写一个真实 session
         real_session = Session(
@@ -153,12 +170,13 @@ class TestSessionStore:
             state=CognitiveState.bootstrap("q", budget=0),
         )
         store.save(real_session)
-        # 写一个 backup snapshot 文件 (典型 user 备份 workflow)
-        real_path = tmp_sessions_dir / "s_a1b2c3d4.json"
-        backup_path = tmp_sessions_dir / "s_a1b2c3d4.before-rescore.json"
-        backup_path.write_text(real_path.read_text())
+        # 模拟 dotdir (例如 migration 落的 .legacy/ 或用户的 .backups/)
+        sv2 = StorageV2()
+        dot_dir = sv2.project_dir() / "sessions" / ".backups"
+        dot_dir.mkdir(parents=True)
+        (dot_dir / "metadata.json").write_text("{}")
 
         metas = store.list()
-        # 应该只返回真实 session, 不返回 backup
+        # 应该只返回真实 session, 不返回 dotdir
         assert len(metas) == 1
         assert metas[0].session_id == "s_a1b2c3d4"

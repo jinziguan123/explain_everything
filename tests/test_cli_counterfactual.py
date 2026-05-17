@@ -1,6 +1,5 @@
 """Wave B.3: explain counterfactual CLI 测试."""
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -24,54 +23,60 @@ def runner() -> CliRunner:
 
 
 def _save_converged_session(sessions_dir: Path, sid: str, stage: str = "converged") -> None:
-    payload = {
-        "meta": {
-            "session_id": sid, "question": "why",
-            "stage": stage, "created_at": 1234567890.0,
-            "updated_at": 1234567890.0,
-        },
-        "state": {
-            "graph": {
-                "root_question": "why",
-                "nodes": {
-                    "p_001": {
-                        "id": "p_001", "name": "p", "description": "d",
-                        "abstraction_level": 0, "confidence": 0.7,
-                        "epistemic": "observation",
-                    },
-                    "c_001": {
-                        "id": "c_001", "name": "c", "description": "d",
-                        "abstraction_level": 1, "confidence": 0.7,
-                        "epistemic": "insight",
-                    },
-                    "d_001": {
-                        "id": "d_001", "name": "driver", "description": "d",
-                        "abstraction_level": 2, "confidence": 0.6,
-                        "epistemic": "inference",
-                    },
+    """Phase 9: 拆 legacy payload → storage_v2.save_metadata + save_graph.
+
+    sessions_dir 参数仅留作 fixture 兼容签名; 实际写入由 storage_v2 决定 path.
+    """
+    del sessions_dir  # 不再使用 (storage_v2 走 EXPLAIN_HOME)
+    from explain_engine.persistence.storage_v2 import StorageV2
+    meta = {
+        "session_id": sid, "question": "why",
+        "stage": stage, "created_at": 1234567890.0,
+        "updated_at": 1234567890.0,
+    }
+    state = {
+        "graph": {
+            "root_question": "why",
+            "nodes": {
+                "p_001": {
+                    "id": "p_001", "name": "p", "description": "d",
+                    "abstraction_level": 0, "confidence": 0.7,
+                    "epistemic": "observation",
                 },
-                "edges": {
-                    "e_001": {
-                        "id": "e_001", "source_node": "c_001",
-                        "target_node": "p_001",
-                        "relation_type": "manifests_as",
-                        "confidence": 0.7, "mechanism_description": "m",
-                    },
-                    "e_002": {
-                        "id": "e_002", "source_node": "d_001",
-                        "target_node": "c_001",
-                        "relation_type": "causes",
-                        "confidence": 0.6, "mechanism_description": "m",
-                    },
+                "c_001": {
+                    "id": "c_001", "name": "c", "description": "d",
+                    "abstraction_level": 1, "confidence": 0.7,
+                    "epistemic": "insight",
+                },
+                "d_001": {
+                    "id": "d_001", "name": "driver", "description": "d",
+                    "abstraction_level": 2, "confidence": 0.6,
+                    "epistemic": "inference",
                 },
             },
-            "budget_remaining": 0, "root_question": "why",
-            "active_frontier": [], "insight_candidates": ["c_001"],
-            "tick": 0, "last_gain_tick": 0,
-            "last_gains": {}, "reasoning_trace": [],
+            "edges": {
+                "e_001": {
+                    "id": "e_001", "source_node": "c_001",
+                    "target_node": "p_001",
+                    "relation_type": "manifests_as",
+                    "confidence": 0.7, "mechanism_description": "m",
+                },
+                "e_002": {
+                    "id": "e_002", "source_node": "d_001",
+                    "target_node": "c_001",
+                    "relation_type": "causes",
+                    "confidence": 0.6, "mechanism_description": "m",
+                },
+            },
         },
+        "budget_remaining": 0, "root_question": "why",
+        "active_frontier": [], "insight_candidates": ["c_001"],
+        "tick": 0, "last_gain_tick": 0,
+        "last_gains": {}, "reasoning_trace": [],
     }
-    (sessions_dir / f"{sid}.json").write_text(json.dumps(payload, ensure_ascii=False))
+    sv2 = StorageV2()
+    sv2.save_metadata(sid, meta)
+    sv2.save_graph(sid, state)
 
 
 class TestCLICounterfactual:

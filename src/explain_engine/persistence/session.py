@@ -1,12 +1,13 @@
-"""Session 落地：每个 session 一个 JSON 文件。
+"""Session 落地：Phase 9 起 delegate to storage_v2 (project-based dir layout)。
 
-文件名: {session_id}.json
+公开接口 (SessionMeta / Session / SessionStore) 完全向后兼容 Phase 0-8 测试,
+但内部不再用 flat sessions/*.json — 改 storage_v2.StorageV2 写到
+~/.explain/projects/<proj>/sessions/<sid>/{metadata.json, graph.json}.
+
 session_id 格式: s_{8 hex}
 """
 
-import json
 import logging
-import os
 import re
 import secrets
 import time
@@ -14,6 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
+from explain_engine.persistence.storage_v2 import StorageV2
 from explain_engine.schema.state import CognitiveState
 
 logger = logging.getLogger(__name__)
@@ -26,8 +28,6 @@ Stage = Literal[
 ]
 
 _SESSION_ID_RE = re.compile(r"^s_[0-9a-f]{8}$")
-_SESSION_FILE_RE = re.compile(r"^s_[0-9a-f]{8}\.json$")
-"""严格匹配 session 主文件名, 排除 backup snapshots (e.g. s_xxx.before-rescore.json)."""
 _VALID_STAGES = frozenset({"bootstrap_pending", "insight_pending", "done", "converged"})
 
 
@@ -86,37 +86,56 @@ class Session:
 
 
 class SessionStore:
-    def __init__(self, directory: Path) -> None:
-        self.directory = Path(directory)
-        self.directory.mkdir(parents=True, exist_ok=True)
+    """Phase 0-8 向后兼容接口, 内部 delegate 到 StorageV2.
 
-    def _path(self, session_id: str) -> Path:
-        return self.directory / f"{session_id}.json"
+    `directory` 参数仍接受但被忽略 — Phase 9 起所有 session 走
+    storage_v2 layout (~/.explain/projects/<proj>/sessions/<sid>/).
+    EXPLAIN_HOME / EXPLAIN_PROJECT_ID env vars 控制实际落盘位置.
+    """
+
+    def __init__(self, directory: Path | str | None = None) -> None:
+        # directory 已弃用; 仅保留参数签名兼容老 test/CLI.
+        self.directory = Path(directory) if directory is not None else None
+        self._storage = StorageV2()
 
     def save(self, session: Session) -> None:
         session.meta.updated_at = time.time()
-        p = self._path(session.meta.session_id)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(session.to_dict(), ensure_ascii=False, indent=2))
-        os.replace(tmp, p)
+        sid = session.meta.session_id
+        meta_dict = asdict(session.meta)
+        state_dict = session.state.to_dict()
+        self._storage.save_metadata(sid, meta_dict)
+        self._storage.save_graph(sid, state_dict)
 
     def load(self, session_id: str) -> Session:
-        p = self._path(session_id)
-        if not p.exists():
-            raise FileNotFoundError(f"session {session_id} not found at {p}")
-        return Session.from_dict(json.loads(p.read_text()))
+        try:
+            meta_dict = self._storage.load_metadata(session_id)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"session {session_id} not found at {self._storage.session_dir(session_id)}"
+            ) from exc
+        try:
+            state_dict = self._storage.load_graph(session_id)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"session {session_id} graph not found at {self._storage.session_dir(session_id)}"
+            ) from exc
+        try:
+            return Session(
+                meta=SessionMeta(**meta_dict),
+                state=CognitiveState.from_dict(state_dict),
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ValueError(f"invalid session dict: {exc}") from exc
 
     def list(self) -> list[SessionMeta]:
-        """List all session metas (excludes backup snapshots like .before-X.json)."""
+        """List all session metas. 跳过 corrupted / 不合规的 session_dir."""
         metas: list[SessionMeta] = []
-        for p in self.directory.glob("s_*.json"):
-            if not _SESSION_FILE_RE.match(p.name):
-                continue   # skip backup snapshots (e.g., s_xxx.before-rescore.json)
+        for sid in self._storage.list_sessions():
             try:
-                d = json.loads(p.read_text())
-                metas.append(SessionMeta(**d["meta"]))
-            except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
-                logger.warning("skipping unreadable session %s: %s", p.name, exc)
+                meta_dict = self._storage.load_metadata(sid)
+                metas.append(SessionMeta(**meta_dict))
+            except (FileNotFoundError, ValueError, TypeError, KeyError) as exc:
+                logger.warning("skipping unreadable session %s: %s", sid, exc)
                 continue
         metas.sort(key=lambda m: m.created_at, reverse=True)
         return metas

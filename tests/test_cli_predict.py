@@ -1,6 +1,5 @@
 """Wave B.2: explain predict CLI 测试."""
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -24,43 +23,46 @@ def runner() -> CliRunner:
 
 
 def _save_converged_session(sessions_dir: Path, sid: str) -> None:
-    payload = {
-        "meta": {
-            "session_id": sid, "question": "why",
-            "stage": "converged", "created_at": 1234567890.0,
-            "updated_at": 1234567890.0,
-        },
-        "state": {
-            "graph": {
-                "root_question": "why",
-                "nodes": {
-                    "p_001": {
-                        "id": "p_001", "name": "p", "description": "d",
-                        "abstraction_level": 0, "confidence": 0.7,
-                        "epistemic": "observation",
-                    },
-                    "c_001": {
-                        "id": "c_001", "name": "c", "description": "d",
-                        "abstraction_level": 1, "confidence": 0.7,
-                        "epistemic": "insight",
-                    },
+    """Phase 9: 拆 legacy payload → storage_v2.save_metadata + save_graph."""
+    del sessions_dir  # 不再使用 (storage_v2 走 EXPLAIN_HOME)
+    from explain_engine.persistence.storage_v2 import StorageV2
+    meta = {
+        "session_id": sid, "question": "why",
+        "stage": "converged", "created_at": 1234567890.0,
+        "updated_at": 1234567890.0,
+    }
+    state = {
+        "graph": {
+            "root_question": "why",
+            "nodes": {
+                "p_001": {
+                    "id": "p_001", "name": "p", "description": "d",
+                    "abstraction_level": 0, "confidence": 0.7,
+                    "epistemic": "observation",
                 },
-                "edges": {
-                    "e_001": {
-                        "id": "e_001", "source_node": "c_001",
-                        "target_node": "p_001",
-                        "relation_type": "manifests_as",
-                        "confidence": 0.7, "mechanism_description": "m",
-                    },
+                "c_001": {
+                    "id": "c_001", "name": "c", "description": "d",
+                    "abstraction_level": 1, "confidence": 0.7,
+                    "epistemic": "insight",
                 },
             },
-            "budget_remaining": 0, "root_question": "why",
-            "active_frontier": [], "insight_candidates": ["c_001"],
-            "tick": 0, "last_gain_tick": 0,
-            "last_gains": {}, "reasoning_trace": [],
+            "edges": {
+                "e_001": {
+                    "id": "e_001", "source_node": "c_001",
+                    "target_node": "p_001",
+                    "relation_type": "manifests_as",
+                    "confidence": 0.7, "mechanism_description": "m",
+                },
+            },
         },
+        "budget_remaining": 0, "root_question": "why",
+        "active_frontier": [], "insight_candidates": ["c_001"],
+        "tick": 0, "last_gain_tick": 0,
+        "last_gains": {}, "reasoning_trace": [],
     }
-    (sessions_dir / f"{sid}.json").write_text(json.dumps(payload, ensure_ascii=False))
+    sv2 = StorageV2()
+    sv2.save_metadata(sid, meta)
+    sv2.save_graph(sid, state)
 
 
 class TestCLIPredict:
@@ -120,31 +122,33 @@ class TestCLIPredict:
 
     def test_stage_not_done_or_converged_exits_4(self, cli_env, runner, monkeypatch) -> None:
         """Phase 7 design §5.7: predict 要求 stage ∈ {done, converged}."""
+        del cli_env  # 不再使用 (storage_v2 走 EXPLAIN_HOME)
+        from explain_engine.persistence.storage_v2 import StorageV2
         sid = "s_eeeeffff"
-        payload = {
-            "meta": {
-                "session_id": sid, "question": "q", "stage": "bootstrap_pending",
-                "created_at": 1234567890.0, "updated_at": 1234567890.0,
-            },
-            "state": {
-                "graph": {
-                    "root_question": "q",
-                    "nodes": {
-                        "p_001": {
-                            "id": "p_001", "name": "p", "description": "d",
-                            "abstraction_level": 0, "confidence": 0.7,
-                            "epistemic": "observation",
-                        },
-                    },
-                    "edges": {},
-                },
-                "budget_remaining": 0, "root_question": "q",
-                "active_frontier": [], "insight_candidates": [],
-                "tick": 0, "last_gain_tick": 0,
-                "last_gains": {}, "reasoning_trace": [],
-            },
+        meta = {
+            "session_id": sid, "question": "q", "stage": "bootstrap_pending",
+            "created_at": 1234567890.0, "updated_at": 1234567890.0,
         }
-        (cli_env / f"{sid}.json").write_text(json.dumps(payload, ensure_ascii=False))
+        state = {
+            "graph": {
+                "root_question": "q",
+                "nodes": {
+                    "p_001": {
+                        "id": "p_001", "name": "p", "description": "d",
+                        "abstraction_level": 0, "confidence": 0.7,
+                        "epistemic": "observation",
+                    },
+                },
+                "edges": {},
+            },
+            "budget_remaining": 0, "root_question": "q",
+            "active_frontier": [], "insight_candidates": [],
+            "tick": 0, "last_gain_tick": 0,
+            "last_gains": {}, "reasoning_trace": [],
+        }
+        sv2 = StorageV2()
+        sv2.save_metadata(sid, meta)
+        sv2.save_graph(sid, state)
 
         # Mock LLM (won't be called)
         monkeypatch.setattr(

@@ -76,7 +76,7 @@ class TestCliNew:
     def test_new_full_flow_keep_all(
         self, runner, setup_env, mock_llm_chat, mock_review_phenomena
     ):
-        sessions_dir = setup_env
+        del setup_env  # storage_v2 走 EXPLAIN_HOME, sessions_dir 不再用
         mock_llm_chat([
             {"name": "房价上涨", "description": "..."},
             {"name": "收入停滞", "description": "..."},
@@ -89,12 +89,8 @@ class TestCliNew:
         assert "Session" in result.output
         assert "已保存" in result.output
 
-        # 应该有一个 session 文件落地
-        json_files = list(sessions_dir.glob("s_*.json"))
-        assert len(json_files) == 1
-
-        # 加载 session 验证内容
-        store = SessionStore(directory=sessions_dir)
+        # 加载 session 验证内容 (Phase 9: 计 SessionStore().list() 替老 glob)
+        store = SessionStore()
         metas = store.list()
         assert len(metas) == 1
         loaded = store.load(metas[0].session_id)
@@ -105,17 +101,17 @@ class TestCliNew:
         self, runner, setup_env, mock_llm_chat, mock_review_phenomena
     ):
         """HITL drop 全部后，session 仍然落地（含 0 phenomena）。"""
-        sessions_dir = setup_env
+        del setup_env
         mock_llm_chat([{"name": "x", "description": "y"}])
         mock_review_phenomena("none")
 
         result = runner.invoke(app, ["new", "why?"])
 
         assert result.exit_code == 0
-        json_files = list(sessions_dir.glob("s_*.json"))
-        assert len(json_files) == 1
-        store = SessionStore(directory=sessions_dir)
-        loaded = store.load(store.list()[0].session_id)
+        store = SessionStore()
+        metas = store.list()
+        assert len(metas) == 1
+        loaded = store.load(metas[0].session_id)
         assert len(loaded.state.graph.nodes) == 0
 
     def test_new_llm_failure_exits_1(
@@ -124,7 +120,7 @@ class TestCliNew:
         """LLM 抛 LLMError 时 CLI exit 1，不落 session。"""
         from explain_engine.llm.errors import LLMError
 
-        sessions_dir = setup_env
+        del setup_env
 
         mock_llm = AsyncMock()
         mock_llm.chat = AsyncMock(side_effect=LLMError("API down"))
@@ -138,8 +134,7 @@ class TestCliNew:
 
         assert result.exit_code == 1
         # 不应该有 session 落地
-        json_files = list(sessions_dir.glob("s_*.json"))
-        assert len(json_files) == 0
+        assert SessionStore().list() == []
 
     def test_new_schema_failure_exits_2(
         self, runner, setup_env, mock_review_phenomena, monkeypatch
@@ -147,7 +142,7 @@ class TestCliNew:
         """LLM 抛 SchemaValidationError 时 CLI exit 2。"""
         from explain_engine.llm.errors import SchemaValidationError
 
-        sessions_dir = setup_env
+        del setup_env
 
         mock_llm = AsyncMock()
         mock_llm.chat = AsyncMock(side_effect=SchemaValidationError("missing field"))
@@ -160,5 +155,4 @@ class TestCliNew:
         result = runner.invoke(app, ["new", "why?"])
 
         assert result.exit_code == 2
-        json_files = list(sessions_dir.glob("s_*.json"))
-        assert len(json_files) == 0
+        assert SessionStore().list() == []
