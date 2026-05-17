@@ -20,12 +20,12 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from explain_engine.chat.budget import BudgetCounter
 from explain_engine.persistence.session import SessionStore
 from explain_engine.persistence.storage_v2 import StorageV2
 from explain_engine.schema.state import CognitiveState
 
 if TYPE_CHECKING:
-    from explain_engine.chat.budget import BudgetCounter
     from explain_engine.llm.client import LLMClient
 
 
@@ -148,7 +148,6 @@ class ChatSession:
         每次 read 新建一个 BudgetCounter (无 state, 廉价); ChatStateDict 仍是
         source of truth, 所以多个 BudgetCounter view 看到的值一致.
         """
-        from explain_engine.chat.budget import BudgetCounter
         return BudgetCounter(self.chat_state)
 
     def is_slash_command(self, text: str) -> bool:

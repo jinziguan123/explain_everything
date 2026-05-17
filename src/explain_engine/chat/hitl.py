@@ -78,8 +78,13 @@ async def hitl_gate(
         prompt_text = (
             f"\nLLM wants to add observation: {name!r}. Approve? (y/n): "
         )
-        answer = await prompt_fn(prompt_text)
-        return answer == "y"
+        try:
+            answer = await prompt_fn(prompt_text)
+        except (EOFError, KeyboardInterrupt):
+            # 用户 abort (Ctrl-D / Ctrl-C) — 当 deny 处理, 不让 exception bubble
+            # 到 query_loop 报 "tool failed" (那是 tool crash 语义, 不对).
+            return False
+        return answer in {"y", "yes"}
 
     # Future hitl-required tools: default to auto-approve until per-tool logic added.
     # 留口子, 别 raise — 未加新 hitl 工具时不该阻断 loop.

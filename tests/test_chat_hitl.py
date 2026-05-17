@@ -90,6 +90,84 @@ class TestHITLAddObservation:
         assert approved is False
 
 
+class TestHitlGateApprovalWords:
+    """I1 regression: accept both 'y' and 'yes' (and case-insensitive)."""
+
+    @pytest.mark.asyncio
+    async def test_yes_word_approved(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from explain_engine.chat.hitl import hitl_gate
+        from explain_engine.chat.tools import ToolContext, add_observation_tool
+
+        prompt = AsyncMock(return_value="yes")
+        parsed = add_observation_tool.input_schema(
+            name="x", description="d", source="llm_inferred",
+        )
+        ctx = ToolContext(state=None)  # ctx unused by hitl_gate
+        assert await hitl_gate(add_observation_tool, parsed, ctx, prompt) is True
+
+    @pytest.mark.asyncio
+    async def test_y_letter_approved(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from explain_engine.chat.hitl import hitl_gate
+        from explain_engine.chat.tools import ToolContext, add_observation_tool
+
+        prompt = AsyncMock(return_value="y")
+        parsed = add_observation_tool.input_schema(
+            name="x", description="d", source="llm_inferred",
+        )
+        ctx = ToolContext(state=None)
+        assert await hitl_gate(add_observation_tool, parsed, ctx, prompt) is True
+
+    @pytest.mark.asyncio
+    async def test_maybe_denied(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from explain_engine.chat.hitl import hitl_gate
+        from explain_engine.chat.tools import ToolContext, add_observation_tool
+
+        prompt = AsyncMock(return_value="maybe")
+        parsed = add_observation_tool.input_schema(
+            name="x", description="d", source="llm_inferred",
+        )
+        ctx = ToolContext(state=None)
+        assert await hitl_gate(add_observation_tool, parsed, ctx, prompt) is False
+
+
+class TestHitlGateInterruption:
+    """I2 regression: Ctrl-D (EOFError) / Ctrl-C → deny, not tool failure."""
+
+    @pytest.mark.asyncio
+    async def test_eof_denies(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from explain_engine.chat.hitl import hitl_gate
+        from explain_engine.chat.tools import ToolContext, add_observation_tool
+
+        prompt = AsyncMock(side_effect=EOFError())
+        parsed = add_observation_tool.input_schema(
+            name="x", description="d", source="llm_inferred",
+        )
+        ctx = ToolContext(state=None)
+        assert await hitl_gate(add_observation_tool, parsed, ctx, prompt) is False
+
+    @pytest.mark.asyncio
+    async def test_keyboard_interrupt_denies(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from explain_engine.chat.hitl import hitl_gate
+        from explain_engine.chat.tools import ToolContext, add_observation_tool
+
+        prompt = AsyncMock(side_effect=KeyboardInterrupt())
+        parsed = add_observation_tool.input_schema(
+            name="x", description="d", source="llm_inferred",
+        )
+        ctx = ToolContext(state=None)
+        assert await hitl_gate(add_observation_tool, parsed, ctx, prompt) is False
+
+
 class TestDefaultPrompt:
     @pytest.mark.asyncio
     async def test_default_prompt_uses_asyncio_to_thread(self) -> None:
