@@ -52,6 +52,9 @@ _TURN_TO_MSG_RATIO: int = 2
 def reflect_post_turn(state: CognitiveState) -> str | None:
     """Run reflection.reflect → 返人话 hint str (or None if continue).
 
+    Decision attached to chat's next_turn_hint, NOT executed.
+    LLM sees the hint in next system_prompt and decides whether to follow.
+
     内部流程:
         1. 刷新 acceptance cache (state.last_acceptance_report = aggregate_acceptance(state))
            — reflect 优先用 cached report, 不刷新会拿陈旧分数.
@@ -69,6 +72,11 @@ def reflect_post_turn(state: CognitiveState) -> str | None:
         - hint 不强制执行 — 仅作 LLM next turn 看到的提示.
         - lifecycle_post_turn 也会推进 lifecycle; 此 hook 不主动推进 (testability:
           单独 reflect hook 时 graph lifecycle 状态可控).
+        - I3 design note: state.tick 在 chat 永不 advance (only runtime.run 推进).
+          所以 reflect 的 "stop" 分支 (state.tick - last_reflection_change_tick >= 3)
+          在 chat 中实际不可达. 这是 intentional — chat 是 conversational,
+          由 user (/quit) 或 budget 触发终止, 不靠 reflect-signaled-stop 自动收敛
+          (区别于 runtime.run 的 auto-terminating loop).
     """
     # 1. 刷新 acceptance cache (reflect 用 cached report)
     state.last_acceptance_report = aggregate_acceptance(state)

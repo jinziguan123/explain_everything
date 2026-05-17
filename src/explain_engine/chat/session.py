@@ -22,6 +22,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from explain_engine.chat.budget import BudgetCounter
+from explain_engine.chat.hooks import (
+    SESSION_MEMORY_TRIGGER_INTERVAL,
+    lifecycle_post_turn,
+    reflect_post_turn,
+    session_memory_writer,
+)
 from explain_engine.persistence.session import SessionStore
 from explain_engine.persistence.storage_v2 import StorageV2
 from explain_engine.schema.state import CognitiveState
@@ -206,28 +212,39 @@ class ChatSession:
             async for ev in query_loop(self, llm):
                 yield ev
 
-            # Wave D.2: post-turn hooks (Claude Code PostSamplingHook pattern).
-            # local import 避 circular import (hooks.py 不 import session.py 但 TYPE_CHECKING 里有).
-            from explain_engine.chat.hooks import (
-                SESSION_MEMORY_TRIGGER_INTERVAL,
-                lifecycle_post_turn,
-                reflect_post_turn,
-                session_memory_writer,
-            )
-            # 1. reflect — 刷新 acceptance + 返人话 hint, 写 next_turn_hint
-            #    (下一 turn assemble_system_prompt 会读, 用完清 None)
-            self.next_turn_hint = reflect_post_turn(self.state)
-            # 2. lifecycle — 推进 active → stale → decayed
-            #    tick 用 chat_state.turn_count (Wave D.2 chat 把 turn 视为 lifecycle tick)
-            lifecycle_post_turn(self.state, current_tick=self.chat_state.turn_count)
+            # Wave D.2 fix · post-turn hooks. 两点修复:
+            # C1: lifecycle BEFORE reflect — 对齐 runtime.py:86-89 契约
+            #     (lifecycle 先推进 decay state, reflect 才能看到 fresh decayed
+            #     nodes 做正确 pick_decay_target / 决策).
+            # I1: 包 try/except — hook 抛异常不阻断 self.persist(),
+            #     防半状态持久化 (turn_count 已 bump 但 graph 没存).
+            try:
+                # 1. lifecycle — 推进 active → stale → decayed
+                #    tick 用 chat_state.turn_count (Wave D.2 chat 把 turn 视为 lifecycle tick)
+                lifecycle_post_turn(
+                    self.state, current_tick=self.chat_state.turn_count
+                )
+                # 2. reflect — 刷新 acceptance + 返人话 hint, 写 next_turn_hint
+                #    (下一 turn assemble_system_prompt 会读, 用完清 None)
+                self.next_turn_hint = reflect_post_turn(self.state)
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"post-turn hook failed for {self.sid}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
             # 3. session_memory — async fire-and-forget (每 5 turn 跑一次)
             #    不 await, errors logged in writer 自己, 不阻塞 user.
             #    RUF006: hold strong ref in self._background_tasks 防 GC.
+            #    errors 已 self-contained in session_memory_writer 内部 try/except,
+            #    所以不在外层 try/except 内 (also asyncio.create_task 不会抛同步异常).
             if self.chat_state.turn_count % SESSION_MEMORY_TRIGGER_INTERVAL == 0:
                 task = asyncio.create_task(session_memory_writer(self, llm))
                 self._background_tasks.add(task)
                 task.add_done_callback(self._background_tasks.discard)
-        # Persist after turn (chat_state + graph 全 flush)
+        # Persist after turn (chat_state + graph 全 flush). I1: 即使 hook 抛
+        # 异常也保证执行, 避免 turn_count bump 但 graph 不存的半态.
         self.persist()
 
     def persist(self) -> None:
@@ -253,5 +270,19 @@ class ChatSession:
         self._session_store.save(self._session)
 
     def close(self) -> None:
-        """Explicit cleanup. Flushes everything one more time."""
+        """Sync close. ⚠️ Does NOT await background tasks (use aclose() in async ctx).
+
+        For shell exit / test cleanup, this is fine. For chat F.2 CLI, prefer aclose().
+        """
+        self.persist()
+
+    async def aclose(self) -> None:
+        """Phase 9 Wave D.2: async close — awaits in-flight background tasks before flushing.
+
+        Use this in CLI / shell shutdown path. Sync close() retained for backward compat
+        but does NOT await background tasks (silent cancellation on event loop close).
+        """
+        if self._background_tasks:
+            # Wait for in-flight session_memory_writer / future bg tasks
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
         self.persist()

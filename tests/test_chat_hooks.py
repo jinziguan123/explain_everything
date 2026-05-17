@@ -236,3 +236,122 @@ class TestSessionMemoryWriter:
 class TestTriggerInterval:
     def test_default_is_5(self) -> None:
         assert SESSION_MEMORY_TRIGGER_INTERVAL == 5
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 5. Wave D.2 fix · regression tests (C1 + I1 + I2)
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestHookOrderingC1:
+    """C1 regression: lifecycle MUST fire before reflect (matches runtime.py)."""
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_called_before_reflect_in_handle_user_input(self, mocker):
+        from unittest.mock import AsyncMock
+
+        from explain_engine.chat.session import ChatSession
+        from tests.test_chat_session import _make_done_session
+
+        _make_done_session("s_0fde0001")
+        chat = ChatSession("s_0fde0001")
+        call_order = []
+
+        def _track_lifecycle(state, current_tick):
+            call_order.append("lifecycle")
+            return {}
+
+        def _track_reflect(state):
+            call_order.append("reflect")
+            return None
+
+        mocker.patch(
+            "explain_engine.chat.session.lifecycle_post_turn",
+            side_effect=_track_lifecycle,
+        )
+        mocker.patch(
+            "explain_engine.chat.session.reflect_post_turn",
+            side_effect=_track_reflect,
+        )
+
+        # Fake LLM that returns end_turn immediately (no tools)
+        class _R:
+            text = "ok"
+            tool_uses: list = []  # noqa: RUF012 (test fixture, single-class instance)
+            stop_reason = "end_turn"
+        fake_llm = AsyncMock()
+        fake_llm.chat_with_tools = AsyncMock(return_value=_R())
+
+        events = []
+        async for ev in chat.handle_user_input("hi", llm=fake_llm):
+            events.append(ev)
+
+        # C1: lifecycle MUST be called before reflect
+        assert call_order == ["lifecycle", "reflect"]
+
+
+class TestHookExceptionAtomicity:
+    """I1 regression: hook failure doesn't abort persist()."""
+
+    @pytest.mark.asyncio
+    async def test_hook_exception_still_persists(self, mocker, caplog):
+        import logging
+        from unittest.mock import AsyncMock
+
+        from explain_engine.chat.session import ChatSession
+        from tests.test_chat_session import _make_done_session
+
+        _make_done_session("s_a10c0001")
+        chat = ChatSession("s_a10c0001")
+
+        # Mock reflect_post_turn to raise
+        mocker.patch(
+            "explain_engine.chat.session.reflect_post_turn",
+            side_effect=RuntimeError("synthetic"),
+        )
+
+        class _R:
+            text = "ok"
+            tool_uses: list = []  # noqa: RUF012 (test fixture, single-class instance)
+            stop_reason = "end_turn"
+        fake_llm = AsyncMock()
+        fake_llm.chat_with_tools = AsyncMock(return_value=_R())
+
+        with caplog.at_level(logging.WARNING):
+            events = []
+            async for ev in chat.handle_user_input("hi", llm=fake_llm):
+                events.append(ev)
+
+        # turn_count was bumped + persisted despite hook crash
+        chat2 = ChatSession("s_a10c0001")
+        assert chat2.chat_state.turn_count >= 1
+        # Warning logged
+        assert any("synthetic" in r.message for r in caplog.records)
+
+
+class TestACloseAwaitsBackgroundTasks:
+    """I2 regression: aclose() waits for in-flight background tasks."""
+
+    @pytest.mark.asyncio
+    async def test_aclose_awaits_background_tasks(self):
+        import asyncio
+
+        from explain_engine.chat.session import ChatSession
+        from tests.test_chat_session import _make_done_session
+
+        _make_done_session("s_ac10ce01")
+        chat = ChatSession("s_ac10ce01")
+
+        # Inject a slow background task
+        complete = asyncio.Event()
+
+        async def slow_task():
+            await asyncio.sleep(0.05)
+            complete.set()
+
+        task = asyncio.create_task(slow_task())
+        chat._background_tasks.add(task)
+        task.add_done_callback(chat._background_tasks.discard)
+
+        await chat.aclose()
+        assert complete.is_set()
