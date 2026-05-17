@@ -23,6 +23,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from explain_engine.chat.budget import BudgetCounter
+from explain_engine.chat.hitl import hitl_gate
 from explain_engine.chat.session import ChatEvent
 from explain_engine.chat.system_prompt import assemble_system_prompt
 from explain_engine.chat.tools import ALL_TOOLS, Tool, ToolContext
@@ -109,6 +111,7 @@ async def query_loop(
           不主动 persist — caller (ChatSession.handle_user_input) 在最后 persist().
     """
     ctx = ToolContext(state=chat.state, llm=llm)
+    budget = BudgetCounter(chat.chat_state)  # Wave D.1: thin wrapper
     # Anthropic tools schema: 每个 tool 转 {name, description, input_schema (pydantic JSON schema)}
     tools_schema = [
         {
@@ -121,10 +124,10 @@ async def query_loop(
 
     while True:
         # ── Budget check (per-turn first, fall through to per-session) ──
-        if chat.chat_state.budget_per_turn_remaining <= 0:
+        if budget.turn_exhausted():
             yield BudgetExhaustedEvent(scope="per_turn")
             return
-        if chat.chat_state.budget_per_session_remaining <= 0:
+        if budget.session_exhausted():
             yield BudgetExhaustedEvent(scope="per_session")
             return
 
@@ -133,12 +136,7 @@ async def query_loop(
             state=chat.state,
             question=chat._session.meta.question,
             memory_md=chat.memory_md,
-            budget={
-                "per_turn_remaining": chat.chat_state.budget_per_turn_remaining,
-                "per_turn_limit": chat.chat_state.budget_per_turn_limit,
-                "per_session_remaining": chat.chat_state.budget_per_session_remaining,
-                "per_session_limit": chat.chat_state.budget_per_session_limit,
-            },
+            budget=budget.as_dict(),
         )
 
         # ── Convert transcript → Anthropic messages format ──
@@ -194,10 +192,10 @@ async def query_loop(
         budget_exhausted_scope: str | None = None
         for tool_use in response.tool_uses:
             # mid-loop budget check (防 multi-tool response overshoot)
-            if chat.chat_state.budget_per_turn_remaining <= 0:
+            if budget.turn_exhausted():
                 budget_exhausted_scope = "per_turn"
                 break
-            if chat.chat_state.budget_per_session_remaining <= 0:
+            if budget.session_exhausted():
                 budget_exhausted_scope = "per_session"
                 break
 
@@ -214,7 +212,15 @@ async def query_loop(
                     parsed_input = tool.input_schema.model_validate(
                         tool_use.get("input", {})
                     )
-                    result = await tool.call(parsed_input, ctx)
+                    # Wave D.1: HITL gate. 非 requires_hitl 直接 True;
+                    # add_observation + source=user_explicit 直接 True;
+                    # add_observation + source=llm_inferred 弹 prompt 等 user.
+                    # parse 失败走下方 except, gate 不调.
+                    approved = await hitl_gate(tool, parsed_input, ctx)
+                    if not approved:
+                        result = "user denied via HITL gate"
+                    else:
+                        result = await tool.call(parsed_input, ctx)
                 except Exception as exc:
                     # tool call 异常 catch 成 str 给 LLM 看, 让它 retry / 换策略
                     # 比让 query_loop 整个 crash 友好得多.
@@ -230,8 +236,8 @@ async def query_loop(
             })
             dispatched_tool_uses.append(tool_use)
             # 每个 tool call 消耗 1 budget (per-turn + per-session 同步扣)
-            chat.chat_state.budget_per_turn_remaining -= 1
-            chat.chat_state.budget_per_session_remaining -= 1
+            # Wave D.1: 走 BudgetCounter.consume (替 direct chat_state 访问)
+            budget.consume()
 
         # ── Append assistant message (text + tool_uses) + tool_result message ──
         # 注: 仅 append 实际 dispatch 过的 tool_use, 否则 LLM 端 tool_use_id
