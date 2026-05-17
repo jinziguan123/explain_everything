@@ -18,11 +18,14 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from explain_engine.persistence.session import SessionStore
 from explain_engine.persistence.storage_v2 import StorageV2
 from explain_engine.schema.state import CognitiveState
+
+if TYPE_CHECKING:
+    from explain_engine.llm.client import LLMClient
 
 
 class ChatSessionLoadError(Exception):
@@ -140,13 +143,17 @@ class ChatSession:
     def is_slash_command(self, text: str) -> bool:
         return text.strip().startswith("/")
 
-    async def handle_user_input(self, text: str) -> AsyncIterator[ChatEvent]:
+    async def handle_user_input(
+        self,
+        text: str,
+        llm: LLMClient | None = None,
+    ) -> AsyncIterator[ChatEvent]:
         """Process one user input. Yields events (text / tool_use / tool_result / TurnComplete).
 
-        C.1 stub:
         - slash command → yield 占位 event ("slash_unimplemented"), Task F.1 实现 dispatch
-        - 非 slash → append transcript + bump turn_count + reset per-turn budget
-                    + yield 占位 event ("placeholder"), Task C.2 接入 query_loop
+        - 非 slash + llm=None → C.1 backward compat: yield placeholder event
+        - 非 slash + llm 不为 None → C.2: append transcript + bump turn + reset budget
+            + dispatch 到 query_loop (LLM ↔ tools while-loop), 最后 persist.
         """
         if self.is_slash_command(text):
             # Slash dispatch (Task F.1 will implement); C.1 stub just yields
@@ -163,12 +170,20 @@ class ChatSession:
         self.chat_state.turn_count += 1
         # Reset per-turn budget
         self.chat_state.budget_per_turn_remaining = self.chat_state.budget_per_turn_limit
-        # Task C.2 will call query_loop here; C.1 stub yields placeholder
-        yield ChatEvent(
-            type="placeholder",
-            content="query_loop not implemented yet (Task C.2)",
-        )
-        # Persist after turn
+
+        if llm is None:
+            # C.1 backward-compat: 无 LLM → 占位 event (CLI 端测 / 没 API key 时)
+            yield ChatEvent(
+                type="placeholder",
+                content="no llm client provided (C.1 backward compat)",
+            )
+        else:
+            # C.2: dispatch 到 query_loop (LLM ↔ tools while-loop).
+            # local import 避 circular: loop.py imports ChatEvent from this module.
+            from explain_engine.chat.loop import query_loop
+            async for ev in query_loop(self, llm):
+                yield ev
+        # Persist after turn (chat_state + graph 全 flush)
         self.persist()
 
     def persist(self) -> None:

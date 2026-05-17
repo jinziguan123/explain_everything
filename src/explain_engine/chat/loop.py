@@ -1,0 +1,229 @@
+"""Phase 9 Wave C.2: inner query_loop (LLM ↔ tools while-loop).
+
+Pattern 来自 Claude Code 的 queryLoop:
+1. 每 iter assemble system prompt (动态拼装 graph hints)
+2. 调 LLM with messages + tools schema (Anthropic native tool_use)
+3. yield AssistantTextEvent / ToolUseEvent (streaming UX)
+4. 若 response.stop_reason == "end_turn" 且无 tool_uses → TurnCompleteEvent, return
+5. 否则 dispatch 每个 tool_use, yield ToolResultEvent, consume budget, append transcript,
+   下一轮
+
+终止条件:
+- LLM stop_reason="end_turn" 且没 tool_uses (正常结束 turn)
+- per_turn 或 per_session budget 用尽 (BudgetExhaustedEvent)
+- LLMClient 没 chat_with_tools API (fallback, F.2 才真接 Anthropic native tool_use)
+
+设计参考 docs/plans/2026-05-17-conversational-cognitive-engine-design.md.
+设计参考 docs/plans/2026-05-17-conversational-cognitive-engine-plan.md Wave C.2.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from explain_engine.chat.session import ChatEvent
+from explain_engine.chat.system_prompt import assemble_system_prompt
+from explain_engine.chat.tools import ALL_TOOLS, Tool, ToolContext
+
+if TYPE_CHECKING:
+    from explain_engine.chat.session import ChatSession
+    from explain_engine.llm.client import LLMClient
+
+
+@dataclass
+class AssistantTextEvent(ChatEvent):
+    """Streamed text chunk from LLM (Wave C.2 是 non-streaming, 整段返回)."""
+
+    type: str = "assistant_text"
+
+
+@dataclass
+class ToolUseEvent(ChatEvent):
+    """LLM called a tool (yielded 在 dispatch 前, 给 REPL 实时反馈)."""
+
+    type: str = "tool_use"
+    tool_name: str = ""
+    tool_input: dict = field(default_factory=dict)
+
+
+@dataclass
+class ToolResultEvent(ChatEvent):
+    """Tool returned a result (yielded 在 dispatch 后, content=纯 str 返给 LLM)."""
+
+    type: str = "tool_result"
+    tool_name: str = ""
+    result: str = ""
+
+
+@dataclass
+class TurnCompleteEvent(ChatEvent):
+    """LLM signaled end_turn — 无 tool_use, loop 正常结束."""
+
+    type: str = "turn_complete"
+
+
+@dataclass
+class BudgetExhaustedEvent(ChatEvent):
+    """Per-turn or per-session budget hit; loop 中断 return."""
+
+    type: str = "budget_exhausted"
+    scope: str = "per_turn"  # or "per_session"
+
+
+def _tool_by_name(name: str) -> Tool | None:
+    """Lookup tool in ALL_TOOLS registry."""
+    for t in ALL_TOOLS:
+        if t.name == name:
+            return t
+    return None
+
+
+def _transcript_to_messages(transcript: list[dict]) -> list[dict]:
+    """Convert chat transcript format to Anthropic API messages format.
+
+    Transcript schema (Wave C.1): {role, content, turn}.
+    Anthropic API: {role, content}. 抹掉 'turn' meta key.
+    """
+    return [{"role": m["role"], "content": m["content"]} for m in transcript]
+
+
+async def query_loop(
+    chat: ChatSession,
+    llm: LLMClient,
+) -> AsyncIterator[ChatEvent]:
+    """Inner LLM ↔ tools while-loop.
+
+    Args:
+        chat: ChatSession (读 transcript / state / chat_state, mutate them)
+        llm: LLMClient (must have chat_with_tools method; fallback to AttributeError path
+             for clients without native tool_use API — Wave F.2 will add it).
+
+    Yields:
+        AssistantTextEvent / ToolUseEvent / ToolResultEvent / TurnCompleteEvent
+        / BudgetExhaustedEvent
+
+    Note: chat.transcript 在每次 tool 调用后 mutate (append assistant + user[tool_result]),
+          chat_state.budget_per_*_remaining 在每个 tool dispatch 后 -1.
+          不主动 persist — caller (ChatSession.handle_user_input) 在最后 persist().
+    """
+    ctx = ToolContext(state=chat.state, llm=llm)
+    # Anthropic tools schema: 每个 tool 转 {name, description, input_schema (pydantic JSON schema)}
+    tools_schema = [
+        {
+            "name": t.name,
+            "description": t.description(ctx),
+            "input_schema": t.input_schema.model_json_schema(),
+        }
+        for t in ALL_TOOLS
+    ]
+
+    while True:
+        # ── Budget check (per-turn first, fall through to per-session) ──
+        if chat.chat_state.budget_per_turn_remaining <= 0:
+            yield BudgetExhaustedEvent(scope="per_turn")
+            return
+        if chat.chat_state.budget_per_session_remaining <= 0:
+            yield BudgetExhaustedEvent(scope="per_session")
+            return
+
+        # ── Assemble system prompt (dynamic each iter) ──
+        sys_prompt = assemble_system_prompt(
+            state=chat.state,
+            question=chat._session.meta.question,
+            memory_md=chat.memory_md,
+            budget={
+                "per_turn_remaining": chat.chat_state.budget_per_turn_remaining,
+                "per_turn_limit": chat.chat_state.budget_per_turn_limit,
+                "per_session_remaining": chat.chat_state.budget_per_session_remaining,
+                "per_session_limit": chat.chat_state.budget_per_session_limit,
+            },
+        )
+
+        # ── Convert transcript → Anthropic messages format ──
+        messages = _transcript_to_messages(chat.transcript)
+
+        # ── Call LLM with tools ──
+        # NOTE: LLMClient Protocol (llm/client.py) 目前只有 `chat`; chat_with_tools
+        # 是 Wave F.2 Anthropic native tool_use 集成时才加. C.2 这里 fallback:
+        # 没 chat_with_tools 属性 → AttributeError, yield TurnComplete, return.
+        try:
+            response = await llm.chat_with_tools(
+                system=sys_prompt,
+                messages=messages,
+                tools=tools_schema,
+            )
+        except AttributeError:
+            yield TurnCompleteEvent(content="llm_client_lacks_tools_api")
+            return
+
+        # ── Stream assistant text if any ──
+        if response.text:
+            yield AssistantTextEvent(content=response.text)
+
+        # ── No tool calls → end turn ──
+        if not response.tool_uses:
+            yield TurnCompleteEvent()
+            return
+
+        # ── Dispatch each tool call ──
+        tool_result_messages: list[dict[str, Any]] = []
+        for tool_use in response.tool_uses:
+            tool = _tool_by_name(tool_use["name"])
+            if tool is None:
+                result = f"unknown tool: {tool_use['name']!r}"
+                yield ToolResultEvent(tool_name=tool_use["name"], result=result)
+            else:
+                yield ToolUseEvent(
+                    tool_name=tool.name,
+                    tool_input=tool_use.get("input", {}),
+                )
+                try:
+                    parsed_input = tool.input_schema.model_validate(
+                        tool_use.get("input", {})
+                    )
+                    result = await tool.call(parsed_input, ctx)
+                except Exception as exc:
+                    # tool call 异常 catch 成 str 给 LLM 看, 让它 retry / 换策略
+                    # 比让 query_loop 整个 crash 友好得多.
+                    result = (
+                        f"tool {tool.name} failed: {type(exc).__name__}: {exc}"
+                    )
+                yield ToolResultEvent(tool_name=tool.name, result=result)
+
+            tool_result_messages.append({
+                "type": "tool_result",
+                "tool_use_id": tool_use.get("id", "unknown"),
+                "content": result,
+            })
+            # 每个 tool call 消耗 1 budget (per-turn + per-session 同步扣)
+            chat.chat_state.budget_per_turn_remaining -= 1
+            chat.chat_state.budget_per_session_remaining -= 1
+
+        # ── Append assistant message (text + tool_uses) + tool_result message ──
+        assistant_content: list[dict[str, Any]] = []
+        if response.text:
+            assistant_content.append({"type": "text", "text": response.text})
+        for tu in response.tool_uses:
+            assistant_content.append({
+                "type": "tool_use",
+                "id": tu.get("id", "unknown"),
+                "name": tu["name"],
+                "input": tu.get("input", {}),
+            })
+        assistant_msg = {
+            "role": "assistant",
+            "content": assistant_content,
+            "turn": chat.chat_state.turn_count,
+        }
+        chat.transcript.append(assistant_msg)
+        chat.storage.append_transcript(chat.sid, assistant_msg)
+
+        user_msg = {
+            "role": "user",
+            "content": tool_result_messages,
+            "turn": chat.chat_state.turn_count,
+        }
+        chat.transcript.append(user_msg)
+        chat.storage.append_transcript(chat.sid, user_msg)
