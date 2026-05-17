@@ -208,3 +208,84 @@ class TestConstants:
 
     def test_emergency_token_limit(self):
         assert EMERGENCY_TOKEN_LIMIT == 100_000
+
+
+# ─── I3 regression: combined tier 1 + tier 2 ───
+
+
+class TestCombinedTiersIntegration:
+    """I3 regression: tier 1 (microCompact) + tier 2 (splice) compose correctly."""
+
+    @pytest.mark.asyncio
+    async def test_micro_compact_and_splice_compose(self):
+        """Pipeline: stale tool_result inside post-splice tail → still gets stubbed."""
+        from explain_engine.chat.compaction import prepare_messages
+
+        # transcript:
+        # - turn 0: user msg, assistant msg (will be dropped by splice last_memory_turn=5)
+        # - turn 6: stale tool_result (within tail, but old enough for tier 1 stub at current_turn=12)
+        # - turn 11: recent tool_result (within tail + not stale → keep content)
+        transcript = [
+            {"role": "user", "turn": 0, "content": "very old"},
+            {"role": "assistant", "turn": 0, "content": "old reply"},
+            {"role": "user", "turn": 6, "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "stale data"},
+            ]},
+            {"role": "user", "turn": 11, "content": [
+                {"type": "tool_result", "tool_use_id": "t2", "content": "fresh data"},
+            ]},
+        ]
+        result = await prepare_messages(
+            transcript=transcript,
+            memory_md="summary covers turns 0-4",
+            last_memory_turn=5,
+            current_turn=12,
+        )
+        # Tier 2 dropped turn<5: first 2 messages gone
+        # Tier 1 stubbed stale tool_result (12-6=6 > STALE_TURN_AGE=5): t1 content → stub
+        # Recent tool_result (12-11=1): preserved
+        # Should have 2 messages (no system msg since splice was refactored to just drop)
+        assert len(result) == 2
+        # First: stale stub
+        first_content = result[0]["content"][0]
+        assert "stale" in first_content["content"].lower()
+        assert first_content["tool_use_id"] == "t1"  # preserved
+        # Second: fresh, untouched
+        second_content = result[1]["content"][0]
+        assert second_content["content"] == "fresh data"
+        assert second_content["tool_use_id"] == "t2"
+
+
+# ─── I2 regression: emergency_compact empty summary guard ───
+
+
+class TestEmergencyCompactEmptyGuard:
+    """I2 regression: empty LLM summary keeps original."""
+
+    @pytest.mark.asyncio
+    async def test_empty_summary_keeps_original(self, mocker):
+        from unittest.mock import AsyncMock
+
+        from explain_engine.chat.compaction import emergency_compact
+
+        class _R:
+            text = ""  # empty
+        llm = mocker.MagicMock()
+        llm.chat = AsyncMock(return_value=_R())
+        messages = [{"role": "user", "content": "x"}]
+        result = await emergency_compact(messages, llm)
+        assert result == messages  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_whitespace_summary_keeps_original(self, mocker):
+        from unittest.mock import AsyncMock
+
+        from explain_engine.chat.compaction import emergency_compact
+
+        class _R:
+            text = "   \n  "  # whitespace only
+        llm = mocker.MagicMock()
+        llm.chat = AsyncMock(return_value=_R())
+        messages = [{"role": "user", "content": "x"}]
+        result = await emergency_compact(messages, llm)
+        assert result == messages

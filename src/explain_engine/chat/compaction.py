@@ -31,32 +31,36 @@ by microCompact."""
 EMERGENCY_TOKEN_LIMIT: int = 100_000
 """Above this estimated token count, emergency compact triggers."""
 
-_TOKENS_PER_CHAR_ESTIMATE: float = 0.3
-"""rough heuristic: ~1 token per ~3.3 chars (English-leaning).
-Cheap estimate for "are we close to limit?" gating, not byte-perfect."""
+_BYTES_PER_TOKEN_ESTIMATE: float = 4.0
+"""Heuristic: ~4 UTF-8 bytes per token (BPE; works for EN + CN + mixed).
+
+CN char (3 bytes) → 0.75 tokens, EN char (1 byte) → 0.25 tokens. 旧的
+char-based 0.3 是 EN tokenizer 校准, CN 实测 ~0.6+ tokens/char → underestimate
+~2x → emergency 触发太晚 leak budget. 改 byte-based 多语言友好."""
 
 
 def estimate_token_count(messages: list[dict]) -> int:
-    """Heuristic token estimate (cheap; for emergency trigger gate).
+    """Heuristic token estimate via UTF-8 byte count / 4.
 
-    Not byte-perfect but good enough for "are we approaching limit" decisions.
+    Better than char count for Chinese (each CN char = 3 bytes ≈ 0.75 tokens)
+    while still cheap for English (each EN char = 1 byte ≈ 0.25 tokens).
     Walks str / list-of-block content (text / tool_use / tool_result shapes).
     """
-    total_chars = 0
+    total_bytes = 0
     for msg in messages:
         content = msg.get("content", "")
         if isinstance(content, str):
-            total_chars += len(content)
+            total_bytes += len(content.encode("utf-8"))
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict):
                     if "text" in block:
-                        total_chars += len(block["text"])
+                        total_bytes += len(str(block["text"]).encode("utf-8"))
                     if "content" in block:  # tool_result
-                        total_chars += len(str(block["content"]))
+                        total_bytes += len(str(block["content"]).encode("utf-8"))
                     if "input" in block:  # tool_use
-                        total_chars += len(str(block["input"]))
-    return int(total_chars * _TOKENS_PER_CHAR_ESTIMATE)
+                        total_bytes += len(str(block["input"]).encode("utf-8"))
+    return int(total_bytes / _BYTES_PER_TOKEN_ESTIMATE)
 
 
 def micro_compact(transcript: list[dict], current_turn: int) -> list[dict]:
@@ -190,6 +194,13 @@ async def emergency_compact(
 
         response = await llm.chat(messages=llm_messages, schema=None)
         summary = response.text if hasattr(response, "text") else str(response)
+        # I2 guard: LLM 返 empty/whitespace → 不产 useless marker, 保留原 messages
+        # (fail-safe 跟 hooks.session_memory_writer 一致, 总比让 LLM 看空 marker 强).
+        if not summary or not summary.strip():
+            logger.warning(
+                "emergency_compact: LLM returned empty summary; keeping original messages"
+            )
+            return messages
         return [{
             "role": "user",
             "content": (
