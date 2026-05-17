@@ -876,7 +876,8 @@ def chat(
     session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
     no_input_check: bool = typer.Option(
         False, "--no-input-check",
-        help="Phase 8 Wave 3: skip input validation fail-fast",
+        help="(Phase 9 Wave G+ TODO: wire input_validation into chat startup)",
+        hidden=True,  # 隐藏直到 Wave G+ 真接通 input_validation 到 chat 路径
     ),
     tool_budget_per_turn: int = typer.Option(
         10, "--tool-budget-per-turn",
@@ -898,10 +899,11 @@ def chat(
     - Ctrl-D / Ctrl-C  → EOFError / KeyboardInterrupt 捕获 break
     退出前 await background tasks (session_memory_writer 等) + 最终 persist.
 
-    --no-input-check 是 Phase 8 Wave 3 兜底; 暂未被 chat 路径直接用
-    (Phase 9 Wave F.2 仅暴露 flag 占位, 后续 wave 接进 input_validation).
     """
-    del no_input_check  # 占位 flag, Phase 9 F.2 暂未接 input_validation (Wave G+ 处理)
+    # Note: --no-input-check is hidden (typer Option hidden=True) until Wave G+ wires
+    # input_validation into chat startup. Currently a no-op; flag still accepted via CLI
+    # but not advertised in --help.
+    del no_input_check  # silence ARG001
 
     # Local import 避 CLI 模块顶部 import (chat 模块依赖重, 仅 chat 命令需要)
     from explain_engine.chat.session import ChatSession

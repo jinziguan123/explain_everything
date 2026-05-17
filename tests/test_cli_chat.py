@@ -36,6 +36,18 @@ class TestChatCommand:
         runner = CliRunner()
         result = runner.invoke(app, ["chat", "--help"])
         assert result.exit_code == 0
-        assert "--no-input-check" in result.output
+        # --no-input-check is hidden until Wave G+ wires it; verify only visible flags
         assert "--tool-budget-per-turn" in result.output
         assert "--tool-budget-per-session" in result.output
+        # 验证 hidden 真生效 (典型回归: 有人移除 hidden=True)
+        assert "--no-input-check" not in result.output
+
+    def test_chat_no_input_check_still_accepted_silently(self):
+        """Hidden flag still accepted (for any docs/scripts that pass it)."""
+        runner = CliRunner()
+        # Passing the hidden flag should not error (typer accepts it)
+        # Use missing session to verify flag parsing succeeds (then exits on missing)
+        result = runner.invoke(app, ["chat", "s_missing0", "--no-input-check"])
+        # Exit code != 0 due to missing session, but should NOT be a "unknown option" error
+        assert "no such option" not in result.output.lower()
+        assert "unknown option" not in result.output.lower()
