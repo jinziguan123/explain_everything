@@ -122,6 +122,12 @@ async def query_loop(
         for t in ALL_TOOLS
     ]
 
+    # Wave D.2: one-shot consumption of next_turn_hint. 第一 iter 注入 system prompt
+    # 后立刻清 None — 防 hint 在 multi-iter loop 里 stale repeated (e.g. user 已 follow
+    # 建议 fix 了, 第 2 iter 不该还看到老 hint).
+    pending_hint = chat.next_turn_hint
+    chat.next_turn_hint = None
+
     while True:
         # ── Budget check (per-turn first, fall through to per-session) ──
         if budget.turn_exhausted():
@@ -137,7 +143,10 @@ async def query_loop(
             question=chat._session.meta.question,
             memory_md=chat.memory_md,
             budget=budget.as_dict(),
+            hint=pending_hint,   # Wave D.2: 上 turn reflect 留的 hint, 第一 iter 后清
         )
+        # 第一 iter 用完后清, 后续 iter 不再渲染 hint section
+        pending_hint = None
 
         # ── Convert transcript → Anthropic messages format ──
         messages = _transcript_to_messages(chat.transcript)

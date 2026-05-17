@@ -15,6 +15,7 @@ Task C.2 会把 query_loop 接进 handle_user_input 的非 slash 分支。
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -137,6 +138,17 @@ class ChatSession:
             else ChatStateDict()
         )
 
+        # Wave D.2: hint set by reflect_post_turn 上一 turn, 下一 turn 的
+        # assemble_system_prompt 读取 → 用一次后清 None (one-shot consumption,
+        # 防 LLM 一直被同一 stale hint 干扰).
+        self.next_turn_hint: str | None = None
+
+        # Wave D.2: hold strong refs to background tasks (session_memory_writer)
+        # 防 asyncio GC 在 task done 前杀掉. task.add_done_callback(discard)
+        # 自清, 不会无界增长. 同时也满足 RUF006 lint (asyncio.create_task return
+        # value 必须被引用).
+        self._background_tasks: set[asyncio.Task[None]] = set()
+
     @property
     def turn_count(self) -> int:
         return self.chat_state.turn_count
@@ -193,6 +205,28 @@ class ChatSession:
             from explain_engine.chat.loop import query_loop
             async for ev in query_loop(self, llm):
                 yield ev
+
+            # Wave D.2: post-turn hooks (Claude Code PostSamplingHook pattern).
+            # local import 避 circular import (hooks.py 不 import session.py 但 TYPE_CHECKING 里有).
+            from explain_engine.chat.hooks import (
+                SESSION_MEMORY_TRIGGER_INTERVAL,
+                lifecycle_post_turn,
+                reflect_post_turn,
+                session_memory_writer,
+            )
+            # 1. reflect — 刷新 acceptance + 返人话 hint, 写 next_turn_hint
+            #    (下一 turn assemble_system_prompt 会读, 用完清 None)
+            self.next_turn_hint = reflect_post_turn(self.state)
+            # 2. lifecycle — 推进 active → stale → decayed
+            #    tick 用 chat_state.turn_count (Wave D.2 chat 把 turn 视为 lifecycle tick)
+            lifecycle_post_turn(self.state, current_tick=self.chat_state.turn_count)
+            # 3. session_memory — async fire-and-forget (每 5 turn 跑一次)
+            #    不 await, errors logged in writer 自己, 不阻塞 user.
+            #    RUF006: hold strong ref in self._background_tasks 防 GC.
+            if self.chat_state.turn_count % SESSION_MEMORY_TRIGGER_INTERVAL == 0:
+                task = asyncio.create_task(session_memory_writer(self, llm))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
         # Persist after turn (chat_state + graph 全 flush)
         self.persist()
 

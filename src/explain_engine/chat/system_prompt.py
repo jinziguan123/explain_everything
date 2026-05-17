@@ -38,7 +38,7 @@ per-session remaining: {per_session_remaining} / {per_session_limit}
 
 # Memory hint
 {memory_hint}
-
+{hint_section}
 # Guidelines
 
 - 优先用 read_node 看节点完整 description, 别要求 user 重复信息.
@@ -108,6 +108,7 @@ def assemble_system_prompt(
     question: str,
     memory_md: str,
     budget: dict,
+    hint: str | None = None,
 ) -> str:
     """Build per-turn system prompt (called from query_loop each iteration).
 
@@ -116,6 +117,9 @@ def assemble_system_prompt(
         question: root question (从 SessionMeta.question 来)
         memory_md: session_memory.md 内容 (Wave E micro-compact 产出, 暂时空字符串)
         budget: dict with 4 keys: per_turn_remaining/limit + per_session_remaining/limit
+        hint: Wave D.2 — 上一 turn reflect_post_turn 留的 hint (e.g. "reflect 建议:
+            expand-downward (target=c_002)"). None → 不渲染 hint section. caller
+            (query_loop) 用完后清 chat.next_turn_hint = None (one-shot consumption).
 
     Returns:
         完整 system prompt 字符串, 直接喂给 LLM API 的 system param.
@@ -126,6 +130,7 @@ def assemble_system_prompt(
         if memory_md
         else "(无 session_memory yet)"
     )
+    hint_section = f"\n# Last reflect hint\n{hint}\n" if hint else ""
     return SYSTEM_PROMPT_TEMPLATE.format(
         tool_count=len(ALL_TOOLS),
         tool_catalog=_render_tool_catalog(ctx),
@@ -137,4 +142,5 @@ def assemble_system_prompt(
         per_session_remaining=budget["per_session_remaining"],
         per_session_limit=budget["per_session_limit"],
         memory_hint=memory_hint,
+        hint_section=hint_section,
     )
