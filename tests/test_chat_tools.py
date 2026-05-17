@@ -361,6 +361,8 @@ class TestReadNodeTool:
         # Verify it includes lifecycle_state, level, etc.
         assert "level=1" in result
         assert "lifecycle_state=active" in result
+        # M5: assert actual description text appears (regression guard)
+        assert "abstraction d" in result  # description from _make_state_with_l1
 
     @pytest.mark.asyncio
     async def test_call_missing_node_returns_error_message(self) -> None:
@@ -384,3 +386,84 @@ class TestALL_TOOLS_v2:
             "expand", "compress", "check", "predict", "counterfactual",
             "add_observation", "read_node",
         }
+
+
+class TestAddObservationSourceLabel:
+    """I1 regression: source field must reflect authoring agent."""
+
+    @pytest.mark.asyncio
+    async def test_user_explicit_sets_node_source_user(self) -> None:
+        from explain_engine.chat.tools import ToolContext, add_observation_tool
+        from explain_engine.schema.graph import ExplanationGraph
+        from explain_engine.schema.state import CognitiveState
+
+        g = ExplanationGraph(root_question="q")
+        state = CognitiveState(graph=g, budget_remaining=10, root_question="q")
+        ctx = ToolContext(state=state)
+
+        await add_observation_tool.call(
+            add_observation_tool.input_schema(
+                name="o1", description="d", source="user_explicit",
+            ),
+            ctx,
+        )
+        new_node = next(n for n in state.graph.nodes.values() if n.name == "o1")
+        assert new_node.source == "user"
+
+    @pytest.mark.asyncio
+    async def test_llm_inferred_sets_node_source_llm(self) -> None:
+        from explain_engine.chat.tools import ToolContext, add_observation_tool
+        from explain_engine.schema.graph import ExplanationGraph
+        from explain_engine.schema.state import CognitiveState
+
+        g = ExplanationGraph(root_question="q")
+        state = CognitiveState(graph=g, budget_remaining=10, root_question="q")
+        ctx = ToolContext(state=state)
+
+        await add_observation_tool.call(
+            add_observation_tool.input_schema(
+                name="o2", description="d", source="llm_inferred",
+            ),
+            ctx,
+        )
+        new_node = next(n for n in state.graph.nodes.values() if n.name == "o2")
+        assert new_node.source == "llm"
+
+
+class TestReadNodeTruncation:
+    """I2 regression: read_node soft-caps long descriptions."""
+
+    @pytest.mark.asyncio
+    async def test_long_description_truncated(self) -> None:
+        from explain_engine.chat.tools import ToolContext, read_node_tool
+        from explain_engine.schema.graph import ExplanationGraph
+        from explain_engine.schema.nodes import VariableNode
+        from explain_engine.schema.state import CognitiveState
+
+        long_desc = "x" * 5000
+        g = ExplanationGraph(root_question="q")
+        g.add_node(VariableNode(
+            id="c_001", name="big", description=long_desc,
+            abstraction_level=1, confidence=0.7, epistemic="insight",
+        ))
+        state = CognitiveState(graph=g, budget_remaining=10, root_question="q")
+        ctx = ToolContext(state=state)
+
+        result = await read_node_tool.call(
+            read_node_tool.input_schema(node_id="c_001"), ctx,
+        )
+        # Result should contain truncation marker
+        assert "truncated" in result.lower()
+        assert "5000 chars total" in result or "5000 chars" in result
+        # Result should NOT contain the full 5000-char description
+        assert len(result) < 5500  # well under 5000 + format string overhead
+
+    @pytest.mark.asyncio
+    async def test_short_description_not_truncated(self) -> None:
+        from explain_engine.chat.tools import ToolContext, read_node_tool
+        state = _make_state_with_l1()
+        ctx = ToolContext(state=state)
+        result = await read_node_tool.call(
+            read_node_tool.input_schema(node_id="c_001"), ctx,
+        )
+        assert "truncated" not in result.lower()

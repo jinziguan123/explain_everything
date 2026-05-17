@@ -373,12 +373,18 @@ async def _add_observation_call(input: BaseModel, ctx: ToolContext) -> str:
     """Add L0 node to graph. HITL gate (Task D.1) intercepts before this for llm_inferred."""
     assert isinstance(input, _AddObservationInput)
     nid = _next_p_id(ctx.state)
+    # source field reflects authoring agent: user_explicit → user-typed it;
+    # llm_inferred → LLM proposed (may be HITL-confirmed by Task D.1, but author remains LLM)
+    node_source = "user" if input.source == "user_explicit" else "llm"
     ctx.state.graph.add_node(VariableNode(
         id=nid, name=input.name, description=input.description,
         abstraction_level=0, confidence=0.7, epistemic="observation",
-        source="user",  # always "user" since this came from chat (user-driven)
+        source=node_source,
     ))
-    return f"added L0 observation {nid}: {input.name} (source={input.source})"
+    return (
+        f"added L0 observation {nid}: {input.name} "
+        f"(source={input.source}, node_source={node_source})"
+    )
 
 
 add_observation_tool = Tool(
@@ -405,11 +411,21 @@ async def _read_node_call(input: BaseModel, ctx: ToolContext) -> str:
     node = ctx.state.graph.nodes.get(input.node_id)
     if node is None:
         return f"node {input.node_id!r} not found in graph"
+    # Soft cap description to prevent context bloat (LLM chain reads via this tool).
+    # Task E.1 microCompact will GC stale tool results, but per-call safety helps too.
+    desc = node.description
+    MAX_DESC = 2000
+    if len(desc) > MAX_DESC:
+        desc = (
+            desc[:MAX_DESC]
+            + f"... [truncated {len(node.description) - MAX_DESC} chars; "
+            f"full content {len(node.description)} chars total]"
+        )
     return (
         f"{node.id} | {node.name} | level={node.abstraction_level} | "
         f"confidence={node.confidence:.2f} | epistemic={node.epistemic} | "
         f"lifecycle_state={node.lifecycle_state}\n"
-        f"description: {node.description}"
+        f"description: {desc}"
     )
 
 
