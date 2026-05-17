@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from explain_engine.chat.budget import BudgetCounter
+from explain_engine.chat.compaction import prepare_messages
 from explain_engine.chat.hitl import hitl_gate
 from explain_engine.chat.session import ChatEvent
 from explain_engine.chat.system_prompt import assemble_system_prompt
@@ -87,8 +88,18 @@ def _transcript_to_messages(transcript: list[dict]) -> list[dict]:
 
     Transcript schema (Wave C.1): {role, content, turn}.
     Anthropic API: {role, content}. 抹掉 'turn' meta key.
+
+    Wave E.1 note: 过滤 role=system msg — Anthropic API messages 数组只接受
+    user / assistant; system prompt 走 chat_with_tools 的独立 system 参数.
+    prepare_messages (E.1 splice / emergency) 可能 prepend system role msg,
+    但 memory_md 已通过 assemble_system_prompt 注入 sys_prompt, 所以这里安全
+    丢弃 (避免 Anthropic API reject).
     """
-    return [{"role": m["role"], "content": m["content"]} for m in transcript]
+    return [
+        {"role": m["role"], "content": m["content"]}
+        for m in transcript
+        if m.get("role") in ("user", "assistant")
+    ]
 
 
 async def query_loop(
@@ -149,7 +160,17 @@ async def query_loop(
         pending_hint = None
 
         # ── Convert transcript → Anthropic messages format ──
-        messages = _transcript_to_messages(chat.transcript)
+        # Wave E.1: 3-tier compaction (microCompact + sessionMemory splice +
+        # emergency). 跑 prepare_messages 在每 iter 顶, 自动 GC stale tool_result
+        # / 拼 session_memory / 紧急 LLM summarize, 控 context 不爆.
+        prepared = await prepare_messages(
+            transcript=chat.transcript,
+            memory_md=chat.memory_md,
+            last_memory_turn=chat.chat_state.last_compact_at_turn,
+            current_turn=chat.chat_state.turn_count,
+            llm=llm,
+        )
+        messages = _transcript_to_messages(prepared)
 
         # ── Call LLM with tools ──
         # NOTE: LLMClient Protocol (llm/client.py) 目前只有 `chat`; chat_with_tools

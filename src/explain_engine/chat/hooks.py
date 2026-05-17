@@ -194,6 +194,9 @@ async def session_memory_writer(
         # ── 3. 写 memory.md ──
         chat.storage.save_memory(chat.sid, summary)
         chat.memory_md = summary
+        # Wave E.1: bump last_compact_at_turn → session_memory_splice (tier 2)
+        # 用此来定位 "memory 已覆盖到哪 turn", 丢之前的 transcript prefix.
+        chat.chat_state.last_compact_at_turn = chat.chat_state.turn_count
         logger.info(
             "session_memory_writer wrote %d chars to memory.md for %s at turn %d",
             len(summary), chat.sid, chat.chat_state.turn_count,
