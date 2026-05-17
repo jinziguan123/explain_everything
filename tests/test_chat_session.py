@@ -124,3 +124,49 @@ class TestIsSlashCommand:
         assert chat.is_slash_command("  /show") is True  # strip
         assert chat.is_slash_command("hello") is False
         assert chat.is_slash_command("") is False
+
+
+class TestChatSessionLoadError:
+    """I2 regression: 损坏的 sidecar 抛出 ChatSessionLoadError (而非裸 JSONDecodeError)."""
+
+    def test_corrupt_chat_state_raises_named_error(self) -> None:
+        from explain_engine.chat.session import ChatSession, ChatSessionLoadError
+        from explain_engine.persistence.storage_v2 import StorageV2
+        _make_done_session("s_009abcde")
+        # Write corrupt chat_state.json directly
+        storage = StorageV2()
+        chat_state_path = storage.session_dir("s_009abcde") / "chat_state.json"
+        chat_state_path.parent.mkdir(parents=True, exist_ok=True)
+        chat_state_path.write_text("{ this is not valid json")
+
+        with pytest.raises(ChatSessionLoadError) as exc_info:
+            ChatSession("s_009abcde")
+        assert exc_info.value.sid == "s_009abcde"
+        assert "chat_state.json" in exc_info.value.file
+        assert "s_009abcde" in str(exc_info.value)
+
+    def test_corrupt_transcript_raises_named_error(self) -> None:
+        from explain_engine.chat.session import ChatSession, ChatSessionLoadError
+        from explain_engine.persistence.storage_v2 import StorageV2
+        _make_done_session("s_00aabcde")
+        storage = StorageV2()
+        transcript_path = storage.session_dir("s_00aabcde") / "transcript.jsonl"
+        transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        transcript_path.write_text("{valid: false}\n")  # not valid json
+
+        with pytest.raises(ChatSessionLoadError) as exc_info:
+            ChatSession("s_00aabcde")
+        assert "transcript.jsonl" in exc_info.value.file
+
+
+class TestChatSessionDIRemoval:
+    """I1 regression: storage 参数已移除; constructor 仅接 sid."""
+
+    def test_init_signature_takes_only_sid(self) -> None:
+        import inspect
+
+        from explain_engine.chat.session import ChatSession
+        sig = inspect.signature(ChatSession.__init__)
+        params = list(sig.parameters.keys())
+        # self + sid only
+        assert params == ["self", "sid"]

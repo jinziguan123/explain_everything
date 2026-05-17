@@ -9,12 +9,13 @@ C.1 不实现 LLM ↔ tools while-loop (= query_loop),只搭骨架 + persistence
 Task C.2 会把 query_loop 接进 handle_user_input 的非 slash 分支。
 
 参考:
-- docs/plans/2026-05-14-cognitive-engine-phase-9-design.md
-- docs/plans/2026-05-14-cognitive-engine-phase-9-plan.md Wave C.1
+- docs/plans/2026-05-17-conversational-cognitive-engine-design.md
+- docs/plans/2026-05-17-conversational-cognitive-engine-plan.md Wave C.1
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -22,6 +23,27 @@ from typing import Any
 from explain_engine.persistence.session import SessionStore
 from explain_engine.persistence.storage_v2 import StorageV2
 from explain_engine.schema.state import CognitiveState
+
+
+class ChatSessionLoadError(Exception):
+    """Phase 9 Wave C.1: 加载 session 的 5 sidecar files 之一失败.
+
+    Attributes:
+        sid: session id
+        file: 哪个 file (transcript / memory / chat_state / metadata / graph)
+        cause: 底层 exception
+
+    用途: 给用户清晰错误信息 "failed to load chat_state.json for session 's_xxx'"
+    而非裸 json.decoder traceback.
+    """
+
+    def __init__(self, sid: str, file: str, cause: Exception):
+        self.sid = sid
+        self.file = file
+        self.cause = cause
+        super().__init__(
+            f"failed to load {file} for session {sid!r}: {type(cause).__name__}: {cause}"
+        )
 
 
 @dataclass
@@ -36,6 +58,9 @@ class ChatStateDict:
     - last_compact_at_turn: 上次 memory.md compact 在哪个 turn (Phase 9 Wave E).
     - turn_count: 累计 user input 次数.
     - last_input_alignment: Phase 8 input_validation 报告 (Phase 8 B fix 折叠位置).
+        等价于 Phase 8 CognitiveState.last_input_alignment_report,
+        Wave E.2 完成迁移后从 state 移除, 仅保留在此. 字段名缩写不带 _report
+        以减少 chat_state.json 噪声.
     """
 
     budget_per_turn_remaining: int = 10
@@ -62,17 +87,47 @@ class ChatEvent:
 class ChatSession:
     """Phase 9 outer orchestrator. Wraps query_loop (Task C.2)."""
 
-    def __init__(self, sid: str, storage: StorageV2 | None = None):
+    def __init__(self, sid: str):
+        """加载 session 的 5 sidecar files.
+
+        Phase 9 Wave C.1 fix · I1: 去掉了 storage 参数 — 内部 SessionStore
+        本来就 env-driven (EXPLAIN_HOME / EXPLAIN_PROJECT_ID), 传 custom
+        storage 会和内部 SessionStore() 的 StorageV2 silent split.
+
+        Raises:
+            FileNotFoundError: session 不存在 (metadata/graph 缺失)
+            ChatSessionLoadError: 5 sidecar 中任一损坏 (I2)
+        """
         self.sid = sid
-        self.storage = storage or StorageV2()
+        self.storage = StorageV2()  # env-based default
         self._session_store = SessionStore()  # for graph + metadata
-        # Load Session (metadata + state.graph) — raises FileNotFoundError if missing
-        self._session = self._session_store.load(sid)
+        # Load Session (metadata + state.graph)
+        try:
+            self._session = self._session_store.load(sid)
+        except FileNotFoundError:
+            # session 不存在是 expected 语义, 不 wrap
+            raise
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise ChatSessionLoadError(sid, "metadata or graph", exc) from exc
+
         self.state: CognitiveState = self._session.state
-        # Load sidecars
-        self.transcript: list[dict] = self.storage.load_transcript(sid)
-        self.memory_md: str = self.storage.load_memory(sid)
-        chat_state_dict = self.storage.load_chat_state(sid)
+
+        # Load sidecars (I2: wrap each with ChatSessionLoadError naming the file)
+        try:
+            self.transcript: list[dict] = self.storage.load_transcript(sid)
+        except json.JSONDecodeError as exc:
+            raise ChatSessionLoadError(sid, "transcript.jsonl", exc) from exc
+
+        try:
+            self.memory_md: str = self.storage.load_memory(sid)
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ChatSessionLoadError(sid, "memory.md", exc) from exc
+
+        try:
+            chat_state_dict = self.storage.load_chat_state(sid)
+        except json.JSONDecodeError as exc:
+            raise ChatSessionLoadError(sid, "chat_state.json", exc) from exc
+
         self.chat_state: ChatStateDict = (
             ChatStateDict(**chat_state_dict) if chat_state_dict
             else ChatStateDict()
@@ -117,7 +172,13 @@ class ChatSession:
         self.persist()
 
     def persist(self) -> None:
-        """Flush chat_state.json + graph (transcript already appended)."""
+        """Flush chat_state.json + graph (transcript already appended via storage_v2).
+
+        TODO(Phase 9 plan §C.1 line 1320): debounced persist — currently writes
+        whole graph per turn (50-turn session = 50 full-graph writes). For MVP OK
+        since graphs small. 考虑 5-sec debounce 或 persist-on-TurnComplete-only
+        after C.2 + D.1 land.
+        """
         chat_state_dict = {
             "budget_per_turn_remaining": self.chat_state.budget_per_turn_remaining,
             "budget_per_session_remaining": self.chat_state.budget_per_session_remaining,
