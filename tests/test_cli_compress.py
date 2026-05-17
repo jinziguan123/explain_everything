@@ -33,21 +33,18 @@ def _setup_bootstrap_session(tmp_dir: Path) -> str:
 
 
 def _mock_settings_to_tmp(monkeypatch: pytest.MonkeyPatch, tmp: Path) -> None:
+    # Phase 9: storage_v2 reads EXPLAIN_HOME (autouse fixture sets it).
+    # `tmp` 仅作 fixture 签名兼容, 实际写入由 storage_v2 决定 path.
+    del tmp
     from explain_engine import cli as cli_mod
     from explain_engine.config import Settings
 
     def fake_get_store() -> SessionStore:
-        return SessionStore(directory=tmp)
+        return SessionStore()
 
     monkeypatch.setattr(cli_mod, "_get_store", fake_get_store)
     monkeypatch.setattr(
-        cli_mod, "Settings", lambda: Settings(
-            llm_provider="claude",
-            anthropic_api_key="dummy",
-            llm_model="x",
-            sessions_dir=tmp,
-            default_budget=20,
-        )
+        cli_mod, "Settings", lambda: Settings(default_budget=20)
     )
 
 

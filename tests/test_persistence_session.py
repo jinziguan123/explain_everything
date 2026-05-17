@@ -1,6 +1,7 @@
 """Session JSON I/O test."""
 
 import json
+import warnings
 
 import pytest
 
@@ -180,3 +181,29 @@ class TestSessionStore:
         # 应该只返回真实 session, 不返回 dotdir
         assert len(metas) == 1
         assert metas[0].session_id == "s_a1b2c3d4"
+
+
+class TestDeprecationWarning:
+    def test_session_store_directory_param_emits_warning(self, tmp_path) -> None:
+        """I2 regression: SessionStore(directory=...) is a no-op since Phase 9.
+        Emit DeprecationWarning so users notice."""
+        from explain_engine.persistence.session import SessionStore
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            SessionStore(directory=tmp_path)
+
+        deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert len(deprecation_warnings) == 1
+        assert "directory" in str(deprecation_warnings[0].message).lower()
+        assert "ignored" in str(deprecation_warnings[0].message).lower()
+
+    def test_session_store_no_arg_no_warning(self) -> None:
+        from explain_engine.persistence.session import SessionStore
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            SessionStore()
+
+        deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert len(deprecation_warnings) == 0

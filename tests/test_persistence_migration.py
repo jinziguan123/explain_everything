@@ -72,6 +72,61 @@ class TestMigrateSession:
         # Original removed
         assert not (tmp_path / "sessions" / "s_001abcde.json").exists()
 
+    def test_migrate_twice_preserves_first_archive(self, tmp_path, monkeypatch) -> None:
+        """I1 regression: re-migration after manual delete shouldn't overwrite prior archive.
+
+        Scenario:
+        1. First migration: legacy → .legacy/s_001abcde.json
+        2. User manually deletes ~/.explain/projects/<proj>/sessions/s_001abcde/
+        3. User restores legacy s_001abcde.json from elsewhere
+        4. Second migration: should archive to .legacy/s_001abcde.<timestamp>.json
+           (NOT overwrite .legacy/s_001abcde.json from step 1)
+        """
+        import shutil as sh
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path / ".explain"))
+        (tmp_path / "sessions").mkdir()
+
+        sid = "s_001abcde"
+        legacy_data = (
+            '{"meta":{"session_id":"' + sid + '","question":"q","stage":"done","budget":1,'
+            '"created_at":"2026-01-01T00:00:00+00:00",'
+            '"updated_at":"2026-01-01T00:00:00+00:00"},'
+            '"state":{"graph":{"nodes":[],"edges":[],"root_question":"q"},'
+            '"tick":0,"budget_remaining":1,"root_question":"q","insight_candidates":[],'
+            '"reasoning_trace":[],"last_gains":{},"last_gain_tick":0,'
+            '"last_reflection_change_tick":0}}'
+        )
+        legacy_path = tmp_path / "sessions" / f"{sid}.json"
+        legacy_path.write_text(legacy_data)
+
+        # Step 1: first migration
+        from explain_engine.persistence.migration import migrate_session
+        result1 = migrate_session(sid)
+        assert result1["migrated"] is True
+        archive_path = tmp_path / "sessions" / ".legacy" / f"{sid}.json"
+        assert archive_path.exists()
+        first_archive_content = archive_path.read_text()
+
+        # Step 2-3: simulate user deletes migrated session + restores legacy
+        from explain_engine.persistence.storage_v2 import StorageV2
+        sh.rmtree(StorageV2().session_dir(sid))
+        # Different content this time to detect overwrite
+        legacy_path.write_text(legacy_data.replace('"q"', '"q-v2"'))
+
+        # Step 4: second migration
+        result2 = migrate_session(sid)
+        assert result2["migrated"] is True
+
+        # First archive must still exist with original content
+        assert archive_path.exists()
+        assert archive_path.read_text() == first_archive_content
+
+        # Second archive should be at timestamped path
+        timestamped = list((tmp_path / "sessions" / ".legacy").glob(f"{sid}.*.json"))
+        assert len(timestamped) >= 1
+        assert "q-v2" in timestamped[0].read_text()
+
     def test_dry_run_no_change(self, tmp_path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path / ".explain"))

@@ -11,6 +11,7 @@ import logging
 import re
 import secrets
 import time
+import warnings
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -91,10 +92,23 @@ class SessionStore:
     `directory` 参数仍接受但被忽略 — Phase 9 起所有 session 走
     storage_v2 layout (~/.explain/projects/<proj>/sessions/<sid>/).
     EXPLAIN_HOME / EXPLAIN_PROJECT_ID env vars 控制实际落盘位置.
+
+    Phase 9 Wave A.1 fix · I2: passing `directory=` emits DeprecationWarning
+    so users who set SESSIONS_DIR env (assuming it routes data) notice the
+    silent no-op and switch to EXPLAIN_HOME / EXPLAIN_PROJECT_ID.
     """
 
     def __init__(self, directory: Path | str | None = None) -> None:
-        # directory 已弃用; 仅保留参数签名兼容老 test/CLI.
+        if directory is not None:
+            warnings.warn(
+                "SessionStore(directory=...) parameter is ignored since Phase 9. "
+                "Storage is now project-based at ~/.explain/projects/<proj>/sessions/. "
+                "Set EXPLAIN_HOME env var to override, or EXPLAIN_PROJECT_ID for "
+                "project isolation.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        # directory 不再存; storage_v2 每次读 EXPLAIN_HOME / EXPLAIN_PROJECT_ID.
         self.directory = Path(directory) if directory is not None else None
         self._storage = StorageV2()
 

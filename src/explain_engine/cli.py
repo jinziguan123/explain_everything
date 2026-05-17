@@ -44,8 +44,8 @@ console = Console()
 
 
 def _get_store() -> SessionStore:
-    settings = Settings()
-    return SessionStore(directory=settings.sessions_dir)
+    # Phase 9: storage_v2 reads EXPLAIN_HOME / EXPLAIN_PROJECT_ID env vars directly
+    return SessionStore()
 
 
 @app.command()

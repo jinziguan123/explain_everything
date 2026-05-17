@@ -1,11 +1,10 @@
 """Settings + make_llm_client factory test。
 
 Phase 5: LLM 配置走 LLM_PROTOCOL / LLM_BASE_URL / LLM_API_KEY / LLM_MODEL 四元组。
-Settings 类只剩 runtime + sessions_dir 字段（LLM 配置直接读 env 由 make_llm_client
-解析）。make_llm_client 的测试覆盖在 test_llm_client_factory.py。
+Settings 类只剩 runtime 字段（LLM 配置直接读 env 由 make_llm_client 解析）。
+Phase 9 Wave A.1 fix · I2: 移除 sessions_dir 字段 (storage_v2 走 EXPLAIN_HOME).
+make_llm_client 的测试覆盖在 test_llm_client_factory.py。
 """
-
-from pathlib import Path
 
 from explain_engine.config import Settings
 
@@ -16,13 +15,17 @@ class TestSettings:
         s = Settings()
         assert s.default_budget == 30
 
-    def test_sessions_dir_default(self, monkeypatch) -> None:
+    def test_sessions_dir_removed(self, monkeypatch) -> None:
+        """Phase 9 Wave A.1 fix · I2: sessions_dir 字段已删."""
         monkeypatch.delenv("SESSIONS_DIR", raising=False)
         s = Settings()
-        # 默认相对路径 ./sessions
-        assert s.sessions_dir == Path("./sessions")
+        assert not hasattr(s, "sessions_dir")
 
-    def test_sessions_dir_env_override(self, monkeypatch, tmp_path) -> None:
+    def test_legacy_sessions_dir_env_silently_ignored(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Phase 9 Wave A.1 fix · I2: 老 SESSIONS_DIR env 被 extra='ignore' 容忍,
+        不抛 error (storage_v2 走 EXPLAIN_HOME)."""
         monkeypatch.setenv("SESSIONS_DIR", str(tmp_path))
-        s = Settings()
-        assert s.sessions_dir == tmp_path
+        s = Settings()  # 不抛 ValidationError
+        assert not hasattr(s, "sessions_dir")

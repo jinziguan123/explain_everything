@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 from pathlib import Path
 
 from explain_engine.persistence.storage_v2 import StorageV2
@@ -64,7 +65,11 @@ def migrate_session(sid: str, dry_run: bool = False) -> dict:
     # Move legacy to .legacy/ (safety: never delete user data)
     legacy_archive_dir = Path("sessions") / ".legacy"
     legacy_archive_dir.mkdir(exist_ok=True)
-    shutil.move(str(legacy_path), str(legacy_archive_dir / f"{sid}.json"))
+    archive = legacy_archive_dir / f"{sid}.json"
+    if archive.exists():
+        # Bump suffix to preserve prior backup (defensive: never silently overwrite)
+        archive = legacy_archive_dir / f"{sid}.{int(time.time())}.json"
+    shutil.move(str(legacy_path), str(archive))
 
     return {"sid": sid, "migrated": True}
 

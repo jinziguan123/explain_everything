@@ -6,7 +6,6 @@ DeepSeek 通过 base_url 切换。
 """
 
 import os
-from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -21,8 +20,13 @@ Protocol = Literal["anthropic", "openai"]
 
 
 class Settings(BaseSettings):
-    """Runtime + sessions 配置。LLM 配置直接读 env (避免 pydantic-settings
-    对未配 LLM_PROTOCOL 等场景报 ValidationError)。"""
+    """Runtime 配置。LLM 配置直接读 env (避免 pydantic-settings 对未配
+    LLM_PROTOCOL 等场景报 ValidationError)。
+
+    Phase 9 Wave A.1 fix · I2: 移除 sessions_dir 字段 — storage_v2 走
+    EXPLAIN_HOME / EXPLAIN_PROJECT_ID env vars, 老 SESSIONS_DIR env 是
+    silent no-op (extra='ignore' 容忍, 不报错).
+    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -31,7 +35,6 @@ class Settings(BaseSettings):
     )
 
     default_budget: int = Field(default=20, ge=1)
-    sessions_dir: Path = Path("./sessions")
 
 
 def make_llm_client() -> LLMClient:
