@@ -320,3 +320,120 @@ class TestChatSessionIntegration:
         async for ev in chat.handle_user_input("hello"):
             events.append(ev)
         assert any(ev.type == "placeholder" for ev in events)
+
+
+class TestBudgetMidLoopExhaustion:
+    """I1 regression: budget check inside tool dispatch loop prevents overshoot.
+
+    背景: LLM 一次 response 可含多个 tool_use; 仅外层 while 顶部检查 budget 会
+    在单 response 内 dispatch 全部 tool, 导致 remaining 变负 (overshoot).
+    修复: dispatch 每个 tool 前再次检查 budget, 0 时 break + scope 记录 +
+    transcript 仍 append (部分 result 持久) + yield BudgetExhaustedEvent.
+    """
+
+    @pytest.mark.asyncio
+    async def test_per_turn_budget_caps_multi_tool_response(self, mocker) -> None:
+        """LLM 返 3 tool_uses 但 budget=1 → 只 dispatch 1 + BudgetExhaustedEvent."""
+        from explain_engine.chat.loop import (
+            BudgetExhaustedEvent,
+            ToolUseEvent,
+            query_loop,
+        )
+        from explain_engine.engines.simulation import AcceptanceReport
+
+        _make_done_session("s_bbb00001")
+        chat = ChatSession("s_bbb00001")
+        chat.chat_state.budget_per_turn_remaining = 1
+        chat.chat_state.budget_per_turn_limit = 1
+        chat.chat_state.budget_per_session_remaining = 10
+        chat.chat_state.budget_per_session_limit = 10
+
+        fake_report = AcceptanceReport(
+            avg_consistency=0.9, avg_essentialness=0.5,
+            per_l1={}, per_l2={}, weak_chain_l1s=[],
+            lowest_l1=None, consistency_spread=0.0,
+            essentialness_spread=0.0, rollout_coverage=1.0, missing_l0=[],
+        )
+        mocker.patch(
+            "explain_engine.chat.tools.aggregate_acceptance",
+            return_value=fake_report,
+        )
+
+        llm = _FakeLLMClient([
+            _FakeLLMResponse(
+                text="ok",
+                tool_uses=[
+                    {"id": "tu_1", "name": "check", "input": {"target_id": None}},
+                    {"id": "tu_2", "name": "check", "input": {"target_id": None}},
+                    {"id": "tu_3", "name": "check", "input": {"target_id": None}},
+                ],
+                stop_reason="tool_use",
+            ),
+        ])
+
+        events = []
+        async for ev in query_loop(chat, llm):
+            events.append(ev)
+
+        tool_use_events = [e for e in events if isinstance(e, ToolUseEvent)]
+        budget_events = [e for e in events if isinstance(e, BudgetExhaustedEvent)]
+        # 只 1 tool 被 dispatch (budget 初始=1)
+        assert len(tool_use_events) == 1
+        # BudgetExhaustedEvent 被 yield
+        assert len(budget_events) == 1
+        assert budget_events[0].scope == "per_turn"
+        # budget 不为负
+        assert chat.chat_state.budget_per_turn_remaining == 0
+
+    @pytest.mark.asyncio
+    async def test_per_session_budget_caps_multi_tool_response(self, mocker) -> None:
+        """与上类似, 但 per-session budget 先到 0."""
+        from explain_engine.chat.loop import (
+            BudgetExhaustedEvent,
+            ToolUseEvent,
+            query_loop,
+        )
+        from explain_engine.engines.simulation import AcceptanceReport
+
+        _make_done_session("s_bbb00002")
+        chat = ChatSession("s_bbb00002")
+        chat.chat_state.budget_per_turn_remaining = 10
+        chat.chat_state.budget_per_turn_limit = 10
+        chat.chat_state.budget_per_session_remaining = 2
+        chat.chat_state.budget_per_session_limit = 2
+
+        fake_report = AcceptanceReport(
+            avg_consistency=0.9, avg_essentialness=0.5,
+            per_l1={}, per_l2={}, weak_chain_l1s=[],
+            lowest_l1=None, consistency_spread=0.0,
+            essentialness_spread=0.0, rollout_coverage=1.0, missing_l0=[],
+        )
+        mocker.patch(
+            "explain_engine.chat.tools.aggregate_acceptance",
+            return_value=fake_report,
+        )
+
+        llm = _FakeLLMClient([
+            _FakeLLMResponse(
+                text="",
+                tool_uses=[
+                    {"id": "tu_1", "name": "check", "input": {"target_id": None}},
+                    {"id": "tu_2", "name": "check", "input": {"target_id": None}},
+                    {"id": "tu_3", "name": "check", "input": {"target_id": None}},
+                    {"id": "tu_4", "name": "check", "input": {"target_id": None}},
+                ],
+                stop_reason="tool_use",
+            ),
+        ])
+
+        events = []
+        async for ev in query_loop(chat, llm):
+            events.append(ev)
+
+        tool_use_events = [e for e in events if isinstance(e, ToolUseEvent)]
+        budget_events = [e for e in events if isinstance(e, BudgetExhaustedEvent)]
+        # 只 2 dispatched (session budget 初=2)
+        assert len(tool_use_events) == 2
+        assert len(budget_events) == 1
+        assert budget_events[0].scope == "per_session"
+        assert chat.chat_state.budget_per_session_remaining == 0

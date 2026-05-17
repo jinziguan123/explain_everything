@@ -148,6 +148,22 @@ async def query_loop(
         # NOTE: LLMClient Protocol (llm/client.py) 目前只有 `chat`; chat_with_tools
         # 是 Wave F.2 Anthropic native tool_use 集成时才加. C.2 这里 fallback:
         # 没 chat_with_tools 属性 → AttributeError, yield TurnComplete, return.
+        #
+        # I2 / Task F.2 contract: llm.chat_with_tools(system, messages, tools) 必须返
+        # 一个 object 满足以下 attributes (flattened facade over Anthropic SDK Message):
+        #   - .text: str  (concat 所有 TextBlock.text in Message.content)
+        #   - .tool_uses: list[dict]  (每个 dict: {id: str, name: str, input: dict};
+        #                              对应 Message.content 里的每个 ToolUseBlock)
+        #   - .stop_reason: str  (forward Anthropic Message.stop_reason,
+        #                         如 "end_turn", "tool_use", "max_tokens")
+        #
+        # F.2 adapter (in llm/client.py 或新 chat_llm.py) 应:
+        #   1. Call anthropic SDK messages.create(system=..., messages=..., tools=...)
+        #   2. Concat 所有 TextBlock.text → .text
+        #   3. Filter ContentBlock for type=="tool_use" → .tool_uses (dict 化)
+        #   4. Forward .stop_reason 原值
+        # 注意: 不要把 raw SDK Message 对象直接当 response 传, query_loop 只认
+        # 上面的 facade shape (decouple SDK 升级风险).
         try:
             response = await llm.chat_with_tools(
                 system=sys_prompt,
@@ -168,8 +184,23 @@ async def query_loop(
             return
 
         # ── Dispatch each tool call ──
+        # I1: 单次 LLM response 可含多个 tool_use; 仅外层 while 顶部检查 budget
+        # 会让 budget 被 overshoot (e.g. budget=1, response 含 5 tool_use → -4).
+        # 故 dispatch 每个 tool 前再次检查 budget; 0 即 break + 记 scope, 同时
+        # 已 dispatch 的 tool_result 仍 append (部分结果持久, 不丢历史), 然后
+        # yield BudgetExhaustedEvent + return.
         tool_result_messages: list[dict[str, Any]] = []
+        dispatched_tool_uses: list[dict[str, Any]] = []
+        budget_exhausted_scope: str | None = None
         for tool_use in response.tool_uses:
+            # mid-loop budget check (防 multi-tool response overshoot)
+            if chat.chat_state.budget_per_turn_remaining <= 0:
+                budget_exhausted_scope = "per_turn"
+                break
+            if chat.chat_state.budget_per_session_remaining <= 0:
+                budget_exhausted_scope = "per_session"
+                break
+
             tool = _tool_by_name(tool_use["name"])
             if tool is None:
                 result = f"unknown tool: {tool_use['name']!r}"
@@ -197,33 +228,46 @@ async def query_loop(
                 "tool_use_id": tool_use.get("id", "unknown"),
                 "content": result,
             })
+            dispatched_tool_uses.append(tool_use)
             # 每个 tool call 消耗 1 budget (per-turn + per-session 同步扣)
             chat.chat_state.budget_per_turn_remaining -= 1
             chat.chat_state.budget_per_session_remaining -= 1
 
         # ── Append assistant message (text + tool_uses) + tool_result message ──
+        # 注: 仅 append 实际 dispatch 过的 tool_use, 否则 LLM 端 tool_use_id
+        # 与 tool_result 对不上 (Anthropic API 会 reject 不匹配的 pair).
         assistant_content: list[dict[str, Any]] = []
         if response.text:
             assistant_content.append({"type": "text", "text": response.text})
-        for tu in response.tool_uses:
+        for tu in dispatched_tool_uses:
             assistant_content.append({
                 "type": "tool_use",
                 "id": tu.get("id", "unknown"),
                 "name": tu["name"],
                 "input": tu.get("input", {}),
             })
-        assistant_msg = {
-            "role": "assistant",
-            "content": assistant_content,
-            "turn": chat.chat_state.turn_count,
-        }
-        chat.transcript.append(assistant_msg)
-        chat.storage.append_transcript(chat.sid, assistant_msg)
+        # 只有当 assistant 有内容 (text 或 dispatched tool_uses) 时才 append,
+        # 防空 assistant 消息 (e.g. text='' + 全部 tool_use 被 budget skip).
+        if assistant_content:
+            assistant_msg = {
+                "role": "assistant",
+                "content": assistant_content,
+                "turn": chat.chat_state.turn_count,
+            }
+            chat.transcript.append(assistant_msg)
+            chat.storage.append_transcript(chat.sid, assistant_msg)
 
-        user_msg = {
-            "role": "user",
-            "content": tool_result_messages,
-            "turn": chat.chat_state.turn_count,
-        }
-        chat.transcript.append(user_msg)
-        chat.storage.append_transcript(chat.sid, user_msg)
+        if tool_result_messages:
+            user_msg = {
+                "role": "user",
+                "content": tool_result_messages,
+                "turn": chat.chat_state.turn_count,
+            }
+            chat.transcript.append(user_msg)
+            chat.storage.append_transcript(chat.sid, user_msg)
+
+        # I1: mid-loop budget break → yield BudgetExhaustedEvent + return
+        # (transcript 已 append 部分 result, 不丢历史)
+        if budget_exhausted_scope is not None:
+            yield BudgetExhaustedEvent(scope=budget_exhausted_scope)
+            return
