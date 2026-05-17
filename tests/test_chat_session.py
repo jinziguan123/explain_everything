@@ -82,13 +82,17 @@ class TestChatSessionPersist:
 
 class TestHandleUserInput:
     @pytest.mark.asyncio
-    async def test_slash_command_routes_to_stub(self) -> None:
+    async def test_slash_command_routes_to_dispatcher(self) -> None:
+        """Wave F.1: slash 现走 dispatch_slash, /show 返 slash_show event."""
         _make_done_session("s_005abcde")
         chat = ChatSession("s_005abcde")
         events: list[ChatEvent] = []
         async for ev in chat.handle_user_input("/show"):
             events.append(ev)
-        assert any(ev.type == "slash_unimplemented" for ev in events)
+        assert any(ev.type == "slash_show" for ev in events)
+        # Slash 不 bump turn_count / 不 append transcript
+        assert chat.chat_state.turn_count == 0
+        assert chat.transcript == []
 
     @pytest.mark.asyncio
     async def test_non_slash_appends_to_transcript(self) -> None:

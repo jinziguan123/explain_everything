@@ -199,14 +199,20 @@ class ChatSession:
     ) -> AsyncIterator[ChatEvent]:
         """Process one user input. Yields events (text / tool_use / tool_result / TurnComplete).
 
-        - slash command → yield 占位 event ("slash_unimplemented"), Task F.1 实现 dispatch
+        - slash command → dispatch_slash 本地 intercept (Wave F.1), 不计入
+          transcript / turn_count, 不消耗 budget (因为没调 LLM).
         - 非 slash + llm=None → C.1 backward compat: yield placeholder event
         - 非 slash + llm 不为 None → C.2: append transcript + bump turn + reset budget
             + dispatch 到 query_loop (LLM ↔ tools while-loop), 最后 persist.
         """
         if self.is_slash_command(text):
-            # Slash dispatch (Task F.1 will implement); C.1 stub just yields
-            yield ChatEvent(type="slash_unimplemented", content=text)
+            # Wave F.1: 本地 dispatch — 6 default commands bypass LLM.
+            from explain_engine.chat.slash_commands import dispatch_slash
+            events = await dispatch_slash(self, text)
+            for ev in events:
+                yield ev
+            # NOTE: slash 不 append transcript / 不 bump turn_count —
+            # 这些是管理命令, 非真正 user→assistant 对话.
             return
         # Append user message
         self.transcript.append({
