@@ -130,22 +130,40 @@ class TestSystemPromptBudgetStatus:
 
 
 class TestSystemPromptMemoryHint:
-    def test_memory_hint_changes_with_content(self) -> None:
-        """空 memory.md → '无 session_memory yet'; 非空 → 含 length."""
+    def test_memory_section_indicates_absence_when_empty(self) -> None:
+        """空 memory.md → 应给 'no session memory yet' 之类提示."""
         state = _make_state()
-        # empty memory
-        p1 = assemble_system_prompt(
+        prompt = assemble_system_prompt(
             state=state, question="why X", memory_md="", budget=_make_budget(),
         )
-        assert "无 session_memory" in p1 or ("no" in p1.lower() and "memory" in p1.lower())
+        # 没 memory 时给明确提示
+        assert (
+            "no session memory" in prompt.lower()
+            or "no memory" in prompt.lower()
+            or "fresh session" in prompt.lower()
+        )
 
-        # non-empty memory
-        memory = "## prior decisions\n- expanded c_001\n"
-        p2 = assemble_system_prompt(
+    def test_memory_md_rendered_in_system_prompt(self) -> None:
+        """E.1 fix: memory_md 全文必须出现在 sys_prompt 里 (走 Anthropic
+        native system 参数), 不是只显示字符数. 因为原 splice 方案产
+        {role:'system'} msg 会被 loop._transcript_to_messages 过滤掉,
+        memory 内容必须靠 system_prompt 内联才能到 LLM.
+        """
+        state = _make_state()
+        memory = (
+            "## Prior decisions through turn 5\n"
+            "- expanded c_001 → 2 new L0 observations\n"
+            "- root question revised: focus on causal not correlational\n"
+            "- weak chain identified at c_003 (consistency=0.4)\n"
+        )
+        prompt = assemble_system_prompt(
             state=state, question="why X", memory_md=memory, budget=_make_budget(),
         )
-        # Should mention character count or indicate memory present
-        assert str(len(memory)) in p2 or "chars" in p2
+        # 全文每行都得在 sys_prompt 里 (而非仅 chars 计数)
+        assert "Prior decisions through turn 5" in prompt
+        assert "expanded c_001" in prompt
+        assert "root question revised" in prompt
+        assert "weak chain identified at c_003" in prompt
 
     def test_system_prompt_includes_question(self) -> None:
         """Prompt 必须含 root question (decision tree 用)."""

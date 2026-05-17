@@ -109,11 +109,18 @@ def session_memory_splice(
     memory_md: str,
     last_memory_turn: int,
 ) -> list[dict]:
-    """Tier 2: prepend memory.md as system msg + drop transcript prefix.
+    """Tier 2: drop transcript prefix already covered by session memory.
 
     memory.md is written by session_memory_writer hook (D.2) every 5 turns.
     The summary covers turns [0, last_memory_turn). If memory_md is empty
     or last_memory_turn=0, no-op (return input unchanged).
+
+    重要: memory_md 本身 NOT prepended 到 messages 数组 — Anthropic API
+    的 messages 数组只接受 user/assistant role; prepend {role:"system"}
+    会被 loop._transcript_to_messages 过滤掉 → memory 实际从未到 LLM.
+    memory_md 内容由 assemble_system_prompt 内联进 sys_prompt (走
+    Anthropic native system 参数), 这里只负责 drop 已被 memory 覆盖的
+    prefix (free transcript context).
 
     Args:
         transcript: chat history (list of message dicts with 'turn' meta).
@@ -121,37 +128,36 @@ def session_memory_splice(
         last_memory_turn: memory.md 覆盖到的 turn 号 (chat_state.last_compact_at_turn).
 
     Returns:
-        新 list: [memory_system_msg, *tail_with_turn>=last_memory_turn].
+        新 list: 仅保留 turn >= last_memory_turn 的 tail.
         若 memory_md 空 或 last_memory_turn=0 → 返原 transcript.
     """
     if not memory_md or last_memory_turn <= 0:
         return transcript
-    memory_msg = {
-        "role": "system",
-        "content": (
-            f"[Session memory through turn {last_memory_turn}]\n\n{memory_md}"
-        ),
-    }
-    # Keep messages with turn >= last_memory_turn (the "recent" tail)
-    tail = [m for m in transcript if m.get("turn", 0) >= last_memory_turn]
-    return [memory_msg, *tail]
+    # Keep messages with turn >= last_memory_turn (the "recent" tail).
+    # memory_md 内容由 sys_prompt 渲染, 不在 messages 数组里 splice.
+    return [m for m in transcript if m.get("turn", 0) >= last_memory_turn]
 
 
 async def emergency_compact(
     messages: list[dict],
     llm: LLMClient,
 ) -> list[dict]:
-    """Tier 3: synchronous LLM summarize all messages, return single system msg.
+    """Tier 3: synchronous LLM summarize all messages, return single user msg.
 
     Last resort when token estimate > EMERGENCY_TOKEN_LIMIT. LLM failure → 返
     原 messages (fail-safe; 总比 crash 强).
+
+    重要: 返 user role (不是 system) — Anthropic API messages 数组只接受
+    user/assistant; loop._transcript_to_messages 会过滤 system role msg.
+    若返 system msg, LLM 实际收 [] → 静默挂. 加 [EMERGENCY COMPACTION]
+    marker 让 LLM 知道这是 context 总结而非真实 user input.
 
     Args:
         messages: 完整 messages list (tier 1+2 跑完后还 over-limit 时调).
         llm: LLMClient (调 .chat 总结).
 
     Returns:
-        单 system msg list (含 LLM summary), 或 LLM 失败 → 原 messages.
+        单 user msg list (含 LLM summary + marker), 或 LLM 失败 → 原 messages.
     """
     try:
         from explain_engine.llm.client import Message
@@ -185,8 +191,11 @@ async def emergency_compact(
         response = await llm.chat(messages=llm_messages, schema=None)
         summary = response.text if hasattr(response, "text") else str(response)
         return [{
-            "role": "system",
-            "content": f"[Emergency compaction — prior context]\n\n{summary}",
+            "role": "user",
+            "content": (
+                f"[EMERGENCY COMPACTION — prior context summary]\n\n{summary}"
+            ),
+            "turn": 0,
         }]
     except Exception as exc:
         logger.warning(

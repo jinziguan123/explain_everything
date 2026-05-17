@@ -91,9 +91,11 @@ def _transcript_to_messages(transcript: list[dict]) -> list[dict]:
 
     Wave E.1 note: 过滤 role=system msg — Anthropic API messages 数组只接受
     user / assistant; system prompt 走 chat_with_tools 的独立 system 参数.
-    prepare_messages (E.1 splice / emergency) 可能 prepend system role msg,
-    但 memory_md 已通过 assemble_system_prompt 注入 sys_prompt, 所以这里安全
-    丢弃 (避免 Anthropic API reject).
+
+    Wave E.1 fix: compaction 函数现已不产 system role msg —
+    session_memory_splice 只 drop prefix (memory_md 由 assemble_system_prompt
+    内联进 sys_prompt), emergency_compact 返 user role + [EMERGENCY COMPACTION]
+    marker. 此过滤器保留作 defense-in-depth, 防未来 caller 误加 system msg.
     """
     return [
         {"role": m["role"], "content": m["content"]}

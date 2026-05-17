@@ -36,8 +36,9 @@ Question: {question}
 per-turn remaining: {per_turn_remaining} / {per_turn_limit}
 per-session remaining: {per_session_remaining} / {per_session_limit}
 
-# Memory hint
-{memory_hint}
+# Session memory
+
+{memory_section}
 {hint_section}
 # Guidelines
 
@@ -103,6 +104,23 @@ def _render_multi_signal(state: CognitiveState) -> str:
     )
 
 
+def _render_memory_section(memory_md: str) -> str:
+    """Render session memory section.
+
+    E.1 fix: 原来只显示 'session_memory.md 含 N chars, 已 splice 到对话历史前置',
+    但 splice 实际产 {role:'system'} msg 会被 loop._transcript_to_messages
+    过滤, memory 内容从未到 LLM. 改: 这里直接把 memory_md 全文内联进
+    sys_prompt (走 Anthropic native system 参数, 不受 messages 数组 role
+    限制), 让 LLM 真正看到 memory 决策上下文.
+    """
+    if not memory_md:
+        return (
+            "(no session memory yet; this is a fresh session or no "
+            "compactions have run)"
+        )
+    return memory_md
+
+
 def assemble_system_prompt(
     state: CognitiveState,
     question: str,
@@ -115,7 +133,11 @@ def assemble_system_prompt(
     Args:
         state: 当前 CognitiveState (for graph snapshot + tool dynamic desc)
         question: root question (从 SessionMeta.question 来)
-        memory_md: session_memory.md 内容 (Wave E micro-compact 产出, 暂时空字符串)
+        memory_md: session_memory.md 内容 (Wave E D.2 hook 产出). E.1 fix:
+            非空时全文内联进 sys_prompt (而非仅显示 chars 计数). 因为原
+            splice 方案产 {role:'system'} msg 会被 _transcript_to_messages
+            过滤掉 → memory 从未到 LLM. 走 Anthropic native system 参数
+            才能保证 memory 到达.
         budget: dict with 4 keys: per_turn_remaining/limit + per_session_remaining/limit
         hint: Wave D.2 — 上一 turn reflect_post_turn 留的 hint (e.g. "reflect 建议:
             expand-downward (target=c_002)"). None → 不渲染 hint section. caller
@@ -125,11 +147,6 @@ def assemble_system_prompt(
         完整 system prompt 字符串, 直接喂给 LLM API 的 system param.
     """
     ctx = ToolContext(state=state)
-    memory_hint = (
-        f"(session_memory.md 含 {len(memory_md)} chars, 已 splice 到对话历史前置)"
-        if memory_md
-        else "(无 session_memory yet)"
-    )
     hint_section = f"\n# Last reflect hint\n{hint}\n" if hint else ""
     return SYSTEM_PROMPT_TEMPLATE.format(
         tool_count=len(ALL_TOOLS),
@@ -141,6 +158,6 @@ def assemble_system_prompt(
         per_turn_limit=budget["per_turn_limit"],
         per_session_remaining=budget["per_session_remaining"],
         per_session_limit=budget["per_session_limit"],
-        memory_hint=memory_hint,
+        memory_section=_render_memory_section(memory_md),
         hint_section=hint_section,
     )

@@ -2,8 +2,11 @@
 
 3 tiers (cheap → expensive):
 1. micro_compact — tool_result > STALE_TURN_AGE 替 stub
-2. session_memory_splice — memory.md 存在 → prepend system msg + 删 prefix
-3. emergency_compact — token > EMERGENCY_TOKEN_LIMIT → LLM summarize all
+2. session_memory_splice — memory.md 存在 → 删 prefix (memory_md 本身由
+   assemble_system_prompt 内联进 sys_prompt, 不在 messages 数组里 splice)
+3. emergency_compact — token > EMERGENCY_TOKEN_LIMIT → LLM summarize all,
+   返回 user role msg + [EMERGENCY COMPACTION] marker (system role 会被
+   loop._transcript_to_messages 过滤)
 
 参考 docs/plans/2026-05-17-conversational-cognitive-engine-plan.md Wave E.1.
 """
@@ -73,6 +76,11 @@ class TestSessionMemorySplice:
         assert session_memory_splice(transcript, "", 0) == transcript
 
     def test_splices_memory_drops_prefix(self):
+        """Tier 2 仅 drop 已被 memory 覆盖的 prefix; memory_md 本身由
+        assemble_system_prompt 内联渲染 (Anthropic API messages 数组只接受
+        user/assistant; prepend system msg 会被 loop._transcript_to_messages
+        过滤掉 → memory 实际从未到 LLM, 故改由 sys_prompt 走 native system 参数).
+        """
         transcript = [
             {"role": "user", "turn": 0, "content": "old"},
             {"role": "assistant", "turn": 0, "content": "old reply"},
@@ -81,12 +89,12 @@ class TestSessionMemorySplice:
         result = session_memory_splice(
             transcript, "# Summary\nblah", last_memory_turn=5,
         )
-        # First msg should be the memory
-        assert result[0]["role"] == "system"
-        assert "blah" in result[0]["content"]
-        # Tail starts from turn=5
-        assert len(result) == 2
-        assert result[1]["content"] == "recent"
+        # 不再 prepend system msg; 只 drop prefix
+        assert all(m.get("role") != "system" for m in result)
+        # Tail 只保留 turn >= 5 的 msg
+        assert len(result) == 1
+        assert result[0]["turn"] == 5
+        assert result[0]["content"] == "recent"
 
     def test_zero_last_memory_turn_no_op(self):
         transcript = [{"role": "user", "turn": 0, "content": "x"}]
@@ -99,6 +107,10 @@ class TestSessionMemorySplice:
 class TestEmergencyCompact:
     @pytest.mark.asyncio
     async def test_summarizes_via_llm(self, mocker):
+        """LLM 总结后必须返 user role (system role 会被
+        loop._transcript_to_messages 过滤). marker [EMERGENCY COMPACTION]
+        让 LLM 知道这是上下文压缩总结而非真实 user input.
+        """
         from unittest.mock import AsyncMock
 
         class _R:
@@ -111,6 +123,9 @@ class TestEmergencyCompact:
         ]
         result = await emergency_compact(messages, llm)
         assert len(result) == 1
+        # 必须 user role 才能过 _transcript_to_messages 过滤到达 LLM
+        assert result[0]["role"] == "user"
+        assert "[EMERGENCY COMPACTION" in result[0]["content"]
         assert "summary" in result[0]["content"]
 
     @pytest.mark.asyncio
@@ -152,6 +167,9 @@ class TestEstimateTokens:
 class TestPrepareMessages:
     @pytest.mark.asyncio
     async def test_full_pipeline_no_emergency(self):
+        """Pipeline: tier 2 splice 后只 drop prefix, 无 system role msg.
+        memory_md 渲染走 assemble_system_prompt 而非 messages 数组.
+        """
         transcript = [
             {"role": "user", "turn": 0, "content": "old"},
             {"role": "user", "turn": 5, "content": "recent"},
@@ -162,8 +180,11 @@ class TestPrepareMessages:
             last_memory_turn=5,
             current_turn=6,
         )
-        # Memory spliced, prefix dropped
-        assert any(m.get("role") == "system" for m in result)
+        # Prefix dropped; 无 system msg 残留
+        assert all(m.get("role") != "system" for m in result)
+        # 只保留 turn >= 5
+        assert len(result) == 1
+        assert result[0]["turn"] == 5
 
     @pytest.mark.asyncio
     async def test_emergency_skipped_when_small(self):
