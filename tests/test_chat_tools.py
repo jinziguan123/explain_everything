@@ -210,3 +210,80 @@ class TestPredictAndCounterfactualTools:
         assert inst.intervention_text == "如果移除 Y"
         with pytest.raises(ValidationError):
             counterfactual_tool.input_schema(intervention_text="")
+
+
+class TestPickFrontierL1:
+    """I1 regression: _pick_frontier_l1 prefers low consistency_score."""
+
+    def test_picks_lowest_consistency_when_cache_available(self) -> None:
+        from explain_engine.chat.tools import _pick_frontier_l1
+        from explain_engine.engines.simulation import AcceptanceReport
+
+        g = ExplanationGraph(root_question="why")
+        # 2 frontier L1s (no incoming causes): c_001 (high score), c_002 (low score)
+        for nid in ("c_001", "c_002"):
+            g.add_node(VariableNode(
+                id=nid, name=nid, description="d",
+                abstraction_level=1, confidence=0.7, epistemic="insight",
+            ))
+        state = CognitiveState(
+            graph=g, budget_remaining=10, root_question="why",
+            insight_candidates=["c_001", "c_002"],
+        )
+        # Inject acceptance report with per_l1
+        state.last_acceptance_report = AcceptanceReport(
+            avg_consistency=0.5, avg_essentialness=0.5,
+            per_l1={"c_001": 0.9, "c_002": 0.1},  # c_002 weaker
+        )
+        # Should pick c_002 (lower score), not c_001 (insertion order would pick c_001)
+        assert _pick_frontier_l1(state) == "c_002"
+
+    def test_falls_back_to_insertion_order_without_cache(self) -> None:
+        from explain_engine.chat.tools import _pick_frontier_l1
+
+        g = ExplanationGraph(root_question="why")
+        for nid in ("c_001", "c_002"):
+            g.add_node(VariableNode(
+                id=nid, name=nid, description="d",
+                abstraction_level=1, confidence=0.7, epistemic="insight",
+            ))
+        state = CognitiveState(
+            graph=g, budget_remaining=10, root_question="why",
+            insight_candidates=["c_001", "c_002"],
+        )
+        # No cache → insertion order → c_001 first
+        assert _pick_frontier_l1(state) == "c_001"
+
+    def test_skips_decayed_and_non_frontier(self) -> None:
+        from explain_engine.chat.tools import _pick_frontier_l1
+
+        g = ExplanationGraph(root_question="why")
+        # c_001: decayed (skip)
+        # c_002: has incoming causes (not frontier, skip)
+        # c_003: active frontier (pick)
+        g.add_node(VariableNode(
+            id="c_001", name="c_001", description="d",
+            abstraction_level=1, confidence=0.7, epistemic="insight",
+            lifecycle_state="decayed",
+        ))
+        g.add_node(VariableNode(
+            id="c_002", name="c_002", description="d",
+            abstraction_level=1, confidence=0.7, epistemic="insight",
+        ))
+        g.add_node(VariableNode(
+            id="c_003", name="c_003", description="d",
+            abstraction_level=1, confidence=0.7, epistemic="insight",
+        ))
+        g.add_node(VariableNode(
+            id="d_001", name="d_001", description="d",
+            abstraction_level=2, confidence=0.7, epistemic="inference",
+        ))
+        # d_001 → causes → c_002 (c_002 not frontier)
+        g.add_edge(RelationEdge(
+            id="e_001", source_node="d_001", target_node="c_002",
+            relation_type="causes", confidence=0.7, mechanism_description="m",
+        ))
+        state = CognitiveState(
+            graph=g, budget_remaining=10, root_question="why",
+        )
+        assert _pick_frontier_l1(state) == "c_003"

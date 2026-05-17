@@ -73,14 +73,15 @@ class Tool:
 class _ExpandInput(BaseModel):
     l1_id: str | None = Field(
         default=None,
-        description="L1 node id; None = auto-pick 一个 frontier L1 (没有 incoming causes 的 L1).",
+        description="L1 node id; None=auto-pick frontier (lowest consistency).",
     )
     direction: Literal["downward", "upward", "auto"] = Field(
         default="auto",
         description=(
-            "downward = 给 L1 加 manifests_as L0 子节点; "
-            "upward = 给 L1 加 incoming causes driver (L2); "
-            "auto = 指定 l1_id 时优先 downward, 否则 upward (auto-pick frontier)."
+            "downward 加 manifests_as L0 子节点 (requires l1_id); "
+            "upward 加 incoming causes driver (frontier only — l1_id 必须是 frontier L1 "
+            "无 incoming causes); "
+            "auto: 有 l1_id → downward; 无 l1_id → upward auto-pick frontier."
         ),
     )
 
@@ -99,23 +100,31 @@ def _expand_description(ctx: ToolContext) -> str:
 
 
 def _pick_frontier_l1(state: CognitiveState) -> str | None:
-    """挑一个 frontier L1 (没有 incoming causes edge 且 active 的 L1).
+    """Auto-pick frontier L1 (no incoming causes, not decayed).
 
-    返回 id 或 None (无合格 frontier).
+    Priority: low consistency_score first (if cache available), fallback insertion order.
+    cache 来自 state.last_acceptance_report (Wave 2 reflect 写入); 没跑过 → None,
+    所有候选 score=1.0, sort 退化为稳定的 insertion order.
     """
     has_incoming_causes: set[str] = {
         e.target_node
         for e in state.graph.edges.values()
         if e.relation_type == "causes"
     }
+    cache = state.last_acceptance_report  # may be None (not yet checked)
+    candidates: list[tuple[str, float]] = []
     for nid, n in state.graph.nodes.items():
         if (
             n.abstraction_level == 1
             and n.lifecycle_state != "decayed"
             and nid not in has_incoming_causes
         ):
-            return nid
-    return None
+            score = cache.per_l1.get(nid, 1.0) if cache else 1.0
+            candidates.append((nid, score))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[1])  # low consistency first
+    return candidates[0][0]
 
 
 async def _expand_call(input: BaseModel, ctx: ToolContext) -> str:
@@ -338,10 +347,10 @@ counterfactual_tool = Tool(
 
 # ───────────────────────── master registry ─────────────────────────
 
-ALL_TOOLS: list[Tool] = [
+ALL_TOOLS: tuple[Tool, ...] = (
     expand_tool,
     compress_tool,
     check_tool,
     predict_tool,
     counterfactual_tool,
-]
+)

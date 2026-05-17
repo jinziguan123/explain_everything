@@ -643,6 +643,13 @@ EOF
 - Create: `src/explain_engine/chat/tools.py`
 - Create: `tests/test_chat_tools.py`
 
+**⚠️ API reconciliation (post-implementation)**: Plan code below was drafted before actual engine API verification. Implementer found and corrected 3 API mismatches:
+- `expansion.expand_one_frontier(state, target_id, llm, max_drivers=3)` — target_id is **positional + required**, NOT `expand_one_frontier(state, llm, target=...)` as plan showed
+- `compression.propose_candidates(state, llm) -> None` (mutates `state.insight_candidates`), NOT `compression.compress(state, llm)` as plan showed
+- `CounterfactualReport` flat fields `baseline_acts / counterfactual_acts / activation_diff / alt_narrative`, NOT nested `baseline.avg_consistency / counterfactual.avg_consistency / diff` as plan showed
+
+The actual implementation in `src/explain_engine/chat/tools.py` (commit `352ba79`) reflects correct engine APIs. The code blocks below are illustrative — refer to source for canonical signatures.
+
 ---
 
 ### Step 1: 写失败测试
