@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from explain_engine.engines import compression, counterfactual, expansion, prediction
 from explain_engine.engines.simulation import aggregate_acceptance, check_consistency
 from explain_engine.llm.client import LLMClient
+from explain_engine.schema.nodes import VariableNode
 from explain_engine.schema.state import CognitiveState
 
 
@@ -345,6 +346,82 @@ counterfactual_tool = Tool(
 )
 
 
+# ─── add_observation tool (Phase 9 Wave B.2 mutation) ───
+
+def _next_p_id(state: CognitiveState) -> str:
+    """Compute next p_NNN id by incrementing max existing p_<digits> id."""
+    existing = [
+        int(nid.split("_")[1]) for nid in state.graph.nodes
+        if nid.startswith("p_") and nid[2:].isdigit()
+    ]
+    return f"p_{(max(existing) + 1) if existing else 1:03d}"
+
+
+class _AddObservationInput(BaseModel):
+    name: str = Field(min_length=1, description="新观察简短名字")
+    description: str = Field(min_length=1, description="详细描述")
+    source: Literal["user_explicit", "llm_inferred"] = Field(
+        description=(
+            "user_explicit = user 明确说加 (直接执行); "
+            "llm_inferred = LLM 自己推断 (HITL gate confirm). "
+            "默认行为见 chat/hitl.py."
+        )
+    )
+
+
+async def _add_observation_call(input: BaseModel, ctx: ToolContext) -> str:
+    """Add L0 node to graph. HITL gate (Task D.1) intercepts before this for llm_inferred."""
+    assert isinstance(input, _AddObservationInput)
+    nid = _next_p_id(ctx.state)
+    ctx.state.graph.add_node(VariableNode(
+        id=nid, name=input.name, description=input.description,
+        abstraction_level=0, confidence=0.7, epistemic="observation",
+        source="user",  # always "user" since this came from chat (user-driven)
+    ))
+    return f"added L0 observation {nid}: {input.name} (source={input.source})"
+
+
+add_observation_tool = Tool(
+    name="add_observation",
+    input_schema=_AddObservationInput,
+    description=lambda ctx: (
+        "添加新 L0 observation 到 graph. "
+        "若 user 明确说'加这个观察' → source='user_explicit' (直接执行). "
+        "若 LLM 自己推断该加 → source='llm_inferred' (触发 user confirm via hitl gate)."
+    ),
+    call=_add_observation_call,
+    requires_hitl=True,  # Conditional gate; chat/hitl.py checks source
+)
+
+
+# ─── read_node tool (Phase 9 Wave B.2 lazy load) ───
+
+class _ReadNodeInput(BaseModel):
+    node_id: str = Field(min_length=1)
+
+
+async def _read_node_call(input: BaseModel, ctx: ToolContext) -> str:
+    assert isinstance(input, _ReadNodeInput)
+    node = ctx.state.graph.nodes.get(input.node_id)
+    if node is None:
+        return f"node {input.node_id!r} not found in graph"
+    return (
+        f"{node.id} | {node.name} | level={node.abstraction_level} | "
+        f"confidence={node.confidence:.2f} | epistemic={node.epistemic} | "
+        f"lifecycle_state={node.lifecycle_state}\n"
+        f"description: {node.description}"
+    )
+
+
+read_node_tool = Tool(
+    name="read_node",
+    input_schema=_ReadNodeInput,
+    description=lambda ctx: "读节点完整 description (lean context mode lazy load 用).",
+    call=_read_node_call,
+    is_readonly=True,
+)
+
+
 # ───────────────────────── master registry ─────────────────────────
 
 ALL_TOOLS: tuple[Tool, ...] = (
@@ -353,4 +430,6 @@ ALL_TOOLS: tuple[Tool, ...] = (
     check_tool,
     predict_tool,
     counterfactual_tool,
+    add_observation_tool,
+    read_node_tool,
 )

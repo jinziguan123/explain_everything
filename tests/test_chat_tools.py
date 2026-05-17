@@ -69,11 +69,12 @@ class TestToolDataclass:
 
 class TestALL_TOOLS:
     def test_contains_5_engine_tools(self) -> None:
+        """B.1 baseline: 5 engine tools registered."""
         from explain_engine.chat.tools import ALL_TOOLS
 
         names = {t.name for t in ALL_TOOLS}
-        assert names == {"expand", "compress", "check", "predict", "counterfactual"}
-        assert len(ALL_TOOLS) == 5
+        # B.2 added 2 more (add_observation + read_node); engine tools still present.
+        assert {"expand", "compress", "check", "predict", "counterfactual"} <= names
 
 
 class TestExpandTool:
@@ -287,3 +288,99 @@ class TestPickFrontierL1:
             graph=g, budget_remaining=10, root_question="why",
         )
         assert _pick_frontier_l1(state) == "c_003"
+
+
+class TestAddObservationTool:
+    def test_input_schema_source_literal(self) -> None:
+        from explain_engine.chat.tools import add_observation_tool
+        input = add_observation_tool.input_schema(
+            name="new obs", description="d", source="user_explicit",
+        )
+        assert input.source == "user_explicit"
+
+    def test_input_schema_rejects_invalid_source(self) -> None:
+        from pydantic import ValidationError
+
+        from explain_engine.chat.tools import add_observation_tool
+        with pytest.raises(ValidationError):
+            add_observation_tool.input_schema(
+                name="x", description="d", source="other",
+            )
+
+    @pytest.mark.asyncio
+    async def test_call_adds_l0_node(self) -> None:
+        from explain_engine.chat.tools import ToolContext, add_observation_tool
+        state = _make_state_with_l1()
+        ctx = ToolContext(state=state)
+        input = add_observation_tool.input_schema(
+            name="新观察", description="desc", source="user_explicit",
+        )
+        result = await add_observation_tool.call(input, ctx)
+        new_nodes = [n for n in state.graph.nodes.values()
+                     if n.name == "新观察" and n.abstraction_level == 0]
+        assert len(new_nodes) == 1
+        assert new_nodes[0].epistemic == "observation"
+        assert "added" in result.lower()
+
+    def test_requires_hitl_flag(self) -> None:
+        from explain_engine.chat.tools import add_observation_tool
+        assert add_observation_tool.requires_hitl is True
+
+    @pytest.mark.asyncio
+    async def test_call_increments_p_id(self) -> None:
+        """Sequential add_observation calls produce p_001, p_002, etc."""
+        from explain_engine.chat.tools import ToolContext, add_observation_tool
+        from explain_engine.schema.graph import ExplanationGraph
+        from explain_engine.schema.state import CognitiveState
+
+        g = ExplanationGraph(root_question="q")
+        state = CognitiveState(graph=g, budget_remaining=10, root_question="q")
+        ctx = ToolContext(state=state)
+
+        await add_observation_tool.call(
+            add_observation_tool.input_schema(name="o1", description="d", source="user_explicit"),
+            ctx,
+        )
+        await add_observation_tool.call(
+            add_observation_tool.input_schema(name="o2", description="d", source="user_explicit"),
+            ctx,
+        )
+        ids = sorted([nid for nid in state.graph.nodes if nid.startswith("p_")])
+        assert ids == ["p_001", "p_002"]
+
+
+class TestReadNodeTool:
+    @pytest.mark.asyncio
+    async def test_call_returns_full_description(self) -> None:
+        from explain_engine.chat.tools import ToolContext, read_node_tool
+        state = _make_state_with_l1()
+        ctx = ToolContext(state=state)
+        input = read_node_tool.input_schema(node_id="c_001")
+        result = await read_node_tool.call(input, ctx)
+        assert "c_001" in result
+        # Verify it includes lifecycle_state, level, etc.
+        assert "level=1" in result
+        assert "lifecycle_state=active" in result
+
+    @pytest.mark.asyncio
+    async def test_call_missing_node_returns_error_message(self) -> None:
+        from explain_engine.chat.tools import ToolContext, read_node_tool
+        state = _make_state_with_l1()
+        ctx = ToolContext(state=state)
+        input = read_node_tool.input_schema(node_id="c_999")
+        result = await read_node_tool.call(input, ctx)
+        assert "not found" in result.lower()
+
+    def test_is_readonly(self) -> None:
+        from explain_engine.chat.tools import read_node_tool
+        assert read_node_tool.is_readonly is True
+
+
+class TestALL_TOOLS_v2:
+    def test_contains_7_tools_after_b2(self) -> None:
+        from explain_engine.chat.tools import ALL_TOOLS
+        names = {t.name for t in ALL_TOOLS}
+        assert names == {
+            "expand", "compress", "check", "predict", "counterfactual",
+            "add_observation", "read_node",
+        }
