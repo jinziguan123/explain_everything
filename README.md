@@ -22,10 +22,38 @@
 
 ## Status
 
-**Phase 8 milestone (2026-05-15)** — Reflect Redesign + Multi-Signal + Falsifiability + Lifecycle。
-482 tests pass，ruff 0。Phase 0-8 全部实施完，Phase 9 直接 motivation：
-cross-session memory consolidation / theory formation / lifecycle 完整 8 阶段
-（详见 [Phase 8 acceptance evidence](docs/plans/2026-05-15-cognitive-engine-phase-8-acceptance.md)）。
+**Phase 9 milestone (2026-05-17)** — Conversational Cognitive Engine (Claude Code 风格 chat REPL)。
+634 tests pass，ruff 0。Phase 0-9 全部实施完，Phase 10 直接 motivation：
+cross-session knowledge pool 填充 / Theory Formation 起步 / real Anthropic tool_use adapter
+（详见 [Phase 9 acceptance evidence](docs/plans/2026-05-17-conversational-cognitive-engine-acceptance.md)）。
+
+## Phase 9 (2026-05-17) — Conversational Cognitive Engine
+
+把 cognitive engine 从 CLI 命令式升级为 Claude Code 风格 conversational agent.
+用户 `explain chat <sid>` 进 REPL, LLM 自主调度 7 tool 边推理边给 narrative.
+
+**7 个 tool** (LLM 可调度): expand / compress / check / predict / counterfactual / add_observation / read_node
+**6 个 slash command** (本地 intercept, bypass LLM): /quit /help /show /budget /compact /save
+
+新 CLI commands:
+
+- `explain chat <sid>` — 进 conversational REPL (Phase 9 主入口)
+- `explain migrate [--dry-run]` — 一次性把 Phase 0-8 老 `sessions/*.json` 迁到 `~/.explain/projects/<proj>/sessions/<sid>/`
+
+新基础设施 (Q1-Q7 brainstorming 锁定):
+
+- ✅ **Full Agent loop** (Q1β) — Two-layer outer/inner pattern (ChatSession + query_loop)
+- ✅ **Curated 7-tool set** (Q2β + Q4β) — 5 engine wrap + add_observation (mutation) + read_node (lazy load)
+- ✅ **老 CLI 并存** (Q3B) — 482 老 test 零回归
+- ✅ **Dual budget + smart HITL** (Q5γ) — per-turn (10) + per-session (50), `add_observation(source=llm_inferred)` 触发 user confirm
+- ✅ **3-tier compaction** (Q6γ) — microCompact (drop stale tool_result) + sessionMemory splice + emergency sync compact
+- ✅ **Project-based persistence** (Q7γ-1) — `~/.explain/projects/<project_id>/sessions/<sid>/` 5 sidecar files + `knowledge/` 占位 Phase 10+
+
+文档:
+
+- design: [docs/plans/2026-05-17-conversational-cognitive-engine-design.md](docs/plans/2026-05-17-conversational-cognitive-engine-design.md)
+- plan: [docs/plans/2026-05-17-conversational-cognitive-engine-plan.md](docs/plans/2026-05-17-conversational-cognitive-engine-plan.md)
+- acceptance: [docs/plans/2026-05-17-conversational-cognitive-engine-acceptance.md](docs/plans/2026-05-17-conversational-cognitive-engine-acceptance.md)
 
 ## Phase 8 (2026-05-15) — Reflect Redesign + Multi-Signal + Falsifiability + Lifecycle
 
