@@ -821,5 +821,203 @@ def list_cmd() -> None:
     console.print(table)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 9 Wave F.2: chat REPL + migrate
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _render_event(con: Console, event) -> None:
+    """Phase 9 Wave F.2: 渲染单个 ChatEvent 到终端 (Rich).
+
+    Event 类型映射:
+    - assistant_text       — plain print (escape 防 Rich markup 注入)
+    - tool_use             — "→ tool: <name>(<input>)" 灰色
+    - tool_result          — "← <name>: <result>" 灰色, > 500 chars truncate
+    - turn_complete        — 空行 separator
+    - budget_exhausted     — yellow warn, 含 scope
+    - slash_* (help/show/budget/save/compact/quit/error/unknown) — 直接打印 content
+    - 其他                  — fallback "<type>: <content>" 灰色
+    """
+    from rich.markup import escape
+
+    t = event.type
+
+    if t == "assistant_text":
+        con.print(escape(str(event.content or "")))
+    elif t == "tool_use":
+        name = getattr(event, "tool_name", "?")
+        inp = getattr(event, "tool_input", {})
+        con.print(f"[dim]→ tool: {escape(str(name))}({escape(str(inp))})[/dim]")
+    elif t == "tool_result":
+        # ToolResultEvent 用 .result 字段 (非 .content)
+        result_str = getattr(event, "result", None) or (event.content or "")
+        result_str = str(result_str)
+        if len(result_str) > 500:
+            result_str = result_str[:500] + "..."
+        name = getattr(event, "tool_name", "?")
+        con.print(f"[dim]← {escape(str(name))}: {escape(result_str)}[/dim]")
+    elif t == "turn_complete":
+        con.print()
+    elif t == "budget_exhausted":
+        scope = getattr(event, "scope", "unknown")
+        con.print(
+            f"[yellow]Budget exhausted ({scope}). "
+            f"Reset via /budget or new turn.[/yellow]"
+        )
+    elif t.startswith("slash_"):
+        con.print(escape(str(event.content or "")))
+    else:
+        # Generic fallback (placeholder / unknown future events)
+        con.print(f"[dim]{escape(t)}: {escape(str(event.content or ''))}[/dim]")
+
+
+@app.command()
+def chat(
+    session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+    no_input_check: bool = typer.Option(
+        False, "--no-input-check",
+        help="Phase 8 Wave 3: skip input validation fail-fast",
+    ),
+    tool_budget_per_turn: int = typer.Option(
+        10, "--tool-budget-per-turn",
+        help="Max tool calls per user turn (Phase 9 Q5γ)",
+    ),
+    tool_budget_per_session: int = typer.Option(
+        50, "--tool-budget-per-session",
+        help="Max tool calls per session lifetime",
+    ),
+) -> None:
+    """Phase 9 Wave F.2: 进 conversational chat REPL.
+
+    交互模式 — stdin 读 user input, dispatch 到 ChatSession.handle_user_input.
+    Slash command (/help, /quit, /show, /budget, /compact, /save) 本地 intercept,
+    其余走 LLM ↔ tools while-loop (query_loop).
+
+    优雅退出:
+    - /quit            → slash_quit event 触发 break
+    - Ctrl-D / Ctrl-C  → EOFError / KeyboardInterrupt 捕获 break
+    退出前 await background tasks (session_memory_writer 等) + 最终 persist.
+
+    --no-input-check 是 Phase 8 Wave 3 兜底; 暂未被 chat 路径直接用
+    (Phase 9 Wave F.2 仅暴露 flag 占位, 后续 wave 接进 input_validation).
+    """
+    del no_input_check  # 占位 flag, Phase 9 F.2 暂未接 input_validation (Wave G+ 处理)
+
+    # Local import 避 CLI 模块顶部 import (chat 模块依赖重, 仅 chat 命令需要)
+    from explain_engine.chat.session import ChatSession
+
+    try:
+        chat_session = ChatSession(session_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    # 用户传 flag 时覆盖默认 budget (ChatStateDict 默认 10/50)
+    chat_session.chat_state.budget_per_turn_limit = tool_budget_per_turn
+    chat_session.chat_state.budget_per_turn_remaining = tool_budget_per_turn
+    chat_session.chat_state.budget_per_session_limit = tool_budget_per_session
+    # session remaining: 若 loaded 值已小于新 limit 则保留 (用户已消耗),
+    # 否则 cap 到新 limit
+    if (
+        chat_session.chat_state.budget_per_session_remaining
+        > tool_budget_per_session
+    ):
+        chat_session.chat_state.budget_per_session_remaining = tool_budget_per_session
+
+    llm = make_llm_client()
+
+    console.print(
+        f"[dim]Loaded session {session_id}. "
+        f"Type /help for commands. /quit to exit.[/dim]"
+    )
+
+    async def repl() -> None:
+        while True:
+            try:
+                # asyncio.to_thread 非阻塞 stdin (event loop 可继续处理
+                # 后台 task, 如 session_memory_writer)
+                user_input = await asyncio.to_thread(input, "\n> ")
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[dim]Interrupted. Saving...[/dim]")
+                break
+
+            user_input = user_input.strip()
+            if not user_input:
+                continue
+
+            quit_requested = False
+            try:
+                async for event in chat_session.handle_user_input(
+                    user_input, llm=llm
+                ):
+                    _render_event(console, event)
+                    if event.type == "slash_quit":
+                        quit_requested = True
+            except Exception as exc:
+                # REPL 不应因单 turn error 整体 crash; 让用户重试
+                console.print(
+                    f"[red]Error: {type(exc).__name__}: {exc}[/red]"
+                )
+                continue
+
+            if quit_requested:
+                break
+
+        # Cleanup: await background tasks (session_memory_writer 等) + 最终 persist
+        await chat_session.aclose()
+        console.print(f"[green]Session {session_id} saved.[/green]")
+
+    asyncio.run(repl())
+
+
+@app.command()
+def migrate(
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Preview migration without moving files",
+    ),
+) -> None:
+    """Phase 9 Wave F.2: 一次性 sessions/*.json → ~/.explain/projects/<proj>/sessions/<sid>/.
+
+    检测当前目录 sessions/ 下 legacy session files, 拆 {meta, state} →
+    metadata.json + graph.json, 移 legacy 到 sessions/.legacy/ (安全:
+    永不删用户数据). Idempotent — 重跑只处理新 legacy.
+
+    用 --dry-run 预览, 不移文件.
+    """
+    from explain_engine.persistence.migration import (
+        detect_legacy_sessions,
+        migrate_all,
+    )
+
+    sids = detect_legacy_sessions()
+
+    if not sids:
+        console.print("[green]No legacy sessions to migrate.[/green]")
+        return
+
+    console.print(f"Found {len(sids)} legacy session(s): {sids}")
+    if dry_run:
+        console.print("[yellow]--dry-run: no files will be moved.[/yellow]")
+
+    results = migrate_all(dry_run=dry_run)
+    for r in results:
+        sid = r["sid"]
+        if r["migrated"]:
+            console.print(f"  ✓ {sid} migrated")
+        else:
+            console.print(f"  ⊘ {sid}: {r['reason']}")
+
+    migrated_count = sum(1 for r in results if r["migrated"])
+    if dry_run:
+        console.print(
+            f"\n[dim]Dry-run: {len(sids)} session(s) would be migrated.[/dim]"
+        )
+    else:
+        console.print(
+            f"\n[green]Migrated {migrated_count}/{len(sids)} sessions.[/green]"
+        )
+
+
 if __name__ == "__main__":
     app()
