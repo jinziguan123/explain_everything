@@ -239,12 +239,12 @@ class TestSlashResume:
     @pytest.mark.asyncio
     async def test_no_sessions_returns_info(self, monkeypatch):
         from explain_engine.chat.session import ChatSession
+        from explain_engine.persistence.session import SessionStore
         _make_done_session("s_5e500001")
         chat = ChatSession("s_5e500001")
-        # Monkey patch list_sessions 返空
-        monkeypatch.setattr(
-            type(chat.storage), "list_sessions", lambda self: []
-        )
+        # Monkey patch SessionStore.list 返空 (handler 用 SessionStore.list()
+        # 自动 sort + log warning 跳过坏 session, 替代了之前手写 metas loading)
+        monkeypatch.setattr(SessionStore, "list", lambda self: [])
         events = await dispatch_slash(chat, "/resume")
         types = [e.type for e in events]
         assert "slash_resume" in types

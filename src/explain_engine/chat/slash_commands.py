@@ -270,29 +270,15 @@ async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
             content="Usage: /resume  (无参数, 弹列表后选号)",
         )]
 
-    sids = chat.storage.list_sessions()
-    if not sids:
+    # SessionStore.list() 自动 sort by created_at desc + log warning 跳过坏 session;
+    # 只读 metadata.json, 不读 graph (避免 O(N) 大 graph IO).
+    # 替代了之前手写循环 + 静默 except (Wave 4 code review I-1).
+    metas = SessionStore().list()
+    if not metas:
         return [ChatEvent(
             type="slash_resume",
             content="当前 project 无 session.",
         )]
-
-    # 加载 metadata (轻 — TODO future: SessionStore.load_meta_only 优化 100+ session)
-    sstore = SessionStore()
-    metas = []
-    for sid in sids:
-        try:
-            metas.append(sstore.load(sid).meta)
-        except Exception:
-            continue  # 坏 session 跳过, 不让 picker 整体 crash
-
-    if not metas:
-        return [ChatEvent(
-            type="slash_resume",
-            content="当前 project 无可读 session (全部加载失败).",
-        )]
-
-    metas.sort(key=lambda m: m.created_at, reverse=True)
 
     # 渲染表 — 用临时 Console (跟 /new 同款, 避免 from cli import console 反向依赖)
     console = Console()
