@@ -97,3 +97,97 @@ class TestBootstrapPhenomena:
         assert "为什么年轻人不消费" in user_msg.content
         assert "10" in user_msg.content
         assert "12" in user_msg.content
+
+
+def _make_lex_var(
+    global_id: str = "v_abc12345",
+    name: str = "长期不确定性",
+    description: str = "宏观持续低预期",
+    abstraction_level: int = 2,
+    reuse_count: int = 3,
+    avg_essentialness: float = 0.8,
+    canonical_mechanism: str = "通常 cause 风险规避; 由历史路径 cause",
+) -> dict:
+    """Wave 3: lexicon var entry, 同 knowledge/variables.json 行存."""
+    return {
+        "global_id": global_id,
+        "name": name,
+        "description": description,
+        "abstraction_level": abstraction_level,
+        "epistemic": "insight",
+        "fitness": {
+            "reuse_count": reuse_count,
+            "avg_essentialness": avg_essentialness,
+            "avg_consistency": 0.7,
+            "first_seen_at": "2026-05-01T00:00:00Z",
+            "last_seen_at": "2026-05-18T00:00:00Z",
+        },
+        "canonical_mechanism": canonical_mechanism,
+        "source_sessions": ["s_001"],
+    }
+
+
+class TestBootstrapWithLexicon:
+    """Phase 10 Wave 3: bootstrap_phenomena 接 lexicon prior."""
+
+    async def test_lexicon_none_backward_compat(self):
+        """lexicon=None → prompt 不含 prior section (backward compat)."""
+        llm = AsyncMock()
+        llm.chat = AsyncMock(return_value=_mock_resp([
+            {"name": "x", "description": "y"}
+        ]))
+
+        await bootstrap_phenomena("why?", llm, lexicon=None)
+
+        messages = llm.chat.call_args.args[0]
+        prompt_text = "\n".join(m.content for m in messages)
+        # Wave 3 prior section 含此字符串作 disclaimer
+        assert "不强制" not in prompt_text
+        assert "仅供参考" not in prompt_text
+
+    async def test_lexicon_empty_list_same_as_none(self):
+        """lexicon=[] 行为同 None — 不加 prior section."""
+        llm = AsyncMock()
+        llm.chat = AsyncMock(return_value=_mock_resp([
+            {"name": "x", "description": "y"}
+        ]))
+
+        await bootstrap_phenomena("why?", llm, lexicon=[])
+
+        messages = llm.chat.call_args.args[0]
+        prompt_text = "\n".join(m.content for m in messages)
+        assert "不强制" not in prompt_text
+        assert "仅供参考" not in prompt_text
+
+    async def test_lexicon_attached_to_prompt(self):
+        """非空 lexicon → prompt 末尾含 prior section, var name + global_id 可见."""
+        llm = AsyncMock()
+        llm.chat = AsyncMock(return_value=_mock_resp([
+            {"name": "x", "description": "y"}
+        ]))
+
+        lex = [
+            _make_lex_var(
+                global_id="v_abc12345",
+                name="长期不确定性",
+                reuse_count=5,
+                avg_essentialness=0.9,
+            ),
+            _make_lex_var(
+                global_id="v_def67890",
+                name="风险规避",
+                reuse_count=3,
+                avg_essentialness=0.7,
+            ),
+        ]
+        await bootstrap_phenomena("why?", llm, lexicon=lex)
+
+        messages = llm.chat.call_args.args[0]
+        prompt_text = "\n".join(m.content for m in messages)
+        # var name + global_id 应在 prompt 中
+        assert "长期不确定性" in prompt_text
+        assert "v_abc12345" in prompt_text
+        assert "风险规避" in prompt_text
+        assert "v_def67890" in prompt_text
+        # disclaimer 应在
+        assert "不强制" in prompt_text or "仅供参考" in prompt_text

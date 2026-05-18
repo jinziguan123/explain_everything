@@ -253,3 +253,56 @@ async def flush_to_lexicon(
         _save_lexicon(path, lexicon)
 
     return promoted
+
+
+# ── Wave 3: prior selection + prompt rendering ───────────────────────────────
+
+
+def _select_top_k_vars(
+    lexicon: dict[str, Any],
+    k: int = 20,
+) -> list[dict[str, Any]]:
+    """选 Top-K composite-score vars 作 LLM prior.
+
+    composite = reuse_count × (avg_essentialness + 0.1)
+    +0.1 防 essentialness=0 时 score 完全清零 (高 reuse 仍可入选).
+    k<=0 → empty. k>total → 全返.
+    """
+    if k <= 0:
+        return []
+    variables = lexicon.get("variables", [])
+    if not variables:
+        return []
+
+    def _score(v: dict[str, Any]) -> float:
+        fitness = v.get("fitness", {})
+        reuse = fitness.get("reuse_count", 0)
+        ess = fitness.get("avg_essentialness", 0.0)
+        return reuse * (ess + 0.1)
+
+    return sorted(variables, key=_score, reverse=True)[:k]
+
+
+def _render_lexicon_for_prompt(vars_list: list[dict[str, Any]]) -> str:
+    """渲染 lexicon prior section 进 LLM prompt.
+
+    每行: `- {global_id} 「{name}」(L{level}, reused {N}x): {desc[:80]} — {mech[:60]}`
+    末尾加 disclaimer — let LLM 知道 lexicon 是 hint 不是 rule (避免被框死).
+    Token budget: 单 var ~80 token, Top-K=20 默认 ≈ 1.7k token.
+    """
+    if not vars_list:
+        return ""
+
+    lines = ["[已知 abstractions — 仅供参考, 不强制使用]"]
+    for v in vars_list:
+        gid = v.get("global_id", "?")
+        name = v.get("name", "?")
+        level = v.get("abstraction_level", 0)
+        fitness = v.get("fitness", {})
+        reuse = fitness.get("reuse_count", 0)
+        desc = (v.get("description") or "")[:80]
+        mech = (v.get("canonical_mechanism") or "")[:60]
+        lines.append(
+            f"- {gid} 「{name}」(L{level}, reused {reuse}x): {desc} — {mech}"
+        )
+    return "\n".join(lines)

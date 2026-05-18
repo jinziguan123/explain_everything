@@ -344,3 +344,149 @@ class TestFlushToLexicon:
         for v in lex["variables"]:
             assert v["fitness"]["reuse_count"] == 1
             assert v["source_sessions"] == ["s_flush003"]
+
+
+# ── Wave 3: _select_top_k_vars + _render_lexicon_for_prompt ──────────────────
+
+from explain_engine.engines.lexicon import (  # noqa: E402
+    _render_lexicon_for_prompt,
+    _select_top_k_vars,
+)
+
+
+def _make_var_entry(
+    global_id: str = "v_abc12345",
+    name: str = "长期不确定性",
+    description: str = "宏观层面持续低预期",
+    abstraction_level: int = 2,
+    reuse_count: int = 3,
+    avg_essentialness: float = 0.8,
+    canonical_mechanism: str = "通常 cause 风险规避; 由社会结构性压力 cause",
+) -> dict:
+    """Helper: 建 lexicon var entry (dict form, 同 knowledge/variables.json 行存)."""
+    return {
+        "global_id": global_id,
+        "name": name,
+        "description": description,
+        "abstraction_level": abstraction_level,
+        "epistemic": "insight",
+        "fitness": {
+            "reuse_count": reuse_count,
+            "avg_essentialness": avg_essentialness,
+            "avg_consistency": 0.7,
+            "first_seen_at": "2026-05-01T00:00:00Z",
+            "last_seen_at": "2026-05-18T00:00:00Z",
+        },
+        "canonical_mechanism": canonical_mechanism,
+        "source_sessions": ["s_001", "s_002", "s_003"][:reuse_count],
+    }
+
+
+class TestSelectTopK:
+    def test_empty_lexicon_returns_empty(self):
+        assert _select_top_k_vars({"variables": []}, k=20) == []
+
+    def test_k_zero_returns_empty(self):
+        lex = {"variables": [_make_var_entry()]}
+        assert _select_top_k_vars(lex, k=0) == []
+
+    def test_k_larger_than_total_returns_all(self):
+        lex = {"variables": [
+            _make_var_entry(global_id="v_a", name="A"),
+            _make_var_entry(global_id="v_b", name="B"),
+        ]}
+        result = _select_top_k_vars(lex, k=20)
+        assert len(result) == 2
+
+    def test_composite_score_descending(self):
+        """composite = reuse × (essentialness + 0.1), sort desc."""
+        lex = {"variables": [
+            # score = 1 * (0.5 + 0.1) = 0.6
+            _make_var_entry(
+                global_id="v_low", name="Low",
+                reuse_count=1, avg_essentialness=0.5,
+            ),
+            # score = 5 * (0.9 + 0.1) = 5.0
+            _make_var_entry(
+                global_id="v_high", name="High",
+                reuse_count=5, avg_essentialness=0.9,
+            ),
+            # score = 3 * (0.6 + 0.1) = 2.1
+            _make_var_entry(
+                global_id="v_mid", name="Mid",
+                reuse_count=3, avg_essentialness=0.6,
+            ),
+        ]}
+        result = _select_top_k_vars(lex, k=20)
+        names = [v["name"] for v in result]
+        assert names == ["High", "Mid", "Low"]
+
+    def test_zero_essentialness_not_completely_zeroed(self):
+        """essentialness=0 + reuse=5 仍应排在 essentialness=0.1 + reuse=1 前 (+0.1 防完全 0)."""
+        lex = {"variables": [
+            # score = 5 * (0 + 0.1) = 0.5
+            _make_var_entry(
+                global_id="v_zero", name="Zero",
+                reuse_count=5, avg_essentialness=0.0,
+            ),
+            # score = 1 * (0.1 + 0.1) = 0.2
+            _make_var_entry(
+                global_id="v_low", name="Low",
+                reuse_count=1, avg_essentialness=0.1,
+            ),
+        ]}
+        result = _select_top_k_vars(lex, k=20)
+        assert result[0]["name"] == "Zero"
+
+
+class TestRenderLexicon:
+    def test_render_empty_returns_empty_string(self):
+        assert _render_lexicon_for_prompt([]) == ""
+
+    def test_single_var_contains_essentials(self):
+        var = _make_var_entry(
+            global_id="v_abc12345",
+            name="长期不确定性",
+            abstraction_level=2,
+            reuse_count=3,
+        )
+        out = _render_lexicon_for_prompt([var])
+        assert "v_abc12345" in out
+        assert "长期不确定性" in out
+        assert "L2" in out
+        assert "3" in out  # reuse count
+
+    def test_long_desc_capped(self):
+        long_desc = "啊" * 200
+        var = _make_var_entry(description=long_desc)
+        out = _render_lexicon_for_prompt([var])
+        # 80 char cap → 单行 "啊" 数 <= 80
+        # 整个 prompt 不该 contain 200 个连续 "啊"
+        assert "啊" * 200 not in out
+        # 确认有 cap, e.g. 含 81 个连续 "啊" 也不行
+        assert "啊" * 81 not in out
+
+    def test_long_mech_capped(self):
+        long_mech = "通常 cause " + "x" * 200
+        var = _make_var_entry(canonical_mechanism=long_mech)
+        out = _render_lexicon_for_prompt([var])
+        # mech cap 60 char
+        assert "x" * 200 not in out
+        assert "x" * 61 not in out
+
+    def test_chinese_no_garbled(self):
+        var = _make_var_entry(
+            name="社会结构性压力",
+            description="宏观维度的持续高位风险",
+            canonical_mechanism="通常 cause 长期不确定性; 由历史路径 cause",
+        )
+        out = _render_lexicon_for_prompt([var])
+        assert "社会结构性压力" in out
+        assert "宏观" in out
+        assert "通常 cause" in out
+
+    def test_includes_disclaimer(self):
+        var = _make_var_entry()
+        out = _render_lexicon_for_prompt([var])
+        # disclaimer 含 "不强制" 或 "仅供参考" — let LLM 知道 lexicon 是 hint 不是 rule
+        assert "不强制" in out or "仅供参考" in out

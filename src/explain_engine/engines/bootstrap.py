@@ -27,26 +27,48 @@ async def bootstrap_phenomena(
     llm: LLMClient,
     min_count: int = 8,
     max_count: int = 15,
+    lexicon: list[dict] | None = None,
+    lexicon_top_k: int = 20,
 ) -> list[VariableNode]:
     """调 variable_extraction prompt 生 concrete phenomena。
 
     LLM 出 {name, description}，系统补 id / level / confidence / epistemic
     default。截断到 max_count 条。
 
+    Phase 10 Wave 3: optional lexicon prior — 非空时 Top-K render 拼到 user
+    message 末尾, 让 LLM 自主参考已知 abstractions (system msg 不动). lexicon
+    =None/[] 时行为不变 (backward compat).
+
+    Args:
+        lexicon: knowledge/variables.json 的 "variables" list (or None).
+        lexicon_top_k: 取 Top-K 进 prompt (默认 20, ~1.7k token).
+
     Raises:
         SchemaValidationError: LLM 未返回 parsed 内容
     """
+    prior_section = ""
+    if lexicon:
+        # 局部 import 避 circular (lexicon.py imports schema; bootstrap.py imports
+        # schema; safe, 但局部 import 让依赖更显性).
+        from explain_engine.engines.lexicon import (
+            _render_lexicon_for_prompt,
+            _select_top_k_vars,
+        )
+        top_k = _select_top_k_vars({"variables": lexicon}, k=lexicon_top_k)
+        prior_section = _render_lexicon_for_prompt(top_k)
+
     prompt = load_prompt("variable_extraction")
+    user_content = prompt["user_template"].format(
+        question=question,
+        min_count=min_count,
+        max_count=max_count,
+    )
+    if prior_section:
+        user_content = user_content + "\n\n" + prior_section
+
     messages = [
         Message(role="system", content=prompt["system"]),
-        Message(
-            role="user",
-            content=prompt["user_template"].format(
-                question=question,
-                min_count=min_count,
-                max_count=max_count,
-            ),
-        ),
+        Message(role="user", content=user_content),
     ]
     resp = await llm.chat(messages, schema=BootstrapOutput)
     if resp.parsed is None:
