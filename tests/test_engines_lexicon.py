@@ -265,7 +265,10 @@ class TestBuildCanonicalMechanism:
         ))
 
         mech = await _build_canonical_mechanism(node, session, mock_llm)
-        assert "风险规避" in mech or "压力" in mech
+        # Wave 2 review I-2: 严格断言 LLM 真被调 + LLM-only string 在返
+        # 值里, 区分 "LLM 被调用" vs "LLM 失败掉 fallback".
+        mock_llm.chat.assert_called_once()
+        assert "社会结构性压力" in mech  # 只有 LLM 输出含此 string, fallback 不会有
 
     @pytest.mark.asyncio
     async def test_no_llm_uses_edge_fallback(self):

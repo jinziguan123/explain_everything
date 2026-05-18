@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from explain_engine.llm.client import LLMClient, Message
+from explain_engine.llm.errors import LLMError
 from explain_engine.schema.nodes import VariableNode
 
 if TYPE_CHECKING:
@@ -220,8 +221,10 @@ async def _build_canonical_mechanism(
         # cap 1 line + 100 chars
         first_line = text.splitlines()[0][:100]
         return first_line
-    except Exception:
-        # 任何 LLM 故障 (LLMError / 网络 / 解析) 都 fallback, 避 flush 整个失败
+    except LLMError:
+        # Wave 2 review I-1: 窄化到 LLMError. 非 LLM 异常 (e.g. graph 数据
+        # 损坏导致 prompt 拼接 AttributeError) 应 propagate, 不该 silent
+        # 退化让 user 看不到真错误. LLMClient 内部网络/解析故障已 wrap LLMError.
         return _fallback()
 
 
