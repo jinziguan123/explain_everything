@@ -64,14 +64,15 @@ class TestDispatchSlash:
         assert "L0" in content
 
     @pytest.mark.asyncio
-    async def test_budget_shows_remaining(self):
+    async def test_budget_display_only_when_no_provider(self):
+        """Phase 11 Wave 2.5: input_provider None → display-only event."""
         from explain_engine.chat.session import ChatSession
         _make_done_session("s_51a55004")
-        chat = ChatSession("s_51a55004")
+        chat = ChatSession("s_51a55004")  # input_provider 默认 None
         events = await dispatch_slash(chat, "/budget")
-        content = events[0].content
-        assert "per-turn remaining:" in content
-        assert "per-session remaining:" in content
+        assert len(events) == 1
+        assert events[0].type == "slash_budget"
+        assert "display-only" in events[0].content
 
     @pytest.mark.asyncio
     async def test_compact_yields_compact_event(self):
@@ -428,3 +429,194 @@ class TestSlashResumeProvider:
         types = [e.type for e in events]
         assert "slash_resume" in types
         assert "slash_switch_session" not in types
+
+
+class TestSlashBudgetConfig:
+    """Phase 11 Wave 2.5: /budget interactive config (取代 cli flag).
+
+    Sequential prompt (per_turn → per_session). 通过 chat.input_provider
+    收输入, 用 chat.chat_state 直接读写 (兼容 EphemeralChatSession).
+    """
+
+    @pytest.mark.asyncio
+    async def test_display_only_when_no_provider(self):
+        """input_provider None → 仅 display, 不改 chat_state."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_bbb00001")
+        chat = ChatSession("s_bbb00001")
+        before = (
+            chat.chat_state.budget_per_turn_limit,
+            chat.chat_state.budget_per_session_limit,
+        )
+        events = await dispatch_slash(chat, "/budget")
+        assert events[0].type == "slash_budget"
+        assert "display-only" in events[0].content
+        # state 不变
+        assert (
+            chat.chat_state.budget_per_turn_limit,
+            chat.chat_state.budget_per_session_limit,
+        ) == before
+
+    @pytest.mark.asyncio
+    async def test_change_per_turn_only(self):
+        """Provider 返 '20', '' → per_turn=20, per_session 保持."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_bbb00002")
+        chat = ChatSession("s_bbb00002")
+        original_session_limit = chat.chat_state.budget_per_session_limit
+
+        calls = []
+        async def fake_provider(prompt):
+            calls.append(prompt)
+            return "20" if len(calls) == 1 else ""
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/budget")
+        assert events[0].type == "slash_budget"
+        assert "已更新" in events[0].content
+        assert chat.chat_state.budget_per_turn_limit == 20
+        assert chat.chat_state.budget_per_session_limit == original_session_limit
+        assert len(calls) == 2  # 两次 prompt
+
+    @pytest.mark.asyncio
+    async def test_change_both_limits(self):
+        """Provider 返 '20', '100' → 两个 limit 都改."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_bbb00003")
+        chat = ChatSession("s_bbb00003")
+
+        calls = []
+        async def fake_provider(prompt):
+            calls.append(prompt)
+            return "20" if len(calls) == 1 else "100"
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/budget")
+        assert events[0].type == "slash_budget"
+        assert "已更新" in events[0].content
+        assert chat.chat_state.budget_per_turn_limit == 20
+        assert chat.chat_state.budget_per_session_limit == 100
+
+    @pytest.mark.asyncio
+    async def test_empty_input_keeps_both(self):
+        """Provider 全返 '' → 两 limit 都保持 (但仍 yield slash_budget '已更新')."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_bbb00004")
+        chat = ChatSession("s_bbb00004")
+        before_turn = chat.chat_state.budget_per_turn_limit
+        before_session = chat.chat_state.budget_per_session_limit
+
+        async def fake_provider(prompt):
+            return ""
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/budget")
+        assert events[0].type == "slash_budget"
+        # limit 无变化
+        assert chat.chat_state.budget_per_turn_limit == before_turn
+        assert chat.chat_state.budget_per_session_limit == before_session
+
+    @pytest.mark.asyncio
+    async def test_cancel_with_q(self):
+        """Provider 第 1 prompt 返 'q' → 整个流程 abort."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_bbb00005")
+        chat = ChatSession("s_bbb00005")
+        before_turn = chat.chat_state.budget_per_turn_limit
+
+        calls = []
+        async def fake_provider(prompt):
+            calls.append(prompt)
+            return "q"
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/budget")
+        assert events[0].type == "slash_budget"
+        assert "取消" in events[0].content
+        # state 不变, provider 只调一次 (per-turn 取消 → 不问 per-session)
+        assert chat.chat_state.budget_per_turn_limit == before_turn
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_invalid_number_rejects(self):
+        """Provider 返 'abc' → slash_error, 不改 state."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_bbb00006")
+        chat = ChatSession("s_bbb00006")
+        before_turn = chat.chat_state.budget_per_turn_limit
+
+        async def fake_provider(prompt):
+            return "abc"
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/budget")
+        assert events[0].type == "slash_error"
+        assert "abc" in events[0].content
+        assert chat.chat_state.budget_per_turn_limit == before_turn
+
+    @pytest.mark.asyncio
+    async def test_negative_or_zero_rejects(self):
+        """Provider 返 '-1' / '0' → slash_error."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_bbb00007")
+        chat = ChatSession("s_bbb00007")
+        before_turn = chat.chat_state.budget_per_turn_limit
+
+        async def fake_provider(prompt):
+            return "-1"
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/budget")
+        assert events[0].type == "slash_error"
+        assert ">= 1" in events[0].content
+        assert chat.chat_state.budget_per_turn_limit == before_turn
+
+    @pytest.mark.asyncio
+    async def test_remaining_capped_to_new_limit(self):
+        """new_limit < 当前 remaining → remaining 被 cap 到 new_limit."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_bbb00008")
+        chat = ChatSession("s_bbb00008")
+        # 模拟 chat 已跑过几轮, remaining 还是 default 10/50
+        chat.chat_state.budget_per_turn_remaining = 10  # default
+        chat.chat_state.budget_per_session_remaining = 50
+
+        calls = []
+        async def fake_provider(prompt):
+            calls.append(prompt)
+            return "3" if len(calls) == 1 else "20"
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/budget")
+        assert events[0].type == "slash_budget"
+        assert "已更新" in events[0].content
+        # remaining 被 cap (从 10 → 3, 从 50 → 20)
+        assert chat.chat_state.budget_per_turn_remaining == 3
+        assert chat.chat_state.budget_per_session_remaining == 20
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_session_supported(self):
+        """Wave 1 review I-1 fold: EphemeralChatSession 也支持 /budget.
+
+        旧 _handle_budget 用 chat.budget (BudgetCounter property), 在 ephemeral
+        时 AttributeError. 新实现读 chat.chat_state 直接 work.
+        """
+        from explain_engine.chat.ephemeral import EphemeralChatSession
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        eph = EphemeralChatSession(storage=StorageV2())
+
+        calls = []
+        async def fake_provider(prompt):
+            calls.append(prompt)
+            return "30" if len(calls) == 1 else "200"
+        eph.input_provider = fake_provider
+
+        # dispatch_slash 签名是 ChatSession 但 duck-typed (用 .chat_state +
+        # .input_provider); ephemeral 满足契约.
+        events = await dispatch_slash(eph, "/budget")
+        types = [e.type for e in events]
+        assert "slash_budget" in types
+        # ephemeral.chat_state 被改 (promote 时拷给 real chat)
+        assert eph.chat_state.budget_per_turn_limit == 30
+        assert eph.chat_state.budget_per_session_limit == 200

@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING
 import typer
 
 if TYPE_CHECKING:
-    from explain_engine.chat.session import ChatSession
     from explain_engine.llm.client import LLMClient
 from rich.console import Console
 from rich.table import Table
@@ -84,14 +83,6 @@ def new(
         False, "--no-chat",
         help="创建 session 后不进 chat REPL, 仅 print sid 退出 (脚本/CI 用)",
     ),
-    tool_budget_per_turn: int = typer.Option(
-        10, "--tool-budget-per-turn",
-        help="Max tool calls per chat turn (默认进 chat 时生效)",
-    ),
-    tool_budget_per_session: int = typer.Option(
-        50, "--tool-budget-per-session",
-        help="Max tool calls per chat session (默认进 chat 时生效)",
-    ),
     lexicon_top_k: int = typer.Option(
         20, "--lexicon-top-k",
         help="bootstrap 拉 top-K lexicon var 作 prior (默认 20, 0 跳过)",
@@ -100,18 +91,16 @@ def new(
     """启动新 session: Bootstrap + HITL + (默认) 直接进 chat REPL.
 
     `--no-chat` 仅 print sid 退出 (脚本/CI 场景).
+
+    Phase 11 Wave 2.5: 删除 tool budget cli flag — 改通过 chat 内 /budget
+    slash interactive 配置.
     """
-    asyncio.run(_run_new(
-        question, no_chat, tool_budget_per_turn,
-        tool_budget_per_session, lexicon_top_k,
-    ))
+    asyncio.run(_run_new(question, no_chat, lexicon_top_k))
 
 
 async def _run_new(
     question: str,
     no_chat: bool = False,
-    tool_budget_per_turn: int = 10,
-    tool_budget_per_session: int = 50,
     lexicon_top_k: int = 20,
 ) -> None:
     settings = Settings()
@@ -173,8 +162,6 @@ async def _run_new(
     await _run_chat_repl_async(
         initial_sid=meta.session_id,
         llm=llm,
-        tool_budget_per_turn=tool_budget_per_turn,
-        tool_budget_per_session=tool_budget_per_session,
     )
 
 
@@ -982,20 +969,15 @@ def chat(
         help="(Phase 9 Wave G+ TODO: wire input_validation into chat startup)",
         hidden=True,  # 隐藏直到 Wave G+ 真接通 input_validation 到 chat 路径
     ),
-    tool_budget_per_turn: int = typer.Option(
-        10, "--tool-budget-per-turn",
-        help="Max tool calls per user turn (Phase 9 Q5γ)",
-    ),
-    tool_budget_per_session: int = typer.Option(
-        50, "--tool-budget-per-session",
-        help="Max tool calls per session lifetime",
-    ),
 ) -> None:
     """Phase 9 Wave F.2: 进 conversational chat REPL.
 
     交互模式 — stdin 读 user input, dispatch 到 ChatSession.handle_user_input.
     Slash command 本地 intercept, 其余走 LLM ↔ tools while-loop.
     /new + /resume (2026-05-18) 可触发 in-process session 热切.
+
+    Phase 11 Wave 2.5: 删除 tool budget cli flag — 改通过 chat 内 /budget slash
+    interactive 配置.
 
     优雅退出:
     - /quit            → slash_quit event 触发 break
@@ -1006,35 +988,12 @@ def chat(
     asyncio.run(_run_chat_repl_async(
         initial_sid=session_id,
         llm=llm,
-        tool_budget_per_turn=tool_budget_per_turn,
-        tool_budget_per_session=tool_budget_per_session,
     ))
-
-
-def _apply_budget_flags(
-    chat_session: "ChatSession",
-    tool_budget_per_turn: int,
-    tool_budget_per_session: int,
-) -> None:
-    """启动 / 切换 session 后, 应用 cli flag 到 chat_state.
-
-    切 session 后 budget flag 继承 (会话级偏好, 不是 per-session config).
-    """
-    chat_session.chat_state.budget_per_turn_limit = tool_budget_per_turn
-    chat_session.chat_state.budget_per_turn_remaining = tool_budget_per_turn
-    chat_session.chat_state.budget_per_session_limit = tool_budget_per_session
-    if (
-        chat_session.chat_state.budget_per_session_remaining
-        > tool_budget_per_session
-    ):
-        chat_session.chat_state.budget_per_session_remaining = tool_budget_per_session
 
 
 async def _run_chat_repl_async(
     initial_sid: str,
     llm: "LLMClient | None",
-    tool_budget_per_turn: int,
-    tool_budget_per_session: int,
 ) -> None:
     """REPL 主循环 (Wave 2 抽出 + 2026-05-18 prompt_toolkit 升级).
 
@@ -1046,6 +1005,9 @@ async def _run_chat_repl_async(
 
     切换契约: handler yield ChatEvent(type='slash_switch_session', ...) 后,
     本函数 single turn iter 结束后做 aclose+reload (Wave 2 不变).
+
+    Phase 11 Wave 2.5: budget 配置改 /budget slash, 不再由 cli flag 注入
+    chat_state — limit 由 ChatStateDict default (10/50) 起步.
     """
     from explain_engine.chat.repl_input import (
         BufferedLogHandler,
@@ -1069,10 +1031,6 @@ async def _run_chat_repl_async(
         except FileNotFoundError as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
-
-        _apply_budget_flags(
-            chat_session, tool_budget_per_turn, tool_budget_per_session
-        )
 
         has_tools_api = (
             hasattr(llm, "chat_with_tools") if llm is not None else False
@@ -1146,9 +1104,9 @@ async def _run_chat_repl_async(
                             f"{recover_exc}. 退出.[/red]"
                         )
                         return
-                _apply_budget_flags(
-                    chat_session, tool_budget_per_turn, tool_budget_per_session
-                )
+                # Phase 11 Wave 2.5: 不再注入 cli flag 到 chat_state — budget
+                # 是 per-session 配置 (新 session 用自己 chat_state.json 的值,
+                # 或 /budget 重新调).
                 # F-1: 切 session 后新 ChatSession 实例的 input_provider 默认 None,
                 # 需重新挂 lambda 让下次 /resume picker 仍走 prompt_toolkit.
                 chat_session.input_provider = lambda prompt: read_input(

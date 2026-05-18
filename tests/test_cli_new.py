@@ -171,14 +171,8 @@ class TestCliNewChatIntegration:
 
         chat_call_args: list[dict] = []
 
-        async def fake_chat_repl(
-            initial_sid, llm, tool_budget_per_turn, tool_budget_per_session
-        ):
-            chat_call_args.append({
-                "sid": initial_sid,
-                "budget_turn": tool_budget_per_turn,
-                "budget_session": tool_budget_per_session,
-            })
+        async def fake_chat_repl(initial_sid, llm):
+            chat_call_args.append({"sid": initial_sid})
 
         monkeypatch.setattr(
             "explain_engine.cli._run_chat_repl_async", fake_chat_repl
@@ -193,9 +187,6 @@ class TestCliNewChatIntegration:
         # 进了 chat, 用刚 create 的 sid
         assert len(chat_call_args) == 1
         assert chat_call_args[0]["sid"] == metas[0].session_id
-        # 默认 budget
-        assert chat_call_args[0]["budget_turn"] == 10
-        assert chat_call_args[0]["budget_session"] == 50
 
     def test_no_chat_flag_skips_chat(
         self, runner, setup_env, mock_llm_chat, mock_review_phenomena, monkeypatch
@@ -219,38 +210,6 @@ class TestCliNewChatIntegration:
         assert result.exit_code == 0
         assert chat_called == []  # 不进 chat
         assert len(SessionStore().list()) == 1
-
-    def test_custom_budget_flags_propagate(
-        self, runner, setup_env, mock_llm_chat, mock_review_phenomena, monkeypatch
-    ):
-        """--tool-budget-per-turn / --tool-budget-per-session 传给 chat."""
-        del setup_env
-        mock_llm_chat([{"name": "x", "description": "y"}])
-        mock_review_phenomena("all")
-
-        chat_call_args: list[dict] = []
-
-        async def fake_chat_repl(
-            initial_sid, llm, tool_budget_per_turn, tool_budget_per_session
-        ):
-            chat_call_args.append({
-                "budget_turn": tool_budget_per_turn,
-                "budget_session": tool_budget_per_session,
-            })
-
-        monkeypatch.setattr(
-            "explain_engine.cli._run_chat_repl_async", fake_chat_repl
-        )
-
-        result = runner.invoke(app, [
-            "new", "why custom budget",
-            "--tool-budget-per-turn", "20",
-            "--tool-budget-per-session", "100",
-        ])
-
-        assert result.exit_code == 0
-        assert chat_call_args[0]["budget_turn"] == 20
-        assert chat_call_args[0]["budget_session"] == 100
 
 
 class TestCliNewLexiconIntegration:

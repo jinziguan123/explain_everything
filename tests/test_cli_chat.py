@@ -37,9 +37,10 @@ class TestChatCommand:
         runner = CliRunner()
         result = runner.invoke(app, ["chat", "--help"])
         assert result.exit_code == 0
-        # --no-input-check is hidden until Wave G+ wires it; verify only visible flags
-        assert "--tool-budget-per-turn" in result.output
-        assert "--tool-budget-per-session" in result.output
+        # Phase 11 Wave 2.5: --tool-budget-per-* flag 删除, 改 /budget slash
+        # interactive config. verify they're gone (回归 guard).
+        assert "--tool-budget-per-turn" not in result.output
+        assert "--tool-budget-per-session" not in result.output
         # 验证 hidden 真生效 (典型回归: 有人移除 hidden=True)
         assert "--no-input-check" not in result.output
 
@@ -110,8 +111,6 @@ class TestReplSwitchSession:
         await _run_chat_repl_async(
             initial_sid="s_22222001",
             llm=None,
-            tool_budget_per_turn=10,
-            tool_budget_per_session=50,
         )
 
         # 第 1 input 时 chat 仍是 src, 第 2 input 时已切到 dst
@@ -169,8 +168,6 @@ class TestReplSwitchSession:
         await _run_chat_repl_async(
             initial_sid="s_aaaaaa01",
             llm=None,
-            tool_budget_per_turn=10,
-            tool_budget_per_session=50,
         )
 
         # 第 1 input: A. 第 2 input: B (切 A→B 成功后). 第 3 input: 应该是 B

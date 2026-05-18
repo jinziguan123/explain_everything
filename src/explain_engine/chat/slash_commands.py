@@ -125,16 +125,114 @@ async def _handle_show(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 
 
 async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
-    """Display per-turn / per-session budget remaining + turn_count."""
+    """Phase 11 Wave 2.5: interactive config (取代 cli `--tool-budget-*` flag).
+
+    Display 当前 per-turn / per-session limit + remaining, 然后 sequential
+    prompt 收 2 个新 limit. 用 chat.chat_state 直接读写 (而非 chat.budget
+    BudgetCounter property), 让 EphemeralChatSession 也支持 (Wave 1 review
+    I-1 fold; 不变量 #5 设计 §3.2).
+
+    UX:
+    - chat.input_provider is None: display-only 返 slash_budget info (test /
+      非 REPL 路径).
+    - 输 'q' / 'quit': 取消, 不改.
+    - 空输入: 保持原 limit.
+    - 非数字 / < 1: 返 slash_error, 不改.
+    - remaining > new_limit: cap 到 new_limit (避免 inconsistent state).
+    """
+    from rich.console import Console
+
     from explain_engine.chat.session import ChatEvent
 
-    b = chat.budget
-    content = (
-        f"per-turn remaining: {b.per_turn_remaining} / {b.per_turn_limit}\n"
-        f"per-session remaining: {b.per_session_remaining} / {b.per_session_limit}\n"
-        f"turn_count: {chat.chat_state.turn_count}"
+    cs = chat.chat_state
+
+    console = Console()
+    console.print(
+        f"\n[bold]Current budget[/bold]\n"
+        f"  per-turn limit:    {cs.budget_per_turn_limit}  "
+        f"(剩余 {cs.budget_per_turn_remaining})\n"
+        f"  per-session limit: {cs.budget_per_session_limit}  "
+        f"(剩余 {cs.budget_per_session_remaining})\n"
     )
-    return [ChatEvent(type="slash_budget", content=content)]
+
+    if chat.input_provider is None:
+        return [ChatEvent(
+            type="slash_budget",
+            content="(no input_provider; display-only — test/non-REPL 路径)",
+        )]
+
+    # 收 per-turn
+    try:
+        new_turn_str = await chat.input_provider(
+            f"新 per-turn limit (回车保持 {cs.budget_per_turn_limit}, q 取消): "
+        )
+    except (EOFError, KeyboardInterrupt):
+        return [ChatEvent(type="slash_budget", content="已取消.")]
+
+    new_turn_str = new_turn_str.strip()
+    if new_turn_str.lower() in ("q", "quit"):
+        return [ChatEvent(type="slash_budget", content="已取消.")]
+
+    new_turn = cs.budget_per_turn_limit
+    if new_turn_str:
+        try:
+            new_turn = int(new_turn_str)
+            if new_turn < 1:
+                return [ChatEvent(
+                    type="slash_error",
+                    content="per-turn limit 需 >= 1; 已取消.",
+                )]
+        except ValueError:
+            return [ChatEvent(
+                type="slash_error",
+                content=f"输入非数字 {new_turn_str!r}; 已取消.",
+            )]
+
+    # 收 per-session
+    try:
+        new_session_str = await chat.input_provider(
+            f"新 per-session limit (回车保持 {cs.budget_per_session_limit}, q 取消): "
+        )
+    except (EOFError, KeyboardInterrupt):
+        return [ChatEvent(type="slash_budget", content="已取消.")]
+
+    new_session_str = new_session_str.strip()
+    if new_session_str.lower() in ("q", "quit"):
+        return [ChatEvent(type="slash_budget", content="已取消.")]
+
+    new_session = cs.budget_per_session_limit
+    if new_session_str:
+        try:
+            new_session = int(new_session_str)
+            if new_session < 1:
+                return [ChatEvent(
+                    type="slash_error",
+                    content="per-session limit 需 >= 1; 已取消.",
+                )]
+        except ValueError:
+            return [ChatEvent(
+                type="slash_error",
+                content=f"输入非数字 {new_session_str!r}; 已取消.",
+            )]
+
+    # Apply + cap remaining
+    old_turn = cs.budget_per_turn_limit
+    old_session = cs.budget_per_session_limit
+    cs.budget_per_turn_limit = new_turn
+    cs.budget_per_session_limit = new_session
+    cs.budget_per_turn_remaining = min(cs.budget_per_turn_remaining, new_turn)
+    cs.budget_per_session_remaining = min(
+        cs.budget_per_session_remaining, new_session
+    )
+
+    return [ChatEvent(
+        type="slash_budget",
+        content=(
+            f"[已更新]\n"
+            f"  per-turn: {old_turn} → {new_turn}\n"
+            f"  per-session: {old_session} → {new_session}"
+        ),
+    )]
 
 
 async def _handle_compact(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
@@ -348,7 +446,7 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("quit", "Exit chat session (saves first).", _handle_quit),
     SlashCommand("help", "List slash commands and available tools.", _handle_help),
     SlashCommand("show", "Show graph snapshot + multi-signal.", _handle_show),
-    SlashCommand("budget", "Show per-turn / per-session budget remaining.", _handle_budget),
+    SlashCommand("budget", "Show budget + interactive config per-turn / per-session limit.", _handle_budget),
     SlashCommand("compact", "Force trigger sessionMemory compaction.", _handle_compact),
     SlashCommand("save", "Explicit flush of all sidecar files.", _handle_save),
     SlashCommand("new", "新建 session (bootstrap + HITL) 后自动切.", _handle_new),
