@@ -20,39 +20,6 @@ class TestBufferedLogHandler:
         finally:
             logger.removeHandler(h)
 
-    def test_listener_notified_on_emit(self):
-        """每次 emit 调 listener (用于 prompt_toolkit Buffer refresh)."""
-        h = BufferedLogHandler(capacity=10)
-        calls: list[int] = []
-        h.add_listener(lambda: calls.append(1))
-
-        logger = logging.getLogger("test_buffered_listener")
-        logger.addHandler(h)
-        logger.setLevel(logging.INFO)
-        try:
-            logger.info("first")
-            logger.info("second")
-            assert sum(calls) == 2
-        finally:
-            logger.removeHandler(h)
-
-    def test_listener_exception_does_not_break_emit(self):
-        """Listener 抛异常不影响 emit (防 listener bug 死循环)."""
-        h = BufferedLogHandler(capacity=10)
-
-        def bad_listener():
-            raise RuntimeError("listener bug")
-
-        h.add_listener(bad_listener)
-        logger = logging.getLogger("test_buffered_listener_err")
-        logger.addHandler(h)
-        logger.setLevel(logging.INFO)
-        try:
-            logger.info("still works")
-            assert "still works" in h.buffer
-        finally:
-            logger.removeHandler(h)
-
     def test_get_text_joins_buffer(self):
         """get_text() 返 buffer 内容用 \\n 拼接."""
         h = BufferedLogHandler(capacity=10)

@@ -966,7 +966,7 @@ async def _run_chat_repl_async(
     """
     from explain_engine.chat.repl_input import (
         BufferedLogHandler,
-        _make_session,
+        make_session,
         read_input,
     )
     from explain_engine.chat.session import ChatSession, ChatSessionLoadError
@@ -1005,7 +1005,7 @@ async def _run_chat_repl_async(
             )
 
         # ── Build prompt_toolkit session (reuse across turns for history) ──
-        pt_session = _make_session(log_handler)
+        pt_session = make_session(log_handler)
 
         # F-1 (2026-05-18 Wave 5 review follow-up): 暴露 prompt_toolkit input
         # 给 slash handler 用 (e.g. /resume picker 收选号). 让 sub-prompt 也走

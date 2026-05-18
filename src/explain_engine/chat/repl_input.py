@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from collections.abc import Callable
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
@@ -33,7 +32,6 @@ class BufferedLogHandler(logging.Handler):
     prompt_toolkit prompt). ctrl+o popup 时 dump buffer 给用户看.
 
     capacity: 200 line default. 老 line 自动 evict (deque maxlen).
-    listeners: 每次 emit 通知, 用于 prompt_toolkit Buffer refresh.
 
     Thread-safety: chat REPL 单 asyncio loop, 不需 lock. logger.Handler 基类
     内 lock 已覆盖 emit 路径 (Python logging 默认).
@@ -42,22 +40,12 @@ class BufferedLogHandler(logging.Handler):
     def __init__(self, capacity: int = 200) -> None:
         super().__init__()
         self.buffer: deque[str] = deque(maxlen=capacity)
-        self._listeners: list[Callable[[], None]] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            msg = self.format(record)
-            self.buffer.append(msg)
-            for cb in self._listeners:
-                try:
-                    cb()
-                except Exception:
-                    pass  # listener bug 不该撕裂 logging chain
+            self.buffer.append(self.format(record))
         except Exception:
             self.handleError(record)
-
-    def add_listener(self, cb: Callable[[], None]) -> None:
-        self._listeners.append(cb)
 
     def get_text(self) -> str:
         return "\n".join(self.buffer)
@@ -156,7 +144,7 @@ def _make_key_bindings(log_handler: BufferedLogHandler) -> KeyBindings:
     return kb
 
 
-def _make_session(log_handler: BufferedLogHandler) -> PromptSession:
+def make_session(log_handler: BufferedLogHandler) -> PromptSession:
     """Build PromptSession with completer + key bindings + bottom toolbar.
 
     一个 session 复用整 chat REPL 生命周期 (history 跨 turn 跨 slash 共享 in-memory).
@@ -183,7 +171,7 @@ async def read_input(
     _run_chat_repl_async) 自己 except, 这里不 catch.
 
     Args:
-        session: _make_session() 产的 PromptSession (caller hold reference 复用)
+        session: make_session() 产的 PromptSession (caller hold reference 复用)
         prompt_text: prompt 前缀, default "\\n> " (与现有 cli 行为对齐)
     """
     with patch_stdout():
