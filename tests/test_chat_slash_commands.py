@@ -13,9 +13,11 @@ from tests.test_chat_session import _make_done_session
 
 
 class TestSlashRegistry:
-    def test_has_6_default_commands(self):
+    def test_has_required_default_commands(self):
         names = {c.name for c in DEFAULT_COMMANDS}
-        assert names == {"quit", "help", "show", "budget", "compact", "save"}
+        # 至少包含这些 (Wave 4 会再加 resume)
+        required = {"quit", "help", "show", "budget", "compact", "save", "new"}
+        assert required.issubset(names)
 
     def test_command_by_name_finds_each(self):
         for name in ["quit", "help", "show", "budget", "compact", "save"]:
@@ -119,3 +121,112 @@ class TestSessionIntegration:
         assert any(ev.type == "slash_help" for ev in events)
         # Turn count NOT bumped for slash commands
         assert chat.chat_state.turn_count == 0
+
+
+class TestSlashNew:
+    @pytest.mark.asyncio
+    async def test_empty_args_rejects(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_5e000001")
+        chat = ChatSession("s_5e000001")
+        events = await dispatch_slash(chat, "/new")
+        assert len(events) == 1
+        assert events[0].type == "slash_error"
+        assert "Usage" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_no_llm_rejects(self):
+        """Chat 没绑 llm 时 /new 明确报错 (而非裸 AttributeError)."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_5e000002")
+        chat = ChatSession("s_5e000002")  # llm 默认 None
+        events = await dispatch_slash(chat, "/new 为什么 X")
+        assert events[0].type == "slash_error"
+        assert "llm" in events[0].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_success_creates_session_and_yields_switch(
+        self, monkeypatch
+    ):
+        """Mock bootstrap + review → 验创建 session + yield slash_switch_session."""
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.schema.nodes import VariableNode
+
+        _make_done_session("s_5e000003")
+
+        # Mock bootstrap_phenomena: 返 2 个固定 phenomena
+        async def fake_bootstrap(question, llm, min_count=8, max_count=15):
+            assert question == "为什么 中文 测试"
+            return [
+                VariableNode(
+                    id="p_001", name="A", description="da",
+                    abstraction_level=0, confidence=0.7, epistemic="observation",
+                ),
+                VariableNode(
+                    id="p_002", name="B", description="db",
+                    abstraction_level=0, confidence=0.7, epistemic="observation",
+                ),
+            ]
+        monkeypatch.setattr(
+            "explain_engine.chat.slash_commands.bootstrap_phenomena",
+            fake_bootstrap,
+        )
+
+        # Mock review_phenomena: pass-through (keep all)
+        def fake_review(phenomena, console=None):
+            return list(phenomena)
+        monkeypatch.setattr(
+            "explain_engine.chat.slash_commands.review_phenomena",
+            fake_review,
+        )
+
+        # ChatSession 必须带 llm 才能 /new — sentinel 即可 (fake_bootstrap 不用真 llm)
+        chat = ChatSession("s_5e000003", llm=object())  # type: ignore[arg-type]
+
+        events = await dispatch_slash(chat, "/new 为什么 中文 测试")
+
+        # 应 yield slash_new (info) + slash_switch_session (signal)
+        types = [e.type for e in events]
+        assert "slash_new" in types
+        assert "slash_switch_session" in types
+
+        switch_ev = next(e for e in events if e.type == "slash_switch_session")
+        new_sid = switch_ev.content["sid"]
+        assert new_sid.startswith("s_")
+        assert new_sid != "s_5e000003"
+
+        # 真存盘了
+        from explain_engine.persistence.session import SessionStore
+        store = SessionStore()
+        loaded = store.load(new_sid)
+        assert loaded.meta.question == "为什么 中文 测试"
+        assert len(loaded.state.graph.nodes) == 2  # 2 phenomena
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_error_returns_error_no_switch(self, monkeypatch):
+        """Mock bootstrap raise → slash_error, 不 yield switch."""
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.llm.errors import LLMError
+
+        _make_done_session("s_5e000004")
+
+        async def fake_bootstrap_fails(question, llm, min_count=8, max_count=15):
+            raise LLMError("mock LLM down")
+        monkeypatch.setattr(
+            "explain_engine.chat.slash_commands.bootstrap_phenomena",
+            fake_bootstrap_fails,
+        )
+
+        chat = ChatSession("s_5e000004", llm=object())  # type: ignore[arg-type]
+        events = await dispatch_slash(chat, "/new question")
+
+        types = [e.type for e in events]
+        assert "slash_error" in types
+        assert "slash_switch_session" not in types
+        err = next(e for e in events if e.type == "slash_error")
+        assert "LLMError" in err.content or "mock LLM down" in err.content
+
+    @pytest.mark.asyncio
+    async def test_registered_in_default_commands(self):
+        names = {c.name for c in DEFAULT_COMMANDS}
+        assert "new" in names
