@@ -72,12 +72,34 @@ def _render_tool_catalog(ctx: ToolContext) -> str:
     return "\n".join(lines)
 
 
+def _render_id_list(ids: list[str], max_inline: int = 8) -> str:
+    """Render a list of node IDs. If <= max_inline, show all; else show first 3 + last 1 + count."""
+    if not ids:
+        return "[]"
+    if len(ids) <= max_inline:
+        return "[" + ", ".join(ids) + "]"
+    # Long list — show prefix + suffix + ellipsis
+    return f"[{ids[0]}, {ids[1]}, {ids[2]}, ..., {ids[-1]} ({len(ids)} total)]"
+
+
 def _render_graph_summary(state: CognitiveState) -> str:
-    """Compact graph stats: counts by abstraction_level + lifecycle stats."""
+    """Compact graph stats: counts + actual node ID lists + lifecycle stats.
+
+    Bug 1 fix: previously only counts ("12 L0, 4 L1") were exposed, forcing LLM to
+    guess ID format (it would invent 'L0_1', 'L0_2' etc instead of real 'p_001').
+    Now includes truncated ID list so LLM can call read_node / expand etc with
+    correct IDs without guessing.
+    """
     g = state.graph
-    n_l0 = sum(1 for n in g.nodes.values() if n.abstraction_level == 0)
-    n_l1 = sum(1 for n in g.nodes.values() if n.abstraction_level == 1)
-    n_l2 = sum(1 for n in g.nodes.values() if n.abstraction_level == 2)
+    l0_ids = sorted(
+        nid for nid, n in g.nodes.items() if n.abstraction_level == 0
+    )
+    l1_ids = sorted(
+        nid for nid, n in g.nodes.items() if n.abstraction_level == 1
+    )
+    l2_ids = sorted(
+        nid for nid, n in g.nodes.items() if n.abstraction_level == 2
+    )
     n_decayed = sum(
         1 for n in g.nodes.values()
         if getattr(n, "lifecycle_state", "active") == "decayed"
@@ -87,8 +109,12 @@ def _render_graph_summary(state: CognitiveState) -> str:
         if getattr(n, "lifecycle_state", "active") == "stale"
     )
     return (
-        f"Graph: {len(g.nodes)} nodes ({n_l0} L0 / {n_l1} L1 / {n_l2} L2), "
-        f"lifecycle: {n_decayed} decayed, {n_stale} stale"
+        f"Graph: {len(g.nodes)} nodes\n"
+        f"  L0 ({len(l0_ids)}): {_render_id_list(l0_ids)}\n"
+        f"  L1 ({len(l1_ids)}): {_render_id_list(l1_ids)}\n"
+        f"  L2 ({len(l2_ids)}): {_render_id_list(l2_ids)}\n"
+        f"  lifecycle: {n_decayed} decayed, {n_stale} stale\n"
+        f"  ID format: L0=p_NNN, L1=c_NNN, L2=d_NNN (zero-padded 3 digits)"
     )
 
 
