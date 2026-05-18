@@ -1,4 +1,4 @@
-"""Phase 9 Wave F.1 + 2026-05-18: 7 default slash commands (含 /new).
+"""Phase 9 Wave F.1 + 2026-05-18: 8 default slash commands (含 /new + /resume).
 
 设计参考 Claude Code 同款 slash 模式 — 本地 intercept 不走 LLM,
 廉价 inspection + exit + force compact 等管理命令; slash 不计入
@@ -8,10 +8,11 @@ transcript / turn_count (因为非真正 user→assistant 对话).
 - name: str (e.g. "quit")
 - description: str (shown in /help)
 - handler: async (chat, args: list[str]) -> list[ChatEvent]
-  返 list[ChatEvent] (multiple events 可能, /new 同时 yield slash_new + slash_switch_session).
+  返 list[ChatEvent] (multiple events 可能, /new + /resume 同时 yield
+  slash_{new,resume} + slash_switch_session).
 
 设计参考 docs/plans/2026-05-17-conversational-cognitive-engine-plan.md Wave F.1
-+ docs/plans/2026-05-18-chat-new-resume-slash-plan.md Wave 3.
++ docs/plans/2026-05-18-chat-new-resume-slash-plan.md Wave 3 + Wave 4.
 """
 
 from __future__ import annotations
@@ -165,8 +166,9 @@ async def _handle_new(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 
     完整复用 cli `new` 命令路径 (bootstrap_phenomena → review_phenomena →
     SessionStore.save). 之后 yield 两个 event:
-    - slash_new: info text 给用户
+    - slash_new: info text 给用户 (str content)
     - slash_switch_session: signal REPL 切到新 sid (REPL 单 turn iter 结束后做)
+      content 契约: {"sid": str} — 见 ChatEvent docstring.
 
     失败时只 yield slash_error, 不 yield switch → REPL 留原 session.
     """
@@ -192,8 +194,7 @@ async def _handle_new(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     if chat.llm is None:
         return [ChatEvent(
             type="slash_error",
-            content="/new 需要 LLM client; 当前 ChatSession 启动时未传 llm "
-                    "(test path or backward-compat caller).",
+            content="/new 需要 LLM client; 当前 chat session 启动时未绑定 llm。",
         )]
 
     # Bootstrap (调 LLM). monkeypatch 友好: 函数体里 *使用* 模块顶 import 的
@@ -241,7 +242,117 @@ async def _handle_new(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     ]
 
 
-# Registry — 7 default slash commands.
+async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """/resume — numbered picker 列当前 project 所有 session, 用户选号后切.
+
+    无参数. 列 + 弹 input 收 # → yield slash_switch_session.
+    输无效 / out-of-range → slash_error 取消 (无 retry, 保持简单).
+    输 q / empty → slash_resume 取消.
+    选当前 sid → slash_resume info 'already there', 不 yield switch.
+
+    Event 契约:
+    - slash_resume: info content (str)
+    - slash_switch_session: content={"sid": str} — REPL 据此切
+      (见 ChatEvent docstring 完整 contract).
+    """
+    import asyncio
+    from datetime import datetime
+
+    from rich.console import Console
+    from rich.table import Table
+
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.persistence.session import SessionStore
+
+    if args:
+        return [ChatEvent(
+            type="slash_error",
+            content="Usage: /resume  (无参数, 弹列表后选号)",
+        )]
+
+    sids = chat.storage.list_sessions()
+    if not sids:
+        return [ChatEvent(
+            type="slash_resume",
+            content="当前 project 无 session.",
+        )]
+
+    # 加载 metadata (轻 — TODO future: SessionStore.load_meta_only 优化 100+ session)
+    sstore = SessionStore()
+    metas = []
+    for sid in sids:
+        try:
+            metas.append(sstore.load(sid).meta)
+        except Exception:
+            continue  # 坏 session 跳过, 不让 picker 整体 crash
+
+    if not metas:
+        return [ChatEvent(
+            type="slash_resume",
+            content="当前 project 无可读 session (全部加载失败).",
+        )]
+
+    metas.sort(key=lambda m: m.created_at, reverse=True)
+
+    # 渲染表 — 用临时 Console (跟 /new 同款, 避免 from cli import console 反向依赖)
+    console = Console()
+    table = Table(title=f"Sessions ({len(metas)})")
+    table.add_column("#", style="bold")
+    table.add_column("ID", style="cyan")
+    table.add_column("问题", style="bold")
+    table.add_column("Stage")
+    table.add_column("Created")
+    for i, m in enumerate(metas, start=1):
+        is_current = "* " if m.session_id == chat.sid else "  "
+        ts = datetime.fromtimestamp(m.created_at).strftime("%Y-%m-%d %H:%M")
+        table.add_row(f"{is_current}{i}", m.session_id, m.question, m.stage, ts)
+    console.print(table)
+
+    # 收 user input
+    try:
+        choice = await asyncio.to_thread(
+            input, "选 # (q 取消): "
+        )
+    except (EOFError, KeyboardInterrupt):
+        return [ChatEvent(type="slash_resume", content="已取消.")]
+
+    choice = choice.strip().lower()
+    if choice in ("", "q", "quit"):
+        return [ChatEvent(type="slash_resume", content="已取消.")]
+
+    if not choice.isdigit():
+        return [ChatEvent(
+            type="slash_error",
+            content=f"输入需为数字 1-{len(metas)}; 已取消.",
+        )]
+
+    idx = int(choice)
+    if not (1 <= idx <= len(metas)):
+        return [ChatEvent(
+            type="slash_error",
+            content=f"# {idx} 超范围 (1-{len(metas)}); 已取消.",
+        )]
+
+    target_sid = metas[idx - 1].session_id
+    if target_sid == chat.sid:
+        return [ChatEvent(
+            type="slash_resume",
+            content=f"已在 session {target_sid}, 不切换.",
+        )]
+
+    return [
+        ChatEvent(
+            type="slash_resume",
+            content=f"切换到 session {target_sid}...",
+        ),
+        ChatEvent(
+            type="slash_switch_session",
+            content={"sid": target_sid},
+        ),
+    ]
+
+
+# Registry — 8 default slash commands.
 # 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作"分组.
 DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("quit", "Exit chat session (saves first).", _handle_quit),
@@ -251,11 +362,12 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("compact", "Force trigger sessionMemory compaction.", _handle_compact),
     SlashCommand("save", "Explicit flush of all sidecar files.", _handle_save),
     SlashCommand("new", "新建 session (bootstrap + HITL) 后自动切.", _handle_new),
+    SlashCommand("resume", "列历史 session, 选号后切.", _handle_resume),
 )
 
 
 def _command_by_name(name: str) -> SlashCommand | None:
-    """Linear lookup OK — 7 commands, no hash table needed."""
+    """Linear lookup OK — 8 commands, no hash table needed."""
     for cmd in DEFAULT_COMMANDS:
         if cmd.name == name:
             return cmd

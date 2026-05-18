@@ -85,10 +85,21 @@ class ChatStateDict:
 
 @dataclass
 class ChatEvent:
-    """Base event yielded from query_loop.
+    """Base event yielded from query_loop or slash handlers.
 
-    Task C.2 将派生子类 (AssistantText / ToolUse / ToolResult / TurnComplete).
-    C.1 仅用 type 字段做 stub event 区分.
+    Phase 9 Wave C.2 派生子类 (AssistantText / ToolUse / ToolResult / TurnComplete).
+    C.1 + Wave F.1 + 2026-05-18 slash handler 用 type 字段做 stub event 区分.
+
+    `content` payload contract per event type:
+    - assistant_text / slash_help / slash_show / slash_save / slash_compact /
+      slash_new / slash_resume: str (user-visible info)
+    - slash_quit: str (farewell text)
+    - slash_error / slash_unknown: str (error text)
+    - tool_use: dict (Wave C.2 ToolUseEvent 子类替代)
+    - tool_result: dict (Wave C.2 ToolResultEvent 子类替代)
+    - slash_switch_session: dict {"sid": str} — REPL 据此 in-process 切到新 sid.
+      Producer: _handle_new (Wave 3), _handle_resume (Wave 4).
+      Consumer: cli._run_chat_repl_async (Wave 2).
     """
 
     type: str

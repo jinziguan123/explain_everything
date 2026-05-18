@@ -15,12 +15,13 @@ from tests.test_chat_session import _make_done_session
 class TestSlashRegistry:
     def test_has_required_default_commands(self):
         names = {c.name for c in DEFAULT_COMMANDS}
-        # 至少包含这些 (Wave 4 会再加 resume)
-        required = {"quit", "help", "show", "budget", "compact", "save", "new"}
+        required = {
+            "quit", "help", "show", "budget", "compact", "save", "new", "resume"
+        }
         assert required.issubset(names)
 
     def test_command_by_name_finds_each(self):
-        for name in ["quit", "help", "show", "budget", "compact", "save"]:
+        for name in ["quit", "help", "show", "budget", "compact", "save", "new", "resume"]:
             assert _command_by_name(name) is not None
         assert _command_by_name("nonexistent") is None
 
@@ -43,8 +44,10 @@ class TestDispatchSlash:
         chat = ChatSession("s_51a55002")
         events = await dispatch_slash(chat, "/help")
         content = events[0].content
-        # Should list all 6 slash commands
-        for name in ["quit", "help", "show", "budget", "compact", "save"]:
+        # Should list all 8 slash commands
+        for name in [
+            "quit", "help", "show", "budget", "compact", "save", "new", "resume"
+        ]:
             assert f"/{name}" in content
         # Should list at least the expand tool
         assert "expand" in content
@@ -230,3 +233,122 @@ class TestSlashNew:
     async def test_registered_in_default_commands(self):
         names = {c.name for c in DEFAULT_COMMANDS}
         assert "new" in names
+
+
+class TestSlashResume:
+    @pytest.mark.asyncio
+    async def test_no_sessions_returns_info(self, monkeypatch):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_5e500001")
+        chat = ChatSession("s_5e500001")
+        # Monkey patch list_sessions 返空
+        monkeypatch.setattr(
+            type(chat.storage), "list_sessions", lambda self: []
+        )
+        events = await dispatch_slash(chat, "/resume")
+        types = [e.type for e in events]
+        assert "slash_resume" in types
+        assert "slash_switch_session" not in types
+        info = next(e for e in events if e.type == "slash_resume")
+        assert "无" in info.content or "no session" in info.content.lower()
+
+    @pytest.mark.asyncio
+    async def test_args_rejected(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_5e500002")
+        chat = ChatSession("s_5e500002")
+        events = await dispatch_slash(chat, "/resume extra")
+        assert events[0].type == "slash_error"
+
+    @pytest.mark.asyncio
+    async def test_picks_session_yields_switch(self, monkeypatch):
+        """2 个 session: 当前 + 另一个. 输入 1 → switch 到 latest (按 created_at desc)."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_5e500003")
+        # 加第二个 session, 显式 newer created_at
+        from explain_engine.persistence.session import (
+            Session,
+            SessionMeta,
+            SessionStore,
+        )
+        from explain_engine.schema.graph import ExplanationGraph
+        from explain_engine.schema.state import CognitiveState
+        meta_b = SessionMeta.new(question="qb")
+        meta_b.session_id = "s_5e500099"
+        meta_b.created_at = 9999999999.0  # newer than s_5e500003
+        state_b = CognitiveState(
+            graph=ExplanationGraph(root_question="qb"),
+            budget_remaining=10, root_question="qb",
+        )
+        SessionStore().save(Session(meta=meta_b, state=state_b))
+
+        chat = ChatSession("s_5e500003")
+
+        # Mock input 返 "1" (选 latest = s_5e500099)
+        monkeypatch.setattr(
+            "builtins.input", lambda *a, **kw: "1"
+        )
+
+        events = await dispatch_slash(chat, "/resume")
+        types = [e.type for e in events]
+        assert "slash_switch_session" in types
+        switch_ev = next(e for e in events if e.type == "slash_switch_session")
+        assert switch_ev.content["sid"] == "s_5e500099"
+
+    @pytest.mark.asyncio
+    async def test_invalid_number_cancels(self, monkeypatch):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_5e500004")
+        chat = ChatSession("s_5e500004")
+        monkeypatch.setattr(
+            "builtins.input", lambda *a, **kw: "abc"
+        )
+        events = await dispatch_slash(chat, "/resume")
+        types = [e.type for e in events]
+        assert "slash_error" in types
+        assert "slash_switch_session" not in types
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_cancels(self, monkeypatch):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_5e500005")
+        chat = ChatSession("s_5e500005")
+        monkeypatch.setattr(
+            "builtins.input", lambda *a, **kw: "99"
+        )
+        events = await dispatch_slash(chat, "/resume")
+        types = [e.type for e in events]
+        assert "slash_error" in types
+        assert "slash_switch_session" not in types
+
+    @pytest.mark.asyncio
+    async def test_q_cancels(self, monkeypatch):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_5e500006")
+        chat = ChatSession("s_5e500006")
+        monkeypatch.setattr(
+            "builtins.input", lambda *a, **kw: "q"
+        )
+        events = await dispatch_slash(chat, "/resume")
+        types = [e.type for e in events]
+        assert "slash_resume" in types
+        assert "slash_switch_session" not in types
+        info = next(e for e in events if e.type == "slash_resume")
+        assert "取消" in info.content or "cancel" in info.content.lower()
+
+    @pytest.mark.asyncio
+    async def test_picking_current_session_noop(self, monkeypatch):
+        """只 1 session (当前). 输 1 选自己 → 不 yield switch, 只 info."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_5e500007")
+        chat = ChatSession("s_5e500007")
+        monkeypatch.setattr(
+            "builtins.input", lambda *a, **kw: "1"
+        )
+        events = await dispatch_slash(chat, "/resume")
+        types = [e.type for e in events]
+        assert "slash_switch_session" not in types
+        info = next(
+            e for e in events if e.type == "slash_resume"
+        )
+        assert "已在" in info.content or "current" in info.content.lower()
