@@ -6,6 +6,7 @@ Note: 完整 REPL 交互测试很难做 (涉及 stdin / asyncio.to_thread / live
 真实 REPL 测试留给 Task G.1 acceptance (手工跑).
 """
 
+import pytest
 from typer.testing import CliRunner
 
 from explain_engine.cli import app
@@ -51,3 +52,62 @@ class TestChatCommand:
         # Exit code != 0 due to missing session, but should NOT be a "unknown option" error
         assert "no such option" not in result.output.lower()
         assert "unknown option" not in result.output.lower()
+
+
+class TestReplSwitchSession:
+    """REPL 收到 slash_switch_session event 后切到新 chat_session."""
+
+    @pytest.mark.asyncio
+    async def test_switch_session_replaces_chat_session(
+        self, monkeypatch
+    ) -> None:
+        """模拟用户输 magic input → handler yield slash_switch_session → REPL 切.
+
+        用 monkeypatch 把 input 改成返预设序列 ("trigger switch", /quit);
+        把 ChatSession.handle_user_input mock 成对第 1 input yield switch event
+        (sid=s_target), 第 2 input yield slash_quit.
+        验切换后 chat_session.sid == 's_target'.
+        """
+        from explain_engine.chat.session import ChatEvent
+        from explain_engine.cli import (
+            _run_chat_repl_async,  # NEW symbol (Step 2.3)
+        )
+        from tests.test_chat_session import _make_done_session
+
+        # 注意 sid 必须符合 ^s_[0-9a-f]{8}$ regex (Wave 1 偏差 1 已发现)
+        _make_done_session("s_22222001")
+        _make_done_session("s_22222002")
+
+        # input 序列: 1st 触发切换, 2nd /quit
+        inputs = iter(["switch please", "/quit"])
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda *a, **kw: next(inputs),
+        )
+
+        # 跟踪每次 handle_user_input 调用时 chat_session.sid
+        observed_sids: list[str] = []
+
+        async def fake_handle(self, text, llm=None):
+            observed_sids.append(self.sid)
+            if text == "switch please":
+                yield ChatEvent(
+                    type="slash_switch_session",
+                    content={"sid": "s_22222002"},
+                )
+            elif text == "/quit":
+                yield ChatEvent(type="slash_quit", content="bye")
+
+        from explain_engine.chat.session import ChatSession
+        monkeypatch.setattr(ChatSession, "handle_user_input", fake_handle)
+
+        # 跑 (llm=None 即可, fake_handle 不用)
+        await _run_chat_repl_async(
+            initial_sid="s_22222001",
+            llm=None,
+            tool_budget_per_turn=10,
+            tool_budget_per_session=50,
+        )
+
+        # 第 1 input 时 chat 仍是 src, 第 2 input 时已切到 dst
+        assert observed_sids == ["s_22222001", "s_22222002"]

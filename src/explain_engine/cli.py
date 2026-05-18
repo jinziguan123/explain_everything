@@ -906,96 +906,126 @@ def chat(
     """Phase 9 Wave F.2: 进 conversational chat REPL.
 
     交互模式 — stdin 读 user input, dispatch 到 ChatSession.handle_user_input.
-    Slash command (/help, /quit, /show, /budget, /compact, /save) 本地 intercept,
-    其余走 LLM ↔ tools while-loop (query_loop).
+    Slash command 本地 intercept, 其余走 LLM ↔ tools while-loop.
+    /new + /resume (2026-05-18) 可触发 in-process session 热切.
 
     优雅退出:
     - /quit            → slash_quit event 触发 break
     - Ctrl-D / Ctrl-C  → EOFError / KeyboardInterrupt 捕获 break
-    退出前 await background tasks (session_memory_writer 等) + 最终 persist.
-
     """
-    # Note: --no-input-check is hidden (typer Option hidden=True) until Wave G+ wires
-    # input_validation into chat startup. Currently a no-op; flag still accepted via CLI
-    # but not advertised in --help.
     del no_input_check  # silence ARG001
+    llm = make_llm_client()
+    asyncio.run(_run_chat_repl_async(
+        initial_sid=session_id,
+        llm=llm,
+        tool_budget_per_turn=tool_budget_per_turn,
+        tool_budget_per_session=tool_budget_per_session,
+    ))
 
-    # Local import 避 CLI 模块顶部 import (chat 模块依赖重, 仅 chat 命令需要)
-    from explain_engine.chat.session import ChatSession
 
-    try:
-        chat_session = ChatSession(session_id)
-    except FileNotFoundError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
+def _apply_budget_flags(
+    chat_session,
+    tool_budget_per_turn: int,
+    tool_budget_per_session: int,
+) -> None:
+    """启动 / 切换 session 后, 应用 cli flag 到 chat_state.
 
-    # 用户传 flag 时覆盖默认 budget (ChatStateDict 默认 10/50)
+    切 session 后 budget flag 继承 (会话级偏好, 不是 per-session config).
+    """
     chat_session.chat_state.budget_per_turn_limit = tool_budget_per_turn
     chat_session.chat_state.budget_per_turn_remaining = tool_budget_per_turn
     chat_session.chat_state.budget_per_session_limit = tool_budget_per_session
-    # session remaining: 若 loaded 值已小于新 limit 则保留 (用户已消耗),
-    # 否则 cap 到新 limit
     if (
         chat_session.chat_state.budget_per_session_remaining
         > tool_budget_per_session
     ):
         chat_session.chat_state.budget_per_session_remaining = tool_budget_per_session
 
-    llm = make_llm_client()
 
-    # Phase 9 Wave F.2 hotfix: warn loudly if LLMClient lacks chat_with_tools.
-    # query_loop catches AttributeError + yields TurnComplete silently — user 看到的是
-    # "输入后什么都不发生", 而非 "LLM dispatch 未实装". 这里 startup 时显式提示.
-    has_tools_api = hasattr(llm, "chat_with_tools")
+async def _run_chat_repl_async(
+    initial_sid: str,
+    llm,
+    tool_budget_per_turn: int,
+    tool_budget_per_session: int,
+) -> None:
+    """REPL 主循环 (从 chat() 命令抽出便于测试 + slash 切换需 mutable chat_session ref).
 
+    切换契约: handler yield ChatEvent(type='slash_switch_session', content={'sid': X})
+    后, 本函数在单 turn iter 结束后做 `await old.aclose() + new ChatSession(X, llm)`,
+    并 _apply_budget_flags 继承 cli flag.
+    """
+    from explain_engine.chat.session import ChatSession, ChatSessionLoadError
+
+    try:
+        chat_session = ChatSession(initial_sid, llm=llm)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    _apply_budget_flags(
+        chat_session, tool_budget_per_turn, tool_budget_per_session
+    )
+
+    has_tools_api = (
+        hasattr(llm, "chat_with_tools") if llm is not None else False
+    )
     console.print(
-        f"[dim]Loaded session {session_id}. "
+        f"[dim]Loaded session {initial_sid}. "
         f"Type /help for commands. /quit to exit.[/dim]"
     )
-    if not has_tools_api:
+    if llm is not None and not has_tools_api:
         console.print(
             "[yellow]⚠️  LLM dispatch 未实装 (LLMClient.chat_with_tools 不存在). "
-            "自然语言输入会无响应; 仅 slash 命令工作 (/help /show /budget /quit etc.). "
-            "见 Phase 9 Wave F.3 计划接通 Anthropic SDK native tool_use API.[/yellow]"
+            "自然语言输入会无响应; 仅 slash 命令工作.[/yellow]"
         )
 
-    async def repl() -> None:
-        while True:
+    while True:
+        try:
+            user_input = await asyncio.to_thread(input, "\n> ")
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]Interrupted. Saving...[/dim]")
+            break
+
+        user_input = user_input.strip()
+        if not user_input:
+            continue
+
+        quit_requested = False
+        switch_to_sid: str | None = None
+        try:
+            async for event in chat_session.handle_user_input(
+                user_input, llm=llm
+            ):
+                _render_event(console, event)
+                if event.type == "slash_quit":
+                    quit_requested = True
+                elif event.type == "slash_switch_session":
+                    switch_to_sid = event.content["sid"]
+        except Exception as exc:
+            console.print(f"[red]Error: {type(exc).__name__}: {exc}[/red]")
+            continue
+
+        # 单 turn 结束后再切, 避免 iter 中 mutate
+        if switch_to_sid and switch_to_sid != chat_session.sid:
+            await chat_session.aclose()
             try:
-                # asyncio.to_thread 非阻塞 stdin (event loop 可继续处理
-                # 后台 task, 如 session_memory_writer)
-                user_input = await asyncio.to_thread(input, "\n> ")
-            except (EOFError, KeyboardInterrupt):
-                console.print("\n[dim]Interrupted. Saving...[/dim]")
-                break
+                chat_session = ChatSession(switch_to_sid, llm=llm)
+            except (FileNotFoundError, ChatSessionLoadError) as exc:
+                console.print(f"[red]切换失败: {exc}[/red]")
+                # 退回原 sid (旧 chat 已 aclose, 重新打开)
+                chat_session = ChatSession(initial_sid, llm=llm)
+            _apply_budget_flags(
+                chat_session, tool_budget_per_turn, tool_budget_per_session
+            )
+            console.print(
+                f"[green]Switched to {chat_session.sid}.[/green]"
+            )
 
-            user_input = user_input.strip()
-            if not user_input:
-                continue
+        if quit_requested:
+            break
 
-            quit_requested = False
-            try:
-                async for event in chat_session.handle_user_input(
-                    user_input, llm=llm
-                ):
-                    _render_event(console, event)
-                    if event.type == "slash_quit":
-                        quit_requested = True
-            except Exception as exc:
-                # REPL 不应因单 turn error 整体 crash; 让用户重试
-                console.print(
-                    f"[red]Error: {type(exc).__name__}: {exc}[/red]"
-                )
-                continue
-
-            if quit_requested:
-                break
-
-        # Cleanup: await background tasks (session_memory_writer 等) + 最终 persist
-        await chat_session.aclose()
-        console.print(f"[green]Session {session_id} saved.[/green]")
-
-    asyncio.run(repl())
+    await chat_session.aclose()
+    console.print(f"[green]Session {chat_session.sid} saved.[/green]")
 
 
 @app.command()
