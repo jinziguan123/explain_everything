@@ -261,6 +261,7 @@ class TestToolsResponseDataclass:
         assert r.text == ""
         assert r.tool_uses == []
         assert r.stop_reason == ""
+        assert r.raw_content_blocks == []
 
     def test_construction(self):
         r = ToolsResponse(
@@ -271,3 +272,150 @@ class TestToolsResponseDataclass:
         assert r.text == "hi"
         assert len(r.tool_uses) == 1
         assert r.stop_reason == "end_turn"
+
+
+class TestAnthropicChatWithToolsThinkingBlocks:
+    """Bug 5 regression: thinking blocks preserved in raw_content_blocks."""
+
+    @pytest.mark.asyncio
+    async def test_response_preserves_thinking_block(self, mocker) -> None:
+        from explain_engine.llm.anthropic_protocol import AnthropicProtocolClient
+
+        client = AnthropicProtocolClient(api_key="k", default_model="deepseek-reasoner")
+        thinking_block = MagicMock()
+        thinking_block.type = "thinking"
+        thinking_block.thinking = "let me think about this..."
+        thinking_block.signature = "sig123"
+        text_block = MagicMock(type="text", text="answer")
+        mock_resp = MagicMock()
+        mock_resp.content = [thinking_block, text_block]
+        mock_resp.stop_reason = "end_turn"
+        mocker.patch.object(
+            client._client.messages, "create",
+            new_callable=AsyncMock, return_value=mock_resp,
+        )
+
+        result = await client.chat_with_tools(
+            system="sys", messages=[{"role": "user", "content": "hi"}], tools=[],
+        )
+        # thinking + text both in raw_content_blocks
+        assert len(result.raw_content_blocks) == 2
+        thinking = next(b for b in result.raw_content_blocks if b["type"] == "thinking")
+        assert thinking["thinking"] == "let me think about this..."
+        assert thinking["signature"] == "sig123"
+        # text still in .text field
+        assert result.text == "answer"
+
+    @pytest.mark.asyncio
+    async def test_response_handles_thinking_without_signature(self, mocker) -> None:
+        from explain_engine.llm.anthropic_protocol import AnthropicProtocolClient
+
+        client = AnthropicProtocolClient(api_key="k", default_model="x")
+        thinking_block = MagicMock()
+        thinking_block.type = "thinking"
+        thinking_block.thinking = "thought"
+        # No signature attr (uses default getattr fallback)
+        del thinking_block.signature
+        mock_resp = MagicMock()
+        mock_resp.content = [thinking_block]
+        mock_resp.stop_reason = "end_turn"
+        mocker.patch.object(
+            client._client.messages, "create",
+            new_callable=AsyncMock, return_value=mock_resp,
+        )
+        result = await client.chat_with_tools(
+            system="s", messages=[{"role": "user", "content": "x"}], tools=[],
+        )
+        thinking = result.raw_content_blocks[0]
+        assert thinking["type"] == "thinking"
+        assert "signature" not in thinking  # omitted when absent
+
+
+class TestAnthropicChatToolChoiceFallback:
+    """Bug 4 regression: forced tool_choice rejection → retry with auto."""
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_auto_on_tool_choice_rejection(self, mocker) -> None:
+        from anthropic import APIError
+        from pydantic import BaseModel, Field
+
+        from explain_engine.llm.anthropic_protocol import AnthropicProtocolClient
+        from explain_engine.llm.client import Message
+
+        class _Schema(BaseModel):
+            x: int = Field(default=1)
+
+        client = AnthropicProtocolClient(api_key="k", default_model="deepseek-reasoner")
+        # First call raises, second call succeeds
+        success_resp = MagicMock()
+        tool_block = MagicMock()
+        tool_block.type = "tool_use"
+        tool_block.input = {"x": 42}
+        success_resp.content = [tool_block]
+        success_resp.usage.input_tokens = 1
+        success_resp.usage.output_tokens = 1
+        success_resp.model = "deepseek-reasoner"
+
+        # Build APIError that mimics deepseek's message
+        # Need to use real APIError signature: (message, *, request, body=None)
+        mock_request = MagicMock()
+        api_err = APIError(
+            "Error code: 400 - {'error': {'message': "
+            "'deepseek-reasoner does not support this tool_choice', "
+            "'type': 'invalid_request_error'}}",
+            request=mock_request,
+            body=None,
+        )
+
+        call_count = {"n": 0}
+        captured_kwargs: list = []
+
+        async def _create(**kwargs):
+            captured_kwargs.append(kwargs)
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise api_err
+            return success_resp
+
+        mocker.patch.object(
+            client._client.messages, "create", side_effect=_create,
+        )
+
+        result = await client.chat(
+            messages=[Message(role="user", content="hi")],
+            schema=_Schema,
+        )
+        # 2 calls — first with forced "tool", second with "auto"
+        assert call_count["n"] == 2
+        assert captured_kwargs[0]["tool_choice"]["type"] == "tool"
+        assert captured_kwargs[1]["tool_choice"]["type"] == "auto"
+        # Result correctly parsed from second response
+        assert result.parsed == {"x": 42}
+
+    @pytest.mark.asyncio
+    async def test_non_tool_choice_error_propagates(self, mocker) -> None:
+        """Other APIErrors (rate limit, network, etc.) still raise as LLMError."""
+        from anthropic import APIError
+        from pydantic import BaseModel
+
+        from explain_engine.llm.anthropic_protocol import AnthropicProtocolClient
+        from explain_engine.llm.client import Message
+        from explain_engine.llm.errors import LLMError
+
+        class _S(BaseModel):
+            pass
+
+        client = AnthropicProtocolClient(api_key="k", default_model="x")
+        mock_request = MagicMock()
+        err = APIError(
+            "Internal server error", request=mock_request, body=None,
+        )
+        mocker.patch.object(
+            client._client.messages, "create",
+            new_callable=AsyncMock, side_effect=err,
+        )
+        with pytest.raises(LLMError):
+            await client.chat(
+                messages=[Message(role="user", content="x")],
+                schema=_S,
+            )

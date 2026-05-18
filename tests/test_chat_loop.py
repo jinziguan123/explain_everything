@@ -46,12 +46,23 @@ def _make_done_session(sid: str = "s_100b0001") -> Session:
 
 
 class _FakeLLMResponse:
-    """Mimics Anthropic chat_with_tools response: .text / .tool_uses / .stop_reason."""
+    """Mimics Anthropic chat_with_tools response: .text / .tool_uses / .stop_reason.
 
-    def __init__(self, text="", tool_uses=None, stop_reason="end_turn"):
+    F.4: raw_content_blocks 默认空 — query_loop fallback 走老重建 (text + tool_uses)
+    路径, 兼容现有测试.
+    """
+
+    def __init__(
+        self,
+        text="",
+        tool_uses=None,
+        stop_reason="end_turn",
+        raw_content_blocks=None,
+    ):
         self.text = text
         self.tool_uses = tool_uses or []
         self.stop_reason = stop_reason
+        self.raw_content_blocks = raw_content_blocks or []
 
 
 class _FakeLLMClient:

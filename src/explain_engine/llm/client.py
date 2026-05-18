@@ -25,7 +25,7 @@ class Response(BaseModel):
 
 @dataclass
 class ToolsResponse:
-    """Phase 9 Wave F.3: facade for chat_with_tools across providers.
+    """Phase 9 Wave F.3/F.4: facade for chat_with_tools across providers.
 
     解耦 SDK 升级风险 — query_loop 只认 (text, tool_uses, stop_reason) 三字段,
     不直接吃 raw SDK Message 对象.
@@ -37,11 +37,16 @@ class ToolsResponse:
                    (对应 Anthropic ToolUseBlock / OpenAI ToolCall)
         stop_reason: forward 原值 ("end_turn", "tool_use", "max_tokens" /
                      OpenAI "stop", "tool_calls", "length")
+        raw_content_blocks: F.4 — preserve raw SDK content blocks for round-trip
+                            to reasoning models (deepseek-reasoner / Claude
+                            extended thinking require their thinking blocks be
+                            echoed in subsequent API calls).
     """
 
     text: str = ""
     tool_uses: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = ""
+    raw_content_blocks: list[dict[str, Any]] = field(default_factory=list)
 
 
 @runtime_checkable

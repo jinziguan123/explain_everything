@@ -4,6 +4,7 @@ Phase 5 起取代 ClaudeClient，通过 base_url 解耦协议与供应商。
 Structured output 走 tools API。
 """
 
+import logging
 from typing import Any
 
 from anthropic import (
@@ -17,6 +18,8 @@ from pydantic import BaseModel, ValidationError
 
 from explain_engine.llm.client import Message, Response, ToolsResponse
 from explain_engine.llm.errors import LLMError, SchemaValidationError
+
+logger = logging.getLogger(__name__)
 
 
 class AnthropicProtocolClient:
@@ -69,7 +72,24 @@ class AnthropicProtocolClient:
                 ]
                 call_kwargs["tool_choice"] = {"type": "tool", "name": tool_name}
 
-            api_resp = await self._client.messages.create(**call_kwargs)
+            try:
+                api_resp = await self._client.messages.create(**call_kwargs)
+            except APIError as exc:
+                # Vendor-specific: some reasoning models (deepseek-reasoner, o1, etc.)
+                # reject forced tool_choice. Retry with "auto" and let LLM decide.
+                err_msg = str(exc).lower()
+                forced = (call_kwargs.get("tool_choice", {}).get("type") == "tool")
+                if forced and "tool_choice" in err_msg:
+                    logger.warning(
+                        "Forced tool_choice rejected by model (%s); retrying with auto. "
+                        "Note: LLM may return free text instead of structured output; "
+                        "Pydantic validation downstream will catch malformed responses.",
+                        model or self._default_model,
+                    )
+                    call_kwargs["tool_choice"] = {"type": "auto"}
+                    api_resp = await self._client.messages.create(**call_kwargs)
+                else:
+                    raise
 
             text = ""
             parsed: dict[str, Any] | None = None
@@ -127,21 +147,42 @@ class AnthropicProtocolClient:
 
             text = ""
             tool_uses: list[dict[str, Any]] = []
+            raw_blocks: list[dict[str, Any]] = []
             for block in api_resp.content:
                 if block.type == "text":
                     text += block.text
+                    raw_blocks.append({"type": "text", "text": block.text})
                 elif block.type == "tool_use":
-                    tool_uses.append(
-                        {
-                            "id": block.id,
-                            "name": block.name,
-                            "input": dict(block.input),
-                        }
-                    )
+                    tu = {
+                        "id": block.id,
+                        "name": block.name,
+                        "input": dict(block.input),
+                    }
+                    tool_uses.append(tu)
+                    raw_blocks.append({"type": "tool_use", **tu})
+                elif block.type == "thinking":
+                    # F.4: preserve for round-trip (deepseek-reasoner /
+                    # Claude extended thinking 要求 thinking block 必须 echo
+                    # 回下一轮 API 调用, 否则 vendor 报 400)
+                    thinking_block: dict[str, Any] = {
+                        "type": "thinking",
+                        "thinking": getattr(block, "thinking", ""),
+                    }
+                    sig = getattr(block, "signature", None)
+                    if sig:
+                        thinking_block["signature"] = sig
+                    raw_blocks.append(thinking_block)
+                elif block.type == "redacted_thinking":
+                    raw_blocks.append({
+                        "type": "redacted_thinking",
+                        "data": getattr(block, "data", ""),
+                    })
+                # Other future block types: skip (don't crash)
             return ToolsResponse(
                 text=text,
                 tool_uses=tool_uses,
                 stop_reason=api_resp.stop_reason or "",
+                raw_content_blocks=raw_blocks,
             )
         except (APIConnectionError, APITimeoutError, RateLimitError, APIError) as exc:
             raise LLMError(str(exc)) from exc

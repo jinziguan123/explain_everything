@@ -274,16 +274,31 @@ async def query_loop(
         # ── Append assistant message (text + tool_uses) + tool_result message ──
         # 注: 仅 append 实际 dispatch 过的 tool_use, 否则 LLM 端 tool_use_id
         # 与 tool_result 对不上 (Anthropic API 会 reject 不匹配的 pair).
-        assistant_content: list[dict[str, Any]] = []
-        if response.text:
-            assistant_content.append({"type": "text", "text": response.text})
-        for tu in dispatched_tool_uses:
-            assistant_content.append({
-                "type": "tool_use",
-                "id": tu.get("id", "unknown"),
-                "name": tu["name"],
-                "input": tu.get("input", {}),
-            })
+        #
+        # F.4: 若 response 带 raw_content_blocks (Anthropic 协议) 用它 ——
+        # 保留 text + thinking + dispatched tool_uses, drop 因 budget 跳过的
+        # tool_use. thinking block 必须 echo (deepseek-reasoner / Claude
+        # extended thinking 要求). 无 raw_content_blocks (OpenAI 或老 mock)
+        # 走 fallback 重建.
+        assistant_content: list[dict[str, Any]]
+        raw_blocks = getattr(response, "raw_content_blocks", None) or []
+        if raw_blocks:
+            dispatched_ids = {tu.get("id", "unknown") for tu in dispatched_tool_uses}
+            assistant_content = [
+                block for block in raw_blocks
+                if block.get("type") != "tool_use" or block.get("id") in dispatched_ids
+            ]
+        else:
+            assistant_content = []
+            if response.text:
+                assistant_content.append({"type": "text", "text": response.text})
+            for tu in dispatched_tool_uses:
+                assistant_content.append({
+                    "type": "tool_use",
+                    "id": tu.get("id", "unknown"),
+                    "name": tu["name"],
+                    "input": tu.get("input", {}),
+                })
         # 只有当 assistant 有内容 (text 或 dispatched tool_uses) 时才 append,
         # 防空 assistant 消息 (e.g. text='' + 全部 tool_use 被 budget skip).
         if assistant_content:
