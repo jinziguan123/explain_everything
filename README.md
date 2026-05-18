@@ -22,10 +22,35 @@
 
 ## Status
 
+**Phase 10 milestone (2026-05-18)** — Persistent World Model (跨 session Variable Lexicon)。
+728 tests pass，ruff 0。Phase 0-10 全部实施完。下一步: Phase 11 Theory Formation + Candidate E Variable Embedding。
+
 **Phase 9 milestone (2026-05-17/18)** — Conversational Cognitive Engine (Claude Code 风格 chat REPL)。
-678 tests pass，ruff 0。Phase 0-9 全部实施完 + 2026-05-18 增强 (chat 内 /new + /resume slash 命令 + prompt_toolkit REPL UX 升级)。Phase 10 直接 motivation：
-cross-session knowledge pool 填充 / Theory Formation 起步 / real Anthropic tool_use adapter
+chat /new + /resume slash 命令 + prompt_toolkit REPL UX 升级。Phase 11 直接 motivation：
+cross-session motif detection on lexicon graph / real Anthropic tool_use adapter
 （详见 [Phase 9 acceptance evidence](docs/plans/2026-05-17-conversational-cognitive-engine-acceptance.md)）。
+
+## Phase 10 (2026-05-18) — Persistent World Model (Variable Lexicon)
+
+`knowledge/` 目录从 Phase 9 占位空目录变 **跨 session Variable Lexicon**. 高 fitness L1/L2 节点累积成 reusable abstractions, 新 session bootstrap 时 LLM 看 Top-K 作 prior.
+
+**核心 (design Q&A 锁)**:
+- 单位: Variable Lexicon (mechanism / theory 留 Phase 11)
+- 写入: session done auto-flush (compress 完 + chat aclose)
+- 读取: bootstrap 看 Top-K=20 by composite fitness (reuse × essentialness)
+- token cap: per-var render cap, 总 ~1.7k token (deterministic, 不依赖 embedding)
+- storage: local JSON (远程存 Neo4j/pgvector 留 Phase 11+ 再评估)
+
+**新 CLI commands**:
+- `explain lexicon` — 列 lexicon (Rich Table)
+- `explain lexicon --dump-json` — raw JSON
+- `explain lexicon --top-k N` — 仅显 top-K
+- `explain new --lexicon-top-k 0` — 跳过 lexicon prior
+
+**文档**:
+- design: [docs/plans/2026-05-18-phase10-persistent-world-model-design.md](docs/plans/2026-05-18-phase10-persistent-world-model-design.md)
+- plan: [docs/plans/2026-05-18-phase10-persistent-world-model-plan.md](docs/plans/2026-05-18-phase10-persistent-world-model-plan.md)
+- acceptance: [docs/plans/2026-05-18-phase10-persistent-world-model-acceptance.md](docs/plans/2026-05-18-phase10-persistent-world-model-acceptance.md)
 
 ## Phase 9 (2026-05-17) — Conversational Cognitive Engine
 

@@ -387,12 +387,12 @@ def _upsert_var(
 **Step 1.4: 跑测试确认 pass**
 
 Run: `.venv/bin/python -m pytest tests/test_engines_lexicon.py -v`
-Expected: 全 PASS (~22 test).
+Expected: 全 PASS (21 test).
 
 **Step 1.5: 全测 + ruff**
 
 Run: `.venv/bin/python -m pytest -x --tb=no -q 2>&1 | tail -3`
-Expected: `701 passed` (679 + 22).
+Expected: `700 passed` (679 + 21).
 
 Run: `.venv/bin/ruff check src/explain_engine/engines/lexicon.py tests/test_engines_lexicon.py`
 Expected: 0.
@@ -413,7 +413,7 @@ _save_lexicon (atomic .tmp+rename, 同 StorageV2 pattern), _should_promote
 avg_essentialness/avg_consistency 用 running avg, Phase 10 第一版用
 node.activation/stability 作 proxy (TODO 后续从 acceptance_report 取真值).
 
-~22 unit test 覆盖.
+21 unit test 覆盖.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF

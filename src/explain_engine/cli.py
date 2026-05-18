@@ -300,7 +300,7 @@ async def _run_compress(session_id: str) -> None:
         if n > 0:
             console.print(f"[INFO] {n} var 写入 lexicon")
     except Exception as exc:
-        console.print(f"[yellow]lexicon flush 失败 (非关键): {exc}[/yellow]")
+        console.print(f"[yellow]lexicon flush 失败 (非关键): {type(exc).__name__}: {exc}[/yellow]")
 
     console.print(f"\n[green]Session {session_id} 已完成。[/green]")
 
@@ -1160,7 +1160,7 @@ async def _run_chat_repl_async(
                 console.print(f"[dim]{n} var 写入 lexicon[/dim]")
         except Exception as exc:
             console.print(
-                f"[yellow]lexicon flush 失败 (非关键): {exc}[/yellow]"
+                f"[yellow]lexicon flush 失败 (非关键): {type(exc).__name__}: {exc}[/yellow]"
             )
     finally:
         # ── chat 模式 exit: restore log handlers ──
