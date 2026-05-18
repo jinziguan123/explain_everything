@@ -3,6 +3,8 @@
 逐条 keep/edit/drop + 末尾 add 循环。
 """
 
+from collections.abc import Awaitable, Callable
+
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
@@ -222,3 +224,27 @@ def review_predicted_l0(
         else:
             kept.append(pid)
     return kept
+
+
+async def review_phenomena_async(
+    phenomena: list[VariableNode],
+    input_provider: Callable[[str], Awaitable[str]] | None,
+    console: Console | None = None,
+) -> list[VariableNode]:
+    """Phase 11 Wave 1 stub — Wave 2 完整实装 k/e/d multi-step 流.
+
+    本版仅返全 phenomena (accept all): EphemeralChatSession.promote_to_persistent
+    需 await 一个 async HITL 入口, 但真 k/e/d 交互 (await input_provider 收 k/e/d
+    + edit prompt) 在 Wave 2 才接通. Wave 1 接通 ephemeral 骨架 + cli REPL 入口,
+    HITL fold 进 Wave 2.
+
+    Args:
+        phenomena: bootstrap 出的 L0 现象
+        input_provider: REPL 端注入的 async input callable (Wave 2 用); 当前 ignore
+        console: Rich console (Wave 2 用); 当前 ignore
+
+    Returns:
+        list[VariableNode] — 同 phenomena 一份 (新 list, 防 caller mutate 原 list)
+    """
+    del input_provider, console  # Wave 1 stub: 待 Wave 2 实装
+    return list(phenomena)
