@@ -621,3 +621,431 @@ class TestSlashBudgetConfig:
         # ephemeral.chat_state 被改 (promote 时拷给 real chat)
         assert eph.chat_state.budget_per_turn_limit == 30
         assert eph.chat_state.budget_per_session_limit == 200
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Phase 11 Wave 3: 6 single-session slash + /cf alias.
+# /compress /run /check /predict /counterfactual /rescore + /cf.
+# 共同模式: ephemeral reject + LLM-None reject + happy-path mock + cancel.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _new_ephemeral():
+    """Helper: 建 EphemeralChatSession (Wave 3 reject test 共用)."""
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.persistence.storage_v2 import StorageV2
+    return EphemeralChatSession(storage=StorageV2())
+
+
+class TestSlashCompress:
+    """Phase 11 Wave 3: /compress ephemeral reject + happy-path mock."""
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_rejects(self):
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/compress")
+        assert events[0].type == "slash_error"
+        assert "compress" in events[0].content
+        assert "ephemeral" in events[0].content.lower() or "已" in events[0].content or "尚未" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_no_llm_rejects(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_c0000001")
+        chat = ChatSession("s_c0000001")  # llm=None
+        events = await dispatch_slash(chat, "/compress")
+        assert events[0].type == "slash_error"
+        assert "llm" in events[0].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_happy_path_mock(self, monkeypatch):
+        """Mock propose + review + flush → slash_compress event."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_c0000002")
+        chat = ChatSession("s_c0000002", llm=object())  # type: ignore[arg-type]
+
+        called = {"propose": 0, "review": 0, "flush": 0}
+
+        async def fake_propose(state, llm, min_count=3, max_count=5):
+            called["propose"] += 1
+            state.insight_candidates = ["c_001"]  # 留 1 个
+
+        async def fake_review(state, input_provider, console=None):
+            called["review"] += 1
+            # accept all 不动 candidates
+
+        async def fake_flush(session, storage, llm=None):
+            called["flush"] += 1
+            return 2  # 2 var written
+
+        monkeypatch.setattr(
+            "explain_engine.engines.compression.propose_candidates", fake_propose
+        )
+        monkeypatch.setattr(
+            "explain_engine.hitl.cli_interactive.review_insights_async", fake_review
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.lexicon.flush_to_lexicon", fake_flush
+        )
+
+        events = await dispatch_slash(chat, "/compress")
+        assert events[0].type == "slash_compress"
+        assert "完成" in events[0].content
+        assert "2 var" in events[0].content
+        assert called == {"propose": 1, "review": 1, "flush": 1}
+
+    @pytest.mark.asyncio
+    async def test_propose_failure_returns_error(self, monkeypatch):
+        """propose_candidates 抛 → slash_error, 不调 review."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_c0000003")
+        chat = ChatSession("s_c0000003", llm=object())  # type: ignore[arg-type]
+
+        called = {"review": 0}
+
+        async def fake_propose_fails(state, llm, min_count=3, max_count=5):
+            raise RuntimeError("mock LLM down")
+
+        async def fake_review(state, input_provider, console=None):
+            called["review"] += 1
+
+        monkeypatch.setattr(
+            "explain_engine.engines.compression.propose_candidates", fake_propose_fails
+        )
+        monkeypatch.setattr(
+            "explain_engine.hitl.cli_interactive.review_insights_async", fake_review
+        )
+
+        events = await dispatch_slash(chat, "/compress")
+        assert events[0].type == "slash_error"
+        assert "mock LLM down" in events[0].content or "RuntimeError" in events[0].content
+        # review 没被调
+        assert called["review"] == 0
+
+
+class TestSlashRun:
+    """Phase 11 Wave 3: /run reasoning loop."""
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_rejects(self):
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/run")
+        assert events[0].type == "slash_error"
+
+    @pytest.mark.asyncio
+    async def test_no_llm_rejects(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_a0000001")
+        chat = ChatSession("s_a0000001")
+        events = await dispatch_slash(chat, "/run")
+        assert events[0].type == "slash_error"
+        assert "llm" in events[0].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_happy_path_mock(self, monkeypatch):
+        """Mock runtime_run 返 stop_reason 'converged' → slash_run event."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_a0000002")
+        chat = ChatSession("s_a0000002", llm=object())  # type: ignore[arg-type]
+
+        async def fake_run(state, llm, budget, on_tick=None, scheduler=None):
+            state.tick = 5
+            return "no_gain_for_3_ticks"
+
+        # 路径: slash 内部 from explain_engine.runtime.runtime import run as runtime_run.
+        # monkeypatch 必须打 runtime module 的 run, 而非 slash_commands.
+        monkeypatch.setattr(
+            "explain_engine.runtime.runtime.run", fake_run
+        )
+
+        events = await dispatch_slash(chat, "/run")
+        assert events[0].type == "slash_run"
+        assert "no_gain_for_3_ticks" in events[0].content
+        assert "tick=5" in events[0].content
+
+
+class TestSlashCheck:
+    """Phase 11 Wave 3: /check multi-signal acceptance (read-only)."""
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_rejects(self):
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/check")
+        assert events[0].type == "slash_error"
+
+    @pytest.mark.asyncio
+    async def test_happy_path(self):
+        """真跑 aggregate_acceptance 在 _make_done_session 的 graph 上.
+
+        _make_done_session graph: 1 L1 (c_001) + 1 L0 (p_001) + 1 manifests_as edge.
+        aggregate_acceptance 不抛即 OK; content 含字段名.
+        """
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000001")
+        chat = ChatSession("s_e0000001")
+        events = await dispatch_slash(chat, "/check")
+        assert events[0].type == "slash_check"
+        c = events[0].content
+        assert "avg_consistency" in c
+        assert "avg_essentialness" in c
+        assert "rollout_coverage" in c
+        assert "weak_chain_l1s" in c
+        assert "missing_l0" in c
+
+
+class TestSlashPredict:
+    """Phase 11 Wave 3: /predict interactive intervention."""
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_rejects(self):
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/predict")
+        assert events[0].type == "slash_error"
+
+    @pytest.mark.asyncio
+    async def test_no_llm_rejects(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_b0000001")
+        chat = ChatSession("s_b0000001")  # llm=None
+        events = await dispatch_slash(chat, "/predict")
+        assert events[0].type == "slash_error"
+        assert "llm" in events[0].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_no_provider_rejects(self):
+        """No input_provider → slash_error (REPL 模式必备)."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_b0000002")
+        chat = ChatSession("s_b0000002", llm=object())  # type: ignore[arg-type]
+        # input_provider 默认 None
+        events = await dispatch_slash(chat, "/predict")
+        assert events[0].type == "slash_error"
+        assert "input_provider" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_q_cancels(self):
+        """Provider 返 'q' → slash_predict 取消, prediction.predict 不调."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_b0000003")
+        chat = ChatSession("s_b0000003", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "q"
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/predict")
+        assert events[0].type == "slash_predict"
+        assert "取消" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_empty_cancels(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_b0000004")
+        chat = ChatSession("s_b0000004", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return ""
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/predict")
+        assert events[0].type == "slash_predict"
+        assert "取消" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_happy_path_mock(self, monkeypatch):
+        """Mock predict 返 fake report → slash_predict event 含 ids."""
+        from dataclasses import dataclass
+
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_b0000005")
+        chat = ChatSession("s_b0000005", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "如果 X 增加"
+        chat.input_provider = fake_provider
+
+        @dataclass
+        class FakeReport:
+            new_node_ids: list
+            predicted_L0_ids: list
+            activated_existing_L0: list
+
+        async def fake_predict(state, intervention_text, llm):
+            assert intervention_text == "如果 X 增加"
+            return FakeReport(
+                new_node_ids=["c_999"],
+                predicted_L0_ids=["p_999"],
+                activated_existing_L0=["p_001"],
+            )
+
+        monkeypatch.setattr(
+            "explain_engine.engines.prediction.predict", fake_predict
+        )
+
+        events = await dispatch_slash(chat, "/predict")
+        assert events[0].type == "slash_predict"
+        c = events[0].content
+        assert "c_999" in c
+        assert "p_999" in c
+        assert "p_001" in c
+        assert "如果 X 增加" in c
+
+
+class TestSlashCounterfactual:
+    """Phase 11 Wave 3: /counterfactual + /cf alias.
+
+    /cf 跟 /counterfactual 共享 handler 实例, 验注册到 DEFAULT_COMMANDS.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_rejects(self):
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/counterfactual")
+        assert events[0].type == "slash_error"
+
+    @pytest.mark.asyncio
+    async def test_cf_alias_ephemeral_rejects(self):
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/cf")
+        assert events[0].type == "slash_error"
+
+    @pytest.mark.asyncio
+    async def test_q_cancels(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_f0000001")
+        chat = ChatSession("s_f0000001", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "q"
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/counterfactual")
+        assert events[0].type == "slash_counterfactual"
+        assert "取消" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_happy_path_via_cf_alias(self, monkeypatch):
+        """走 /cf alias, 验路由到同 handler (output content 同 /counterfactual)."""
+        from dataclasses import dataclass, field
+
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_f0000002")
+        chat = ChatSession("s_f0000002", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "若 X 替代 Y"
+        chat.input_provider = fake_provider
+
+        @dataclass
+        class FakeCFReport:
+            removed_node_ids: list = field(default_factory=lambda: ["c_001"])
+            added_node_ids: list = field(default_factory=lambda: ["c_002"])
+            activation_diff: dict = field(default_factory=lambda: {"p_001": 0.3})
+            alt_narrative: str | None = "test narrative"
+
+        async def fake_substitute(state, intervention_text, llm):
+            assert intervention_text == "若 X 替代 Y"
+            return FakeCFReport()
+
+        monkeypatch.setattr(
+            "explain_engine.engines.counterfactual.substitute", fake_substitute
+        )
+
+        events = await dispatch_slash(chat, "/cf")
+        assert events[0].type == "slash_counterfactual"
+        c = events[0].content
+        assert "若 X 替代 Y" in c
+        assert "c_001" in c
+        assert "c_002" in c
+        assert "test narrative" in c
+
+    @pytest.mark.asyncio
+    async def test_cf_alias_in_default_commands(self):
+        """/cf 注册了, 且 handler 跟 /counterfactual 同 (alias 契约)."""
+        cf_cmd = _command_by_name("cf")
+        counterfactual_cmd = _command_by_name("counterfactual")
+        assert cf_cmd is not None
+        assert counterfactual_cmd is not None
+        assert cf_cmd.handler is counterfactual_cmd.handler
+
+
+class TestSlashRescore:
+    """Phase 11 Wave 3: /rescore."""
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_rejects(self):
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/rescore")
+        assert events[0].type == "slash_error"
+
+    @pytest.mark.asyncio
+    async def test_no_llm_rejects(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_d0000001")
+        chat = ChatSession("s_d0000001")
+        events = await dispatch_slash(chat, "/rescore")
+        assert events[0].type == "slash_error"
+        assert "llm" in events[0].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_happy_path_mock(self, monkeypatch):
+        """Mock rescore_session 返 {edge_id: conf} → slash_rescore event."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_d0000002")
+        chat = ChatSession("s_d0000002", llm=object())  # type: ignore[arg-type]
+
+        async def fake_rescore(state, llm):
+            return {"e_001": 0.8, "e_002": 0.6}
+
+        monkeypatch.setattr(
+            "explain_engine.engines.rescore.rescore_session", fake_rescore
+        )
+
+        events = await dispatch_slash(chat, "/rescore")
+        assert events[0].type == "slash_rescore"
+        c = events[0].content
+        assert "2 edges" in c
+        assert "0.70" in c  # avg of 0.8, 0.6
+
+    @pytest.mark.asyncio
+    async def test_empty_result_message(self, monkeypatch):
+        """rescore_session 返空 dict → 友好提示无 edges."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_d0000003")
+        chat = ChatSession("s_d0000003", llm=object())  # type: ignore[arg-type]
+
+        async def fake_rescore(state, llm):
+            return {}
+
+        monkeypatch.setattr(
+            "explain_engine.engines.rescore.rescore_session", fake_rescore
+        )
+
+        events = await dispatch_slash(chat, "/rescore")
+        assert events[0].type == "slash_rescore"
+        assert "无 manifests_as" in events[0].content
+
+
+class TestWave3Registry:
+    """Phase 11 Wave 3: DEFAULT_COMMANDS 注册验证."""
+
+    def test_six_new_slash_registered(self):
+        names = {c.name for c in DEFAULT_COMMANDS}
+        for name in ["compress", "run", "check", "predict", "counterfactual", "rescore", "cf"]:
+            assert name in names, f"/{name} not registered"
+
+    def test_total_count_is_15(self):
+        """8 base + 6 Wave 3 + 1 alias (cf) = 15."""
+        assert len(DEFAULT_COMMANDS) == 15
+
+    def test_help_lists_all_wave3_commands(self):
+        """/help 自动遍历 DEFAULT_COMMANDS — 验 Wave 3 6+1 都列出."""
+        import asyncio
+
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_aa000001")
+        chat = ChatSession("s_aa000001")
+        events = asyncio.run(dispatch_slash(chat, "/help"))
+        content = events[0].content
+        for name in ["compress", "run", "check", "predict", "counterfactual", "cf", "rescore"]:
+            assert f"/{name}" in content, f"/help missing /{name}"

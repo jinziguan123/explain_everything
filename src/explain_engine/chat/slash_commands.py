@@ -1,4 +1,4 @@
-"""Phase 9 Wave F.1 + 2026-05-18: 8 default slash commands (含 /new + /resume).
+"""Phase 9 Wave F.1 + Phase 11 Wave 3: 14 default slash commands + 1 alias.
 
 设计参考 Claude Code 同款 slash 模式 — 本地 intercept 不走 LLM,
 廉价 inspection + exit + force compact 等管理命令; slash 不计入
@@ -12,7 +12,9 @@ transcript / turn_count (因为非真正 user→assistant 对话).
   slash_{new,resume} + slash_switch_session).
 
 设计参考 docs/plans/2026-05-17-conversational-cognitive-engine-plan.md Wave F.1
-+ docs/plans/2026-05-18-chat-new-resume-slash-plan.md Wave 3 + Wave 4.
++ docs/plans/2026-05-18-chat-new-resume-slash-plan.md Wave 3 + Wave 4
++ docs/plans/2026-05-18-phase11-repl-unification-plan.md Wave 3
+  (cli subcommand → slash: /compress /run /check /predict /counterfactual /rescore + /cf).
 """
 
 from __future__ import annotations
@@ -449,8 +451,351 @@ async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     ]
 
 
-# Registry — 8 default slash commands.
-# 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作"分组.
+# ─────────────────────────────────────────────────────────────────────────
+# Phase 11 Wave 3: 6 single-session slash + /cf alias.
+# Cover cli subcommand: compress / run / check / predict / counterfactual / rescore.
+# 复用 engines layer logic (不复用 cli command body, 因 cli body 含 typer 装饰).
+#
+# 设计:
+# - 单 session 操作, ephemeral 时 reject (没 real session 操作 graph)
+# - /predict /counterfactual 走 input_provider 收 intervention text
+# - /compress 走 review_insights_async + flush_to_lexicon (chat 用 async, cli 用 sync)
+# - /run /rescore 走 chat.persist() (mutate state)
+# - /check read-only, 不 persist
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _ephemeral_reject(name: str) -> list[ChatEvent]:
+    """Phase 11 Wave 3: ephemeral 时统一 reject 模板.
+
+    单 session slash 都要求真 session — graph 是空的, 跑没意义.
+    友好提示用户先 promote_to_persistent.
+    """
+    from explain_engine.chat.session import ChatEvent
+    return [ChatEvent(
+        type="slash_error",
+        content=(
+            f"/{name} 需要真 session, 当前 ephemeral (尚未 /new). "
+            f"输自然语言新建 session 或 /resume 选历史 session."
+        ),
+    )]
+
+
+async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 11 Wave 3: 当前 session compress + HITL review_insights + flush_to_lexicon.
+
+    走 async path (review_insights_async + chat.input_provider), 跟 cli
+    `explain compress <sid>` 用 sync review_insights 不同 — chat REPL
+    要走 prompt_toolkit input_provider 才能享 ctrl+o / bottom toolbar.
+
+    Side effects:
+    - state.graph: 加 N 个 L1 候选 + edges (propose_candidates)
+    - state.insight_candidates: 被 review_insights_async 改 (drop / keep / edit)
+    - lexicon: best-effort flush (异常吞)
+    - sidecar: chat.persist() 落盘
+
+    LLM 失败 / lexicon flush 失败都返 slash_error 不 raise.
+    """
+    from explain_engine.chat.session import ChatEvent
+
+    if getattr(chat, "is_ephemeral", False):
+        return _ephemeral_reject("compress")
+
+    if chat.llm is None:
+        return [ChatEvent(
+            type="slash_error",
+            content="/compress 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
+        )]
+
+    from explain_engine.engines.compression import propose_candidates
+    from explain_engine.engines.lexicon import flush_to_lexicon
+    from explain_engine.hitl.cli_interactive import review_insights_async
+
+    try:
+        await propose_candidates(chat.state, chat.llm)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"/compress propose_candidates 失败: {type(exc).__name__}: {exc}",
+        )]
+
+    # HITL async review (走 chat.input_provider, None 时 accept-all)
+    await review_insights_async(chat.state, chat.input_provider)
+
+    # persist sidecar + flush lexicon (best-effort — lexicon 失败不该 fail compress)
+    chat.persist()
+    n = 0
+    try:
+        n = await flush_to_lexicon(chat._session, chat.storage, llm=chat.llm)
+    except Exception:
+        n = 0
+
+    return [ChatEvent(
+        type="slash_compress",
+        content=(
+            f"compress 完成. {len(chat.state.insight_candidates)} 候选保留. "
+            f"{n} var 写入 lexicon."
+        ),
+    )]
+
+
+async def _handle_run(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 11 Wave 3: 当前 session reasoning loop (Phase 5/7 runtime).
+
+    封装 `runtime.runtime.run(state, llm, budget, on_tick)` —— 用
+    chat.state.budget_remaining 作 budget (跟 cli 一致, 不强制额外指定).
+
+    Side effects:
+    - state.tick / budget / trace / graph (expansion/reflection 改)
+    - sidecar persist after loop ends
+
+    返 stop_reason. 失败 (LLMError / SchemaValidationError) 返 slash_error.
+    """
+    from explain_engine.chat.session import ChatEvent
+
+    if getattr(chat, "is_ephemeral", False):
+        return _ephemeral_reject("run")
+
+    if chat.llm is None:
+        return [ChatEvent(
+            type="slash_error",
+            content="/run 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
+        )]
+
+    from explain_engine.runtime.runtime import run as runtime_run
+
+    budget = max(chat.state.budget_remaining, 1)
+    try:
+        reason = await runtime_run(chat.state, chat.llm, budget=budget)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"/run 失败: {type(exc).__name__}: {exc}",
+        )]
+
+    chat.persist()
+    return [ChatEvent(
+        type="slash_run",
+        content=f"reasoning loop 完成: stop_reason={reason}, tick={chat.state.tick}",
+    )]
+
+
+async def _handle_check(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 11 Wave 3: multi-signal acceptance read-only.
+
+    跑 aggregate_acceptance 输出汇总数字. 跟 cli `explain check` 不同 —
+    cli 还跑 check_consistency_batch / 渲染 per-target table, slash 只
+    出 aggregate summary (chat 模式不适合大 table). 用户想看 per-target
+    可用 /show.
+
+    无 mutate, 不 persist.
+    """
+    from explain_engine.chat.session import ChatEvent
+
+    if getattr(chat, "is_ephemeral", False):
+        return _ephemeral_reject("check")
+
+    from explain_engine.engines.simulation import aggregate_acceptance
+
+    try:
+        report = aggregate_acceptance(chat.state)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"/check 失败: {type(exc).__name__}: {exc}",
+        )]
+
+    weak_str = ", ".join(report.weak_chain_l1s) or "(none)"
+    missing_str = ", ".join(report.missing_l0) or "(none)"
+    return [ChatEvent(
+        type="slash_check",
+        content=(
+            f"Multi-signal acceptance:\n"
+            f"  avg_consistency:   {report.avg_consistency:.3f}\n"
+            f"  avg_essentialness: {report.avg_essentialness:.3f}\n"
+            f"  rollout_coverage:  {report.rollout_coverage:.3f}\n"
+            f"  weak_chain_l1s:    {weak_str}\n"
+            f"  missing_l0:        {missing_str}"
+        ),
+    )]
+
+
+async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 11 Wave 3: forward prediction. Interactive prompt 收 intervention text.
+
+    跟 cli `explain predict <sid> <text>` 区别: cli 把 text 当 typer
+    positional arg, slash 走 input_provider 收 (用户 /predict 之后
+    sub-prompt 输描述). 无 args (输 args 会被忽略).
+
+    Side effects: state.graph + nodes (加 new_concepts + predicted L0).
+    持久化通过 chat.persist().
+    """
+    from explain_engine.chat.session import ChatEvent
+
+    if getattr(chat, "is_ephemeral", False):
+        return _ephemeral_reject("predict")
+
+    if chat.llm is None:
+        return [ChatEvent(
+            type="slash_error",
+            content="/predict 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
+        )]
+
+    if chat.input_provider is None:
+        return [ChatEvent(
+            type="slash_error",
+            content="/predict 需 input_provider (REPL 模式), 当前 None.",
+        )]
+
+    try:
+        intervention = (await chat.input_provider(
+            "intervention 描述 (e.g. '如果 X 增加', q 取消): "
+        )).strip()
+    except (EOFError, KeyboardInterrupt):
+        return [ChatEvent(type="slash_predict", content="已取消.")]
+
+    if not intervention or intervention.lower() in ("q", "quit"):
+        return [ChatEvent(type="slash_predict", content="已取消.")]
+
+    from explain_engine.engines.prediction import predict as prediction_predict
+    try:
+        report = await prediction_predict(chat.state, intervention, chat.llm)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"/predict 失败: {type(exc).__name__}: {exc}",
+        )]
+
+    chat.persist()
+    new_nodes_str = ", ".join(report.new_node_ids) or "(none)"
+    predicted_str = ", ".join(report.predicted_L0_ids) or "(none)"
+    activated_str = ", ".join(report.activated_existing_L0) or "(none)"
+    return [ChatEvent(
+        type="slash_predict",
+        content=(
+            f"prediction (intervention={intervention!r}):\n"
+            f"  new_nodes:             {new_nodes_str}\n"
+            f"  predicted_L0:          {predicted_str}\n"
+            f"  activated_existing_L0: {activated_str}"
+        ),
+    )]
+
+
+async def _handle_counterfactual(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 11 Wave 3: counterfactual remove + (optional) substitute.
+
+    副作用 = 0 (engines.counterfactual.substitute 用 deepcopy). 不 persist.
+
+    /cf 是同函数 alias (DEFAULT_COMMANDS 注册同 handler 实例).
+    """
+    from explain_engine.chat.session import ChatEvent
+
+    if getattr(chat, "is_ephemeral", False):
+        return _ephemeral_reject("counterfactual")
+
+    if chat.llm is None:
+        return [ChatEvent(
+            type="slash_error",
+            content="/counterfactual 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
+        )]
+
+    if chat.input_provider is None:
+        return [ChatEvent(
+            type="slash_error",
+            content="/counterfactual 需 input_provider (REPL 模式), 当前 None.",
+        )]
+
+    try:
+        intervention = (await chat.input_provider(
+            "counterfactual 描述 (e.g. '若用 X 替代 Y', q 取消): "
+        )).strip()
+    except (EOFError, KeyboardInterrupt):
+        return [ChatEvent(type="slash_counterfactual", content="已取消.")]
+
+    if not intervention or intervention.lower() in ("q", "quit"):
+        return [ChatEvent(type="slash_counterfactual", content="已取消.")]
+
+    from explain_engine.engines.counterfactual import substitute
+    try:
+        report = await substitute(chat.state, intervention, chat.llm)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"/counterfactual 失败: {type(exc).__name__}: {exc}",
+        )]
+
+    # 副作用 = 0, 不 persist.
+    removed_str = ", ".join(report.removed_node_ids) or "(none)"
+    added_str = ", ".join(report.added_node_ids) or "(none)"
+    # Top |diff| > 0.05 (跟 cli 同 cutoff)
+    sig_diff = sorted(
+        [(nid, v) for nid, v in report.activation_diff.items() if abs(v) > 0.05],
+        key=lambda kv: -abs(kv[1]),
+    )[:5]
+    diff_lines = (
+        "\n".join(f"    {nid}: {v:+.2f}" for nid, v in sig_diff)
+        if sig_diff else "    (无明显 diff)"
+    )
+
+    content_lines = [
+        f"counterfactual (intervention={intervention!r}):",
+        f"  removed:       {removed_str}",
+        f"  substituted:   {added_str}",
+        "  top diff (baseline - cf):",
+        diff_lines,
+    ]
+    if report.alt_narrative:
+        content_lines.append(f"  narrative: {report.alt_narrative}")
+
+    return [ChatEvent(
+        type="slash_counterfactual",
+        content="\n".join(content_lines),
+    )]
+
+
+async def _handle_rescore(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 11 Wave 3: 重评 edge.confidence (manifests_as + causes edges).
+
+    无 HITL. 跑完 persist. 跟 cli `explain rescore <sid>` 同 engines API
+    (rescore_session). LLM cost: ~25 calls per session (typical).
+    """
+    from explain_engine.chat.session import ChatEvent
+
+    if getattr(chat, "is_ephemeral", False):
+        return _ephemeral_reject("rescore")
+
+    if chat.llm is None:
+        return [ChatEvent(
+            type="slash_error",
+            content="/rescore 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
+        )]
+
+    from explain_engine.engines.rescore import rescore_session
+
+    try:
+        new_confs = await rescore_session(chat.state, chat.llm)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"/rescore 失败: {type(exc).__name__}: {exc}",
+        )]
+
+    chat.persist()
+    if not new_confs:
+        return [ChatEvent(
+            type="slash_rescore",
+            content="rescore 完成: 无 manifests_as/causes edges 可 rescore.",
+        )]
+
+    avg = sum(new_confs.values()) / len(new_confs)
+    return [ChatEvent(
+        type="slash_rescore",
+        content=f"rescore 完成: {len(new_confs)} edges, avg conf={avg:.2f}. 已 persist.",
+    )]
+
+
+# Registry — 14 default slash commands + 1 alias (/cf → counterfactual).
+# 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作 → engines"分组.
 DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("quit", "Exit chat session (saves first).", _handle_quit),
     SlashCommand("help", "List slash commands and available tools.", _handle_help),
@@ -460,6 +805,14 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("save", "Explicit flush of all sidecar files.", _handle_save),
     SlashCommand("new", "新建 session (bootstrap + HITL) 后自动切.", _handle_new),
     SlashCommand("resume", "列历史 session, 选号后切.", _handle_resume),
+    # Phase 11 Wave 3: 6 single-session engines slash + /cf alias.
+    SlashCommand("compress", "Compress 当前 session (propose_candidates + HITL + lexicon).", _handle_compress),
+    SlashCommand("run", "跑 reasoning loop (expansion + reflection).", _handle_run),
+    SlashCommand("check", "Multi-signal acceptance report (read-only).", _handle_check),
+    SlashCommand("predict", "Forward prediction: 收 intervention text 后跑.", _handle_predict),
+    SlashCommand("counterfactual", "Counterfactual: 收 intervention text 后跑 (副作用 0).", _handle_counterfactual),
+    SlashCommand("cf", "(alias of /counterfactual)", _handle_counterfactual),
+    SlashCommand("rescore", "重评 edge.confidence (manifests_as + causes).", _handle_rescore),
 )
 
 
