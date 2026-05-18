@@ -71,3 +71,67 @@ class TestBufferedLogHandler:
         """空 buffer get_text 返空 string (不 raise)."""
         h = BufferedLogHandler(capacity=10)
         assert h.get_text() == ""
+
+
+class TestSlashCompleter:
+    """SlashCompleter — `/cmd` 自动联想 from DEFAULT_COMMANDS."""
+
+    def _make_doc(self, text: str):
+        """Helper: 构造 prompt_toolkit Document 模拟 cursor 在末尾."""
+        from prompt_toolkit.document import Document
+        return Document(text=text, cursor_position=len(text))
+
+    def _make_completer(self):
+        from explain_engine.chat.repl_input import SlashCompleter
+        return SlashCompleter()
+
+    def test_empty_text_no_completions(self):
+        """空 input → 不联想."""
+        c = self._make_completer()
+        completions = list(c.get_completions(self._make_doc(""), None))
+        assert completions == []
+
+    def test_non_slash_no_completions(self):
+        """text 不以 / 起 → 不联想 (自然语言对话不打扰)."""
+        c = self._make_completer()
+        completions = list(c.get_completions(self._make_doc("hello"), None))
+        assert completions == []
+
+    def test_slash_only_lists_all_commands(self):
+        """text == '/' → 全 8 cmd 都 yield."""
+        from explain_engine.chat.slash_commands import DEFAULT_COMMANDS
+        c = self._make_completer()
+        completions = list(c.get_completions(self._make_doc("/"), None))
+        cmd_names = {comp.text for comp in completions}
+        expected = {cmd.name for cmd in DEFAULT_COMMANDS}
+        assert cmd_names == expected
+
+    def test_slash_prefix_filters(self):
+        """text == '/r' → 仅 startswith r 的 cmd (resume)."""
+        c = self._make_completer()
+        completions = list(c.get_completions(self._make_doc("/r"), None))
+        cmd_names = {comp.text for comp in completions}
+        assert "resume" in cmd_names
+        assert "quit" not in cmd_names
+
+    def test_second_token_no_completions(self):
+        """text == '/new 为什么 X' (有空格 + args) → 不联想 cmd.
+
+        防 user 在 /new 之后输 question 被错联想 (commands name 之间
+        子串匹配会很 noisy).
+        """
+        c = self._make_completer()
+        completions = list(c.get_completions(self._make_doc("/new 为什么 X"), None))
+        assert completions == []
+
+    def test_completion_carries_description(self):
+        """Completion 含 display_meta = 该 cmd 的 description (给 prompt_toolkit menu 用)."""
+        c = self._make_completer()
+        completions = list(c.get_completions(self._make_doc("/h"), None))
+        # Should match 'help' command
+        help_completion = next((co for co in completions if co.text == "help"), None)
+        assert help_completion is not None
+        # display_meta 应是 SlashCommand.description; prompt_toolkit Completion 的
+        # display_meta 字段 type 是 OneStyleAndTextTuples (str-like). 检查 not None
+        # 即足 (具体内容由 DEFAULT_COMMANDS 决定, 不强检).
+        assert help_completion.display_meta is not None
