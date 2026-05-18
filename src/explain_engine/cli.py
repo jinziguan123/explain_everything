@@ -50,9 +50,26 @@ logging.basicConfig(
 
 app = typer.Typer(
     help="Cognitive Engine for explanation-centric reasoning",
-    no_args_is_help=True,
+    invoke_without_command=True,
+    no_args_is_help=False,
 )
 console = Console()
+
+
+@app.callback()
+def main(ctx: typer.Context) -> None:
+    """Phase 11 Wave 1: 无 subcommand 时进 ephemeral REPL; 传 subcommand 走老 cli.
+
+    typer @app.callback fires before every subcommand. 通过 ctx.invoked_subcommand
+    区分:
+    - None: 用户跑 `explain` 没传 subcommand → enter_repl_async (Phase 11 默认)
+    - 非 None: `explain list` 等 → 让 typer 跑 subcommand, callback 立即返回
+    """
+    if ctx.invoked_subcommand is None:
+        from explain_engine.chat.repl_entry import enter_repl_async
+
+        asyncio.run(enter_repl_async())
+        raise typer.Exit()
 
 
 def _get_store() -> SessionStore:

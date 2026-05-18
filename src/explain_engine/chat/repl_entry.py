@@ -1,0 +1,178 @@
+"""Phase 11 Wave 1 Task 1.B: enter_repl_async — explain 默认 entry, ephemeral REPL.
+
+无参数 `explain` 走 cli.py @app.callback() → enter_repl_async():
+1. Build EphemeralChatSession + input_provider (注入 prompt_toolkit read_input)
+2. while loop 读 input:
+   - slash → dispatch_slash (ephemeral 时大多失败 — Wave 3/4 修)
+   - 自然语言 + ephemeral → promote_to_persistent → real ChatSession (切模式)
+   - 自然语言 + real chat → handle_user_input (Phase 9 query_loop)
+3. Quit / EOF / Ctrl-C → 退出, restore log handler
+
+设计: docs/plans/2026-05-18-phase11-repl-unification-design.md §3.1
+"""
+
+from __future__ import annotations
+
+import logging
+
+from rich.console import Console
+
+from explain_engine.chat.ephemeral import EphemeralChatSession
+from explain_engine.chat.repl_input import (
+    BufferedLogHandler,
+    make_session,
+    read_input,
+)
+from explain_engine.chat.session import ChatSession
+from explain_engine.config import make_llm_client
+from explain_engine.persistence.storage_v2 import StorageV2
+
+
+async def enter_repl_async() -> None:
+    """Ephemeral REPL outer loop. 用户进入即是 ephemeral, 首句 promote.
+
+    chat 模式期间 swap root logger 到 BufferedLogHandler (ctrl+o popup 看 log,
+    避撞 prompt_toolkit prompt). 退出时 restore 原 handler.
+    """
+    # 本地 import _render_event 避 cli ↔ repl_entry 循环依赖
+    # (cli.py 在 callback 内 lazy import enter_repl_async)
+    from explain_engine.cli import _render_event
+
+    console = Console()
+    storage = StorageV2()
+
+    # make_llm_client 抛 KeyError 若 env 没设. REPL 入口允许 no-LLM 模式
+    # (slash 命令可工作, 自然语言 promote 会失败 — caller 看 LLM error).
+    try:
+        llm = make_llm_client()
+    except KeyError as exc:
+        console.print(f"[yellow]LLM 未配置 ({exc}); slash 命令仍可用.[/yellow]")
+        llm = None
+
+    log_handler = BufferedLogHandler(capacity=200)
+    log_handler.setFormatter(logging.Formatter("%(message)s"))
+    root_logger = logging.getLogger()
+    original_handlers = root_logger.handlers[:]
+    original_level = root_logger.level
+    root_logger.handlers = [log_handler]
+    root_logger.setLevel(logging.INFO)
+
+    try:
+        pt_session = make_session(log_handler)
+
+        async def _input_provider(prompt_text: str) -> str:
+            return await read_input(pt_session, prompt_text=prompt_text)
+
+        chat: EphemeralChatSession | ChatSession = EphemeralChatSession(
+            storage=storage,
+            llm=llm,
+            input_provider=_input_provider,
+        )
+
+        console.print(
+            "[bold green]Explain REPL[/bold green] — ephemeral session. "
+            "输入问题创建持久 session, /help 看 slash, /quit 退出, "
+            "ctrl+o 看 log buffer."
+        )
+
+        while True:
+            try:
+                text = await read_input(pt_session)
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[dim]退出.[/dim]")
+                break
+
+            text = text.strip()
+            if not text:
+                continue
+
+            # ── slash 路径 ──
+            if text.startswith("/"):
+                from explain_engine.chat.slash_commands import dispatch_slash
+
+                try:
+                    events = await dispatch_slash(chat, text)
+                except Exception as exc:
+                    console.print(
+                        f"[red]slash 失败: {type(exc).__name__}: {exc}[/red]"
+                    )
+                    continue
+                quit_requested = False
+                for ev in events:
+                    if ev.type == "slash_switch_session":
+                        # /resume 切到 real ChatSession
+                        new_sid = ev.content["sid"]
+                        try:
+                            chat = ChatSession(new_sid, llm=llm)
+                            chat.input_provider = _input_provider
+                            console.print(
+                                f"[green]切换至 session {new_sid}.[/green]"
+                            )
+                        except Exception as exc:
+                            console.print(
+                                f"[red]切换失败: {type(exc).__name__}: {exc}[/red]"
+                            )
+                        continue
+                    _render_event(console, ev)
+                    if ev.type == "slash_quit":
+                        quit_requested = True
+                if quit_requested:
+                    break
+                continue
+
+            # ── 自然语言路径 ──
+            # ephemeral 时: promote_to_persistent (建 real session)
+            if isinstance(chat, EphemeralChatSession):
+                if llm is None:
+                    console.print(
+                        "[red]LLM 未配置, 无法 bootstrap. 设 LLM_* env 后重启.[/red]"
+                    )
+                    continue
+                try:
+                    chat = await chat.promote_to_persistent(text, llm)
+                except Exception as exc:
+                    console.print(
+                        f"[red]建 session 失败: {type(exc).__name__}: {exc}[/red]"
+                    )
+                    continue
+                console.print(
+                    f"[green]Session {chat.sid} 已创建, 进入 chat 模式.[/green]"
+                )
+                continue
+
+            # real chat 时: query_loop
+            quit_requested = False
+            try:
+                async for ev in chat.handle_user_input(text, llm=llm):
+                    if ev.type == "slash_switch_session":
+                        new_sid = ev.content["sid"]
+                        try:
+                            await chat.aclose()
+                            chat = ChatSession(new_sid, llm=llm)
+                            chat.input_provider = _input_provider
+                            console.print(
+                                f"[green]切换至 session {new_sid}.[/green]"
+                            )
+                        except Exception as exc:
+                            console.print(
+                                f"[red]切换失败: {type(exc).__name__}: {exc}[/red]"
+                            )
+                        continue
+                    _render_event(console, ev)
+                    if ev.type == "slash_quit":
+                        quit_requested = True
+            except Exception as exc:
+                console.print(
+                    f"[red]Error: {type(exc).__name__}: {exc}[/red]"
+                )
+                continue
+            if quit_requested:
+                break
+
+        # 真 chat 退出时 aclose (持久化 chat_state + 跑 background tasks)
+        if isinstance(chat, ChatSession):
+            await chat.aclose()
+            console.print(f"[green]Session {chat.sid} saved.[/green]")
+    finally:
+        root_logger.handlers = original_handlers
+        root_logger.setLevel(original_level)
