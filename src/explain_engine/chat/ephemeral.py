@@ -30,7 +30,6 @@ class EphemeralChatSession:
 
     REPL 启动时建. 字段:
     - storage: StorageV2 实例 (用于 promote 时读 knowledge/variables.json lexicon)
-    - llm: optional LLM client (REPL 启动时注入, promote 时也可显式传)
     - state: 空 CognitiveState (graph empty, budget=0)
     - chat_state: 默认 ChatStateDict (budget 10/50) — promote 后拷到 real ChatSession
     - transcript: 空 list (ephemeral 不持久化)
@@ -44,10 +43,12 @@ class EphemeralChatSession:
     Method:
     - promote_to_persistent(question, llm): 跑 bootstrap + HITL + save → real ChatSession.
       失败 (LLMError / SchemaValidationError) → 抛, caller 留 ephemeral.
+
+    Note: LLM client 仅在 promote_to_persistent(llm=...) 显式传入,
+    不持有 instance field — 避免双 source-of-truth (REPL 的 llm 唯一来源).
     """
 
     storage: StorageV2
-    llm: LLMClient | None = None
     state: CognitiveState = field(
         default_factory=lambda: CognitiveState.bootstrap("", budget=0)
     )

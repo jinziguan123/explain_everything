@@ -65,7 +65,6 @@ async def enter_repl_async() -> None:
 
         chat: EphemeralChatSession | ChatSession = EphemeralChatSession(
             storage=storage,
-            llm=llm,
             input_provider=_input_provider,
         )
 

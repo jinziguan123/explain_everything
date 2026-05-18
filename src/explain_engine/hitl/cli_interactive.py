@@ -231,20 +231,160 @@ async def review_phenomena_async(
     input_provider: Callable[[str], Awaitable[str]] | None,
     console: Console | None = None,
 ) -> list[VariableNode]:
-    """Phase 11 Wave 1 stub — Wave 2 完整实装 k/e/d multi-step 流.
+    """Phase 11 Wave 2: async k/e/d 流 (REPL HITL 入口).
 
-    本版仅返全 phenomena (accept all): EphemeralChatSession.promote_to_persistent
-    需 await 一个 async HITL 入口, 但真 k/e/d 交互 (await input_provider 收 k/e/d
-    + edit prompt) 在 Wave 2 才接通. Wave 1 接通 ephemeral 骨架 + cli REPL 入口,
-    HITL fold 进 Wave 2.
+    跟 sync review_phenomena 行为对齐, 简化点:
+    - edit 仅改 description (sync 同时改 name+description; async REPL 简流)
+    - 加 'q' 中途取消 (返已 process 的 kept)
+    - 无末尾 add 循环 (用户可 promote 后 /budget 等 slash 操作 graph)
 
     Args:
         phenomena: bootstrap 出的 L0 现象
-        input_provider: REPL 端注入的 async input callable (Wave 2 用); 当前 ignore
-        console: Rich console (Wave 2 用); 当前 ignore
+        input_provider: REPL 端注入的 async input callable.
+            None → 返全 phenomena (test / fallback path, accept all).
+        console: Rich console (rendering); None 时新建
 
     Returns:
-        list[VariableNode] — 同 phenomena 一份 (新 list, 防 caller mutate 原 list)
+        list[VariableNode] — kept (按用户 k/e 决策保留, edit 用 model_copy 不变原)
     """
-    del input_provider, console  # Wave 1 stub: 待 Wave 2 实装
-    return list(phenomena)
+    if input_provider is None:
+        return list(phenomena)
+
+    if console is None:
+        console = Console()
+
+    kept: list[VariableNode] = []
+    for i, p in enumerate(phenomena, start=1):
+        console.print(
+            f"\n[bold cyan][{i}/{len(phenomena)}][/bold cyan] {p.name}"
+        )
+        console.print(f"       {p.description}", style="dim")
+        try:
+            raw = await input_provider(
+                "       [k]eep / [e]dit description / [d]rop / [q]uit (默认 k): "
+            )
+        except (EOFError, KeyboardInterrupt):
+            console.print("[yellow]取消 HITL review (保留已选 phenomena).[/yellow]")
+            break
+        action = raw.strip().lower()
+
+        if action in ("q", "quit"):
+            console.print("[yellow]取消 HITL review.[/yellow]")
+            break
+        if action == "d":
+            continue
+        if action == "e":
+            try:
+                new_desc_raw = await input_provider(
+                    "       新 description (回车保持原值): "
+                )
+            except (EOFError, KeyboardInterrupt):
+                kept.append(p)
+                continue
+            new_desc = new_desc_raw.strip()
+            if new_desc:
+                kept.append(p.model_copy(update={"description": new_desc}))
+            else:
+                kept.append(p)
+            continue
+        # default ('k' 或其他) → keep
+        kept.append(p)
+
+    return kept
+
+
+async def review_insights_async(
+    state: CognitiveState,
+    input_provider: Callable[[str], Awaitable[str]] | None,
+    console: Console | None = None,
+) -> None:
+    """Phase 11 Wave 2: async k/e/d 版 review_insights (REPL HITL 入口).
+
+    跟 sync review_insights 行为对齐, 简化:
+    - 无 'v' view-full sub-prompt (Rich table 总览仍渲染, 用户可 promote 后看)
+    - edit 仅改 description (sync 改 name+description)
+    - 加 'q' 中途取消 (剩余 candidates 留 graph 中, 不清空 insight_candidates)
+
+    Side effects (同 sync):
+    - drop: state.graph.remove_node(cid) 级联删 edges; state.last_gains.pop(cid)
+    - edit: 改 candidate node.description + source="user"
+    - 完成: state.insight_candidates = []
+    - 取消 (q): state.insight_candidates 保持 (待用户下次 review)
+
+    Args:
+        state: 含 insight_candidates 的 CognitiveState (mutated in place)
+        input_provider: REPL 端 async input callable.
+            None → 不交互, 保留全 candidates, 清空 insight_candidates (accept all).
+        console: Rich console; None 时新建
+    """
+    if console is None:
+        console = Console()
+
+    _render_insights_table(state, console)
+
+    if input_provider is None:
+        # accept-all path: 全 keep + 清 candidates (跟 sync 完成态一致)
+        state.insight_candidates = []
+        return
+
+    candidates_snapshot = list(state.insight_candidates)
+    cancelled = False
+    for idx, cid in enumerate(candidates_snapshot, start=1):
+        if cid not in state.graph.nodes:
+            continue  # 已被前一步 drop
+        cand = state.graph.nodes[cid]
+        gain = state.last_gains.get(cid, 0.0)
+        cov = _coverage_for(state, cid)
+        console.print(
+            f"\n[bold cyan][{idx}/{len(candidates_snapshot)}][/bold cyan] "
+            f"{cid}  {cand.name}  (gain={gain:.2f})"
+        )
+        console.print(f"       描述: {cand.description}", style="dim")
+        console.print(f"       覆盖 {len(cov)} 条", style="dim")
+
+        try:
+            raw = await input_provider(
+                "       [k]eep / [e]dit description / [d]rop / [q]uit (默认 k): "
+            )
+        except (EOFError, KeyboardInterrupt):
+            console.print("[yellow]取消 HITL review.[/yellow]")
+            cancelled = True
+            break
+        action = raw.strip().lower()
+
+        if action in ("q", "quit"):
+            console.print("[yellow]取消 HITL review.[/yellow]")
+            cancelled = True
+            break
+        if action == "d":
+            state.graph.remove_node(cid)
+            state.last_gains.pop(cid, None)
+            continue
+        if action == "e":
+            try:
+                new_desc_raw = await input_provider(
+                    "       新 description (回车保持原值): "
+                )
+            except (EOFError, KeyboardInterrupt):
+                continue
+            new_desc = new_desc_raw.strip()
+            if new_desc:
+                updated = cand.model_copy(
+                    update={"description": new_desc, "source": "user"}
+                )
+                state.graph.replace_node(cid, updated)
+            continue
+        # default ('k' 或其他) → keep
+
+    if not cancelled:
+        state.insight_candidates = []
+        n_kept = sum(
+            1 for n in state.graph.nodes.values() if n.abstraction_level == 1
+        )
+        if n_kept == 0:
+            console.print(
+                "\n[yellow][WARN] 未保留任何 insight, session 标为 done. "
+                "可 explain new 重跑同问题.[/yellow]"
+            )
+        else:
+            console.print(f"\n[green]已保留 {n_kept} 个 insight.[/green]")
