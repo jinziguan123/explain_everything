@@ -225,6 +225,15 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
         cs.budget_per_session_remaining, new_session
     )
 
+    # Wave 2.5 review I-A: slash 改 chat_state 后立即 persist, 防进程中断丢
+    # 配置. ephemeral 无 persist (没 sid), 跳过 — 改动在 in-memory chat_state,
+    # promote_to_persistent 时拷过去.
+    if hasattr(chat, "persist") and not getattr(chat, "is_ephemeral", False):
+        try:
+            chat.persist()
+        except Exception:
+            pass  # persist 失败不该 block /budget 返回
+
     return [ChatEvent(
         type="slash_budget",
         content=(

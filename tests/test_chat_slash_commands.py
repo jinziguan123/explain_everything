@@ -554,8 +554,9 @@ class TestSlashBudgetConfig:
         assert "abc" in events[0].content
         assert chat.chat_state.budget_per_turn_limit == before_turn
 
+    @pytest.mark.parametrize("invalid_input", ["-1", "0"])
     @pytest.mark.asyncio
-    async def test_negative_or_zero_rejects(self):
+    async def test_negative_or_zero_rejects(self, invalid_input):
         """Provider 返 '-1' / '0' → slash_error."""
         from explain_engine.chat.session import ChatSession
         _make_done_session("s_bbb00007")
@@ -563,7 +564,7 @@ class TestSlashBudgetConfig:
         before_turn = chat.chat_state.budget_per_turn_limit
 
         async def fake_provider(prompt):
-            return "-1"
+            return invalid_input
         chat.input_provider = fake_provider
 
         events = await dispatch_slash(chat, "/budget")
