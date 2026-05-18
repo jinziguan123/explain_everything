@@ -1034,9 +1034,9 @@ class TestWave3Registry:
         for name in ["compress", "run", "check", "predict", "counterfactual", "rescore", "cf"]:
             assert name in names, f"/{name} not registered"
 
-    def test_total_count_is_15(self):
-        """8 base + 6 Wave 3 + 1 alias (cf) = 15."""
-        assert len(DEFAULT_COMMANDS) == 15
+    def test_total_count_is_18(self):
+        """8 base + 6 Wave 3 + 1 alias (cf) + 3 Wave 4 = 18."""
+        assert len(DEFAULT_COMMANDS) == 18
 
     def test_help_lists_all_wave3_commands(self):
         """/help 自动遍历 DEFAULT_COMMANDS — 验 Wave 3 6+1 都列出."""
@@ -1048,4 +1048,275 @@ class TestWave3Registry:
         events = asyncio.run(dispatch_slash(chat, "/help"))
         content = events[0].content
         for name in ["compress", "run", "check", "predict", "counterfactual", "cf", "rescore"]:
+            assert f"/{name}" in content, f"/help missing /{name}"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Phase 11 Wave 4: 3 cross-session slash — /list /lexicon /migrate.
+# Cross-session 不依赖 single session graph, ephemeral 也 work (不 reject).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestSlashList:
+    """Phase 11 Wave 4: /list cross-session inspect."""
+
+    @pytest.mark.asyncio
+    async def test_empty_project(self):
+        """No session → '当前 project 无 session.' info."""
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/list")
+        assert len(events) == 1
+        assert events[0].type == "slash_list"
+        assert "无 session" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_with_sessions(self):
+        """3 session 存在 → table 含 3 个 sid."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_11ee0001")
+        _make_done_session("s_11ee0002")
+        _make_done_session("s_11ee0003")
+        chat = ChatSession("s_11ee0001")
+        events = await dispatch_slash(chat, "/list")
+        assert events[0].type == "slash_list"
+        content = events[0].content
+        for sid in ["s_11ee0001", "s_11ee0002", "s_11ee0003"]:
+            assert sid in content
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_works(self):
+        """Wave 4 cross-session: ephemeral 不 reject."""
+        _make_done_session("s_11ee0004")
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/list")
+        assert events[0].type == "slash_list"
+        # 必须不是 slash_error (ephemeral reject 才会 slash_error)
+        assert "ephemeral" not in events[0].content.lower()
+        assert "s_11ee0004" in events[0].content
+
+
+class TestSlashLexicon:
+    """Phase 11 Wave 4: /lexicon cross-session inspect."""
+
+    def _seed_lexicon(self, vars_payload):
+        """Write knowledge/variables.json with given var entries."""
+        import json
+
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        storage = StorageV2()
+        knowledge_dir = storage.knowledge_dir()
+        knowledge_dir.mkdir(parents=True, exist_ok=True)
+        path = knowledge_dir / "variables.json"
+        lexicon = {
+            "version": "1.0",
+            "updated_at": "2026-05-18T00:00:00",
+            "variables": vars_payload,
+        }
+        path.write_text(json.dumps(lexicon), encoding="utf-8")
+
+    @pytest.mark.asyncio
+    async def test_empty_lexicon(self):
+        """No variables.json → 'lexicon 暂无变量' hint."""
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/lexicon")
+        assert len(events) == 1
+        assert events[0].type == "slash_lexicon"
+        assert "暂无变量" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_with_vars(self):
+        """Seed 2 var → table 含 global_id + name."""
+        self._seed_lexicon([
+            {
+                "global_id": "v_aaaaaaaa",
+                "name": "Alpha",
+                "canonical_mechanism": "mech-a",
+                "abstraction_level": 1,
+                "fitness": {
+                    "reuse_count": 3,
+                    "avg_essentialness": 0.85,
+                    "last_seen_at": "2026-05-15T12:00:00",
+                },
+            },
+            {
+                "global_id": "v_bbbbbbbb",
+                "name": "Beta",
+                "canonical_mechanism": "mech-b",
+                "abstraction_level": 2,
+                "fitness": {
+                    "reuse_count": 7,
+                    "avg_essentialness": 0.92,
+                    "last_seen_at": "2026-05-17T12:00:00",
+                },
+            },
+        ])
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/lexicon")
+        assert events[0].type == "slash_lexicon"
+        content = events[0].content
+        assert "Alpha" in content
+        assert "Beta" in content
+        assert "v_aaaaaaaa" in content
+        assert "v_bbbbbbbb" in content
+        assert "L1" in content
+        assert "L2" in content
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_works(self):
+        """Wave 4 cross-session: ephemeral 不 reject (即使 empty)."""
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/lexicon")
+        assert events[0].type == "slash_lexicon"
+        # 不该是 slash_error
+        assert events[0].type != "slash_error"
+
+
+class TestSlashMigrate:
+    """Phase 11 Wave 4: /migrate cross-session admin."""
+
+    @pytest.mark.asyncio
+    async def test_no_legacy_session(self, monkeypatch):
+        """detect 返 [] → 'no legacy' info, 不调 migrate_all."""
+        called = {"migrate_all": 0}
+
+        def fake_detect():
+            return []
+
+        def fake_migrate_all(dry_run=False):
+            called["migrate_all"] += 1
+            return []
+
+        monkeypatch.setattr(
+            "explain_engine.persistence.migration.detect_legacy_sessions",
+            fake_detect,
+        )
+        monkeypatch.setattr(
+            "explain_engine.persistence.migration.migrate_all",
+            fake_migrate_all,
+        )
+
+        eph = _new_ephemeral()
+        events = await dispatch_slash(eph, "/migrate")
+        assert len(events) == 1
+        assert events[0].type == "slash_migrate"
+        assert "无老" in events[0].content or "无 legacy" in events[0].content
+        assert called["migrate_all"] == 0
+
+    @pytest.mark.asyncio
+    async def test_confirm_n_cancels(self, monkeypatch):
+        """legacy 存在 + provider 返 'n' → 取消, migrate_all 不调用."""
+        called = {"migrate_all": 0}
+
+        def fake_detect():
+            return ["s_l1abcdef", "s_l2abcdef"]
+
+        def fake_migrate_all(dry_run=False):
+            called["migrate_all"] += 1
+            return []
+
+        monkeypatch.setattr(
+            "explain_engine.persistence.migration.detect_legacy_sessions",
+            fake_detect,
+        )
+        monkeypatch.setattr(
+            "explain_engine.persistence.migration.migrate_all",
+            fake_migrate_all,
+        )
+
+        eph = _new_ephemeral()
+
+        async def provider(prompt):
+            return "n"
+
+        eph.input_provider = provider
+        events = await dispatch_slash(eph, "/migrate")
+        assert events[0].type == "slash_migrate"
+        assert "已取消" in events[0].content
+        assert called["migrate_all"] == 0
+
+    @pytest.mark.asyncio
+    async def test_confirm_y_migrates(self, monkeypatch):
+        """legacy 存在 + provider 返 'y' → 调 migrate_all(dry_run=False) +
+        slash_migrate 含 '成功迁'."""
+        called = {"migrate_all_dry": None}
+
+        def fake_detect():
+            return ["s_l1abcdef", "s_l2abcdef"]
+
+        def fake_migrate_all(dry_run=False):
+            called["migrate_all_dry"] = dry_run
+            return [
+                {"sid": "s_l1abcdef", "migrated": True},
+                {"sid": "s_l2abcdef", "migrated": True},
+            ]
+
+        monkeypatch.setattr(
+            "explain_engine.persistence.migration.detect_legacy_sessions",
+            fake_detect,
+        )
+        monkeypatch.setattr(
+            "explain_engine.persistence.migration.migrate_all",
+            fake_migrate_all,
+        )
+
+        eph = _new_ephemeral()
+
+        async def provider(prompt):
+            return "y"
+
+        eph.input_provider = provider
+        events = await dispatch_slash(eph, "/migrate")
+        assert events[0].type == "slash_migrate"
+        assert "成功迁 2" in events[0].content
+        assert called["migrate_all_dry"] is False
+
+    @pytest.mark.asyncio
+    async def test_no_provider_display_only(self, monkeypatch):
+        """legacy 存在 + chat.input_provider=None → display-only, 不跑 migrate."""
+        called = {"migrate_all": 0}
+
+        def fake_detect():
+            return ["s_l1abcdef"]
+
+        def fake_migrate_all(dry_run=False):
+            called["migrate_all"] += 1
+            return []
+
+        monkeypatch.setattr(
+            "explain_engine.persistence.migration.detect_legacy_sessions",
+            fake_detect,
+        )
+        monkeypatch.setattr(
+            "explain_engine.persistence.migration.migrate_all",
+            fake_migrate_all,
+        )
+
+        eph = _new_ephemeral()
+        # input_provider 默认 None (EphemeralChatSession default)
+        events = await dispatch_slash(eph, "/migrate")
+        assert events[0].type == "slash_migrate"
+        # display info should mention count + skip
+        assert "1" in events[0].content
+        assert called["migrate_all"] == 0
+
+
+class TestWave4Registry:
+    """Phase 11 Wave 4: DEFAULT_COMMANDS 注册验证."""
+
+    def test_three_new_slash_registered(self):
+        names = {c.name for c in DEFAULT_COMMANDS}
+        for name in ["list", "lexicon", "migrate"]:
+            assert name in names, f"/{name} not registered"
+
+    def test_help_lists_all_wave4_commands(self):
+        """/help 自动遍历 — 验 Wave 4 3 个都列出."""
+        import asyncio
+
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_aa000004")
+        chat = ChatSession("s_aa000004")
+        events = asyncio.run(dispatch_slash(chat, "/help"))
+        content = events[0].content
+        for name in ["list", "lexicon", "migrate"]:
             assert f"/{name}" in content, f"/help missing /{name}"

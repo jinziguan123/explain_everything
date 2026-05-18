@@ -1,4 +1,4 @@
-"""Phase 9 Wave F.1 + Phase 11 Wave 3: 14 default slash commands + 1 alias.
+"""Phase 9 Wave F.1 + Phase 11 Wave 3/4: 17 default slash commands + 1 alias.
 
 设计参考 Claude Code 同款 slash 模式 — 本地 intercept 不走 LLM,
 廉价 inspection + exit + force compact 等管理命令; slash 不计入
@@ -13,8 +13,9 @@ transcript / turn_count (因为非真正 user→assistant 对话).
 
 设计参考 docs/plans/2026-05-17-conversational-cognitive-engine-plan.md Wave F.1
 + docs/plans/2026-05-18-chat-new-resume-slash-plan.md Wave 3 + Wave 4
-+ docs/plans/2026-05-18-phase11-repl-unification-plan.md Wave 3
-  (cli subcommand → slash: /compress /run /check /predict /counterfactual /rescore + /cf).
++ docs/plans/2026-05-18-phase11-repl-unification-plan.md Wave 3 + Wave 4
+  (cli subcommand → slash: /compress /run /check /predict /counterfactual /rescore + /cf
+   Wave 4: /list /lexicon /migrate — cross-session, ephemeral 也 work).
 """
 
 from __future__ import annotations
@@ -48,6 +49,22 @@ class SlashCommand:
     name: str
     description: str
     handler: Callable[[ChatSession, list[str]], Awaitable[list[ChatEvent]]]
+
+
+def _render_table_to_string(table) -> str:
+    """Phase 11 Wave 4: Rich Table → str (no terminal) DRY helper.
+
+    用 force_terminal=False + Console(file=StringIO) 让 Rich 渲染到内存,
+    供 slash_{list,lexicon} 把 table 内容塞进 ChatEvent.content (str).
+    width 固 120 避终端宽度变化导致 test flake.
+    """
+    from io import StringIO
+
+    from rich.console import Console as _Console
+
+    buf = StringIO()
+    _Console(file=buf, force_terminal=False, width=120).print(table)
+    return buf.getvalue()
 
 
 async def _handle_quit(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
@@ -794,8 +811,181 @@ async def _handle_rescore(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     )]
 
 
-# Registry — 14 default slash commands + 1 alias (/cf → counterfactual).
-# 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作 → engines"分组.
+# ─────────────────────────────────────────────────────────────────────────
+# Phase 11 Wave 4: 3 cross-session slash — /list /lexicon /migrate.
+# 不依赖单 session graph, ephemeral 也 work (不 reject). 复用 cli 同名
+# subcommand 的 render 逻辑, table 渲染到内存 (StringIO + force_terminal=False)
+# 后塞进 ChatEvent.content.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def _handle_list(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 11 Wave 4: 列当前 project 所有 session (cross-session inspect).
+
+    ephemeral 也 work (不依赖 chat.state). 直接 SessionStore().list() 取
+    metadata.json, Rich Table 渲染到 string 塞进 slash_list event.
+    """
+    from datetime import datetime
+
+    from rich.table import Table
+
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.persistence.session import SessionStore
+
+    metas = SessionStore().list()
+    if not metas:
+        return [ChatEvent(
+            type="slash_list",
+            content="当前 project 无 session.",
+        )]
+
+    table = Table(title=f"Sessions ({len(metas)})")
+    table.add_column("ID", style="cyan")
+    table.add_column("问题", style="bold")
+    table.add_column("Stage")
+    table.add_column("Created")
+    for m in metas:
+        ts = datetime.fromtimestamp(m.created_at).strftime("%Y-%m-%d %H:%M")
+        table.add_row(m.session_id, m.question, m.stage, ts)
+
+    return [ChatEvent(
+        type="slash_list",
+        content=_render_table_to_string(table),
+    )]
+
+
+async def _handle_lexicon(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 11 Wave 4: 列 cross-session lexicon variables (Phase 10).
+
+    读 ~/.explain/projects/<proj>/knowledge/variables.json. 空时给 hint
+    引导跑 /compress 或退出 chat (chat aclose 会 flush lexicon).
+    """
+    from rich.table import Table
+
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.engines.lexicon import _load_lexicon
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2()
+    lexicon_path = storage.knowledge_dir() / "variables.json"
+    lex = _load_lexicon(lexicon_path)
+
+    variables = lex["variables"]
+    if not variables:
+        return [ChatEvent(
+            type="slash_lexicon",
+            content="lexicon 暂无变量. 跑 /compress 或退出 chat 让 aclose flush.",
+        )]
+
+    table = Table(title=f"Variable Lexicon ({len(variables)} vars)")
+    table.add_column("global_id", style="cyan")
+    table.add_column("名称", style="bold")
+    table.add_column("Level", justify="right")
+    table.add_column("reuse", justify="right")
+    table.add_column("avg_ess", justify="right")
+    table.add_column("last_seen", style="dim")
+    for v in variables:
+        table.add_row(
+            v["global_id"],
+            v["name"],
+            f"L{v['abstraction_level']}",
+            str(v["fitness"]["reuse_count"]),
+            f"{v['fitness']['avg_essentialness']:.2f}",
+            v["fitness"]["last_seen_at"][:10],
+        )
+
+    return [ChatEvent(
+        type="slash_lexicon",
+        content=_render_table_to_string(table),
+    )]
+
+
+async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 11 Wave 4: 一次性迁老 sessions/*.json → storage_v2 layout.
+
+    流程:
+    1. detect_legacy_sessions() — 扫当前 cwd sessions/ 找 legacy
+    2. 无 legacy → 直接 info, 返
+    3. 有 legacy + 无 input_provider → display info (test / 非 REPL)
+    4. 有 legacy + 有 provider → 弹 confirm prompt; 'y' 跑 migrate_all
+       (dry_run=False), 否则取消
+
+    Migration API: explain_engine.persistence.migration —
+    detect_legacy_sessions() + migrate_all(dry_run=). 失败吞 → slash_error.
+    """
+    import asyncio
+
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.persistence.migration import (
+        detect_legacy_sessions,
+        migrate_all,
+    )
+
+    try:
+        sids = await asyncio.to_thread(detect_legacy_sessions)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"/migrate detect 失败: {type(exc).__name__}: {exc}",
+        )]
+
+    if not sids:
+        return [ChatEvent(
+            type="slash_migrate",
+            content="无老 sessions/*.json 需迁 (或目录不存在).",
+        )]
+
+    n = len(sids)
+    if chat.input_provider is None:
+        return [ChatEvent(
+            type="slash_migrate",
+            content=(
+                f"检测到 {n} legacy session(s): {sids}. "
+                f"需在 REPL (input_provider 已挂) 中调用 /migrate 确认; "
+                f"当前无 provider, 跳过."
+            ),
+        )]
+
+    try:
+        confirm = (await chat.input_provider(
+            f"将迁 {n} session 到 ~/.explain/projects/<proj>/sessions/. "
+            f"确认 (y/n)? "
+        )).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return [ChatEvent(type="slash_migrate", content="已取消.")]
+
+    if confirm not in ("y", "yes"):
+        return [ChatEvent(type="slash_migrate", content="已取消.")]
+
+    try:
+        results = await asyncio.to_thread(migrate_all, dry_run=False)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"/migrate 失败: {type(exc).__name__}: {exc}",
+        )]
+
+    migrated = [r["sid"] for r in results if r["migrated"]]
+    skipped = [(r["sid"], r["reason"]) for r in results if not r["migrated"]]
+
+    lines = [f"成功迁 {len(migrated)}/{len(results)} session."]
+    if migrated:
+        head = migrated[:5]
+        tail = "..." if len(migrated) > 5 else ""
+        lines.append(f"  migrated: {head}{tail}")
+    if skipped:
+        lines.append(f"  skipped ({len(skipped)}):")
+        for sid, reason in skipped[:5]:
+            lines.append(f"    {sid}: {reason}")
+
+    return [ChatEvent(
+        type="slash_migrate",
+        content="\n".join(lines),
+    )]
+
+
+# Registry — 17 default slash commands + 1 alias (/cf → counterfactual).
+# 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作 → engines → cross-session"分组.
 DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("quit", "Exit chat session (saves first).", _handle_quit),
     SlashCommand("help", "List slash commands and available tools.", _handle_help),
@@ -813,6 +1003,10 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("counterfactual", "Counterfactual: 收 intervention text 后跑 (副作用 0).", _handle_counterfactual),
     SlashCommand("cf", "(alias of /counterfactual)", _handle_counterfactual),
     SlashCommand("rescore", "重评 edge.confidence (manifests_as + causes).", _handle_rescore),
+    # Phase 11 Wave 4: 3 cross-session slash (不依赖 single session, ephemeral 也 work).
+    SlashCommand("list", "列当前 project 所有 session (cross-session).", _handle_list),
+    SlashCommand("lexicon", "列 cross-session lexicon variables.", _handle_lexicon),
+    SlashCommand("migrate", "一次性迁老 sessions/*.json → storage_v2 layout.", _handle_migrate),
 )
 
 

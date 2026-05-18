@@ -140,6 +140,9 @@ async def enter_repl_async() -> None:
                 continue
 
             # real chat 时: query_loop
+            # Wave 1 review I-4 fold: slash_switch_session 后 break 出 async for,
+            # 让外 while 下次 iter 用新 chat. 否则后续 yield 的 event 作用到
+            # 新 chat (绑定 mistake).
             quit_requested = False
             try:
                 async for ev in chat.handle_user_input(text, llm=llm):
@@ -156,7 +159,7 @@ async def enter_repl_async() -> None:
                             console.print(
                                 f"[red]切换失败: {type(exc).__name__}: {exc}[/red]"
                             )
-                        continue
+                        break  # 退出 async for, 老 chat generator 不再继续 yield
                     _render_event(console, ev)
                     if ev.type == "slash_quit":
                         quit_requested = True
