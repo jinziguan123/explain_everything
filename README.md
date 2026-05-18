@@ -22,8 +22,8 @@
 
 ## Status
 
-**Phase 9 milestone (2026-05-17)** — Conversational Cognitive Engine (Claude Code 风格 chat REPL)。
-634 tests pass，ruff 0。Phase 0-9 全部实施完，Phase 10 直接 motivation：
+**Phase 9 milestone (2026-05-17/18)** — Conversational Cognitive Engine (Claude Code 风格 chat REPL)。
+678 tests pass，ruff 0。Phase 0-9 全部实施完 + 2026-05-18 增强 (chat 内 /new + /resume slash 命令 + prompt_toolkit REPL UX 升级)。Phase 10 直接 motivation：
 cross-session knowledge pool 填充 / Theory Formation 起步 / real Anthropic tool_use adapter
 （详见 [Phase 9 acceptance evidence](docs/plans/2026-05-17-conversational-cognitive-engine-acceptance.md)）。
 
@@ -33,7 +33,7 @@ cross-session knowledge pool 填充 / Theory Formation 起步 / real Anthropic t
 用户 `explain chat <sid>` 进 REPL, LLM 自主调度 7 tool 边推理边给 narrative.
 
 **7 个 tool** (LLM 可调度): expand / compress / check / predict / counterfactual / add_observation / read_node
-**6 个 slash command** (本地 intercept, bypass LLM): /quit /help /show /budget /compact /save
+**8 个 slash command** (本地 intercept, bypass LLM): /quit /help /show /budget /compact /save /new /resume
 
 新 CLI commands:
 
@@ -48,6 +48,20 @@ cross-session knowledge pool 填充 / Theory Formation 起步 / real Anthropic t
 - ✅ **Dual budget + smart HITL** (Q5γ) — per-turn (10) + per-session (50), `add_observation(source=llm_inferred)` 触发 user confirm
 - ✅ **3-tier compaction** (Q6γ) — microCompact (drop stale tool_result) + sessionMemory splice + emergency sync compact
 - ✅ **Project-based persistence** (Q7γ-1) — `~/.explain/projects/<project_id>/sessions/<sid>/` 5 sidecar files + `knowledge/` 占位 Phase 10+
+
+**2026-05-18 增强** — chat 内 session 管理 + prompt_toolkit REPL UX:
+
+- ✅ **/new `<question>`** — 在 chat 内建新 session (复用 bootstrap + HITL), 自动 in-process 热切到新 session
+- ✅ **/resume** — numbered picker 列当前 project 历史 session, 选号热切 (`SessionStore.list()` 直接复用)
+- ✅ **slash 自动联想** — 输 `/` 弹下拉菜单含 8 cmd + description, 输 `/r` filter 到 `resume`
+- ✅ **ctrl+o log popup** — chat 模式期间 LLM HTTP + session_memory_writer log 默认隐藏 (灰色样式), ctrl+o 弹 message_dialog 看 buffered log
+- ✅ **bottom toolbar** — 显示 `ctrl+o: log (N lines buffered)` + 退出提示
+- ✅ **patch_stdout** — LLM 调用期间 log 不撞 prompt 编辑行 (修 Phase 9 原 readline 撞 prompt regression)
+- ✅ **中文 backspace 无残影** — prompt_toolkit 替 readline, 修 Phase 9 多字节 cursor 错位 bug
+
+设计 / 落地 docs:
+- design: [docs/plans/2026-05-18-chat-new-resume-slash-design.md](docs/plans/2026-05-18-chat-new-resume-slash-design.md), [docs/plans/2026-05-18-chat-repl-prompt-toolkit-design.md](docs/plans/2026-05-18-chat-repl-prompt-toolkit-design.md)
+- acceptance: [docs/plans/2026-05-18-chat-repl-prompt-toolkit-acceptance.md](docs/plans/2026-05-18-chat-repl-prompt-toolkit-acceptance.md) (8 步手测 checklist)
 
 文档:
 
