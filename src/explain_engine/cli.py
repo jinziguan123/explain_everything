@@ -857,7 +857,15 @@ def _render_event(con: Console, event) -> None:
         name = getattr(event, "tool_name", "?")
         con.print(f"[dim]← {escape(str(name))}: {escape(result_str)}[/dim]")
     elif t == "turn_complete":
-        con.print()
+        # Wave F.2 hotfix: surface silent fallback marker.
+        content_str = str(event.content or "")
+        if content_str == "llm_client_lacks_tools_api":
+            con.print(
+                "[yellow](no response: LLM dispatch 未实装. "
+                "见启动时警告. 试 /show 或其他 slash 命令.)[/yellow]"
+            )
+        else:
+            con.print()
     elif t == "budget_exhausted":
         scope = getattr(event, "scope", "unknown")
         con.print(
@@ -928,10 +936,21 @@ def chat(
 
     llm = make_llm_client()
 
+    # Phase 9 Wave F.2 hotfix: warn loudly if LLMClient lacks chat_with_tools.
+    # query_loop catches AttributeError + yields TurnComplete silently — user 看到的是
+    # "输入后什么都不发生", 而非 "LLM dispatch 未实装". 这里 startup 时显式提示.
+    has_tools_api = hasattr(llm, "chat_with_tools")
+
     console.print(
         f"[dim]Loaded session {session_id}. "
         f"Type /help for commands. /quit to exit.[/dim]"
     )
+    if not has_tools_api:
+        console.print(
+            "[yellow]⚠️  LLM dispatch 未实装 (LLMClient.chat_with_tools 不存在). "
+            "自然语言输入会无响应; 仅 slash 命令工作 (/help /show /budget /quit etc.). "
+            "见 Phase 9 Wave F.3 计划接通 Anthropic SDK native tool_use API.[/yellow]"
+        )
 
     async def repl() -> None:
         while True:
