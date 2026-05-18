@@ -63,12 +63,34 @@ def _get_store() -> SessionStore:
 @app.command()
 def new(
     question: str = typer.Argument(..., help="为什么 X 问题"),
+    no_chat: bool = typer.Option(
+        False, "--no-chat",
+        help="创建 session 后不进 chat REPL, 仅 print sid 退出 (脚本/CI 用)",
+    ),
+    tool_budget_per_turn: int = typer.Option(
+        10, "--tool-budget-per-turn",
+        help="Max tool calls per chat turn (默认进 chat 时生效)",
+    ),
+    tool_budget_per_session: int = typer.Option(
+        50, "--tool-budget-per-session",
+        help="Max tool calls per chat session (默认进 chat 时生效)",
+    ),
 ) -> None:
-    """启动新 session：Bootstrap + HITL 1 + 落 session。"""
-    asyncio.run(_run_new(question))
+    """启动新 session: Bootstrap + HITL + (默认) 直接进 chat REPL.
+
+    `--no-chat` 仅 print sid 退出 (脚本/CI 场景).
+    """
+    asyncio.run(_run_new(
+        question, no_chat, tool_budget_per_turn, tool_budget_per_session,
+    ))
 
 
-async def _run_new(question: str) -> None:
+async def _run_new(
+    question: str,
+    no_chat: bool = False,
+    tool_budget_per_turn: int = 10,
+    tool_budget_per_session: int = 50,
+) -> None:
     settings = Settings()
     llm = make_llm_client()
 
@@ -103,7 +125,22 @@ async def _run_new(question: str) -> None:
         raise typer.Exit(3) from exc
 
     console.print(f"\n[green]Session {meta.session_id} 已保存。[/green]")
-    console.print(f"       下一步：explain show {meta.session_id}")
+
+    if no_chat:
+        console.print(f"       下一步：explain show {meta.session_id}")
+        return
+
+    # 默认: 直接进 chat REPL. 复用 cli.chat 的 _run_chat_repl_async (含
+    # prompt_toolkit / log handler swap / 切换 logic). LLMClient 复用同 instance.
+    console.print(
+        "       进入 chat REPL (--no-chat 可跳过).\n"
+    )
+    await _run_chat_repl_async(
+        initial_sid=meta.session_id,
+        llm=llm,
+        tool_budget_per_turn=tool_budget_per_turn,
+        tool_budget_per_session=tool_budget_per_session,
+    )
 
 
 @app.command()
