@@ -19,8 +19,13 @@ import logging
 # 注: macOS libedit Unicode 不完美, 如果还有问题, 后续可考虑 prompt_toolkit.
 import readline  # noqa: F401 — imported for side effect (enable line editing)
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import typer
+
+if TYPE_CHECKING:
+    from explain_engine.chat.session import ChatSession
+    from explain_engine.llm.client import LLMClient
 from rich.console import Console
 from rich.table import Table
 
@@ -924,7 +929,7 @@ def chat(
 
 
 def _apply_budget_flags(
-    chat_session,
+    chat_session: "ChatSession",
     tool_budget_per_turn: int,
     tool_budget_per_session: int,
 ) -> None:
@@ -944,7 +949,7 @@ def _apply_budget_flags(
 
 async def _run_chat_repl_async(
     initial_sid: str,
-    llm,
+    llm: "LLMClient | None",
     tool_budget_per_turn: int,
     tool_budget_per_session: int,
 ) -> None:
@@ -996,24 +1001,37 @@ async def _run_chat_repl_async(
             async for event in chat_session.handle_user_input(
                 user_input, llm=llm
             ):
+                # I-1 (review 2026-05-18): slash_switch_session 是内部 signal,
+                # 不渲染 dict payload (UX noise: `{'sid': 's_xxx'}` 字面 dump).
+                # 实际 "Switched to X" 由切换分支显式 print.
+                if event.type == "slash_switch_session":
+                    switch_to_sid = event.content["sid"]
+                    continue
                 _render_event(console, event)
                 if event.type == "slash_quit":
                     quit_requested = True
-                elif event.type == "slash_switch_session":
-                    switch_to_sid = event.content["sid"]
         except Exception as exc:
             console.print(f"[red]Error: {type(exc).__name__}: {exc}[/red]")
             continue
 
         # 单 turn 结束后再切, 避免 iter 中 mutate
         if switch_to_sid and switch_to_sid != chat_session.sid:
+            # I-2 (review 2026-05-18): snapshot 切前 sid, fallback 回上次成功的,
+            # 不回 initial. 防多次切换后 surprise (用户期望: 失败 → 回当前 sid).
+            old_sid = chat_session.sid
             await chat_session.aclose()
             try:
                 chat_session = ChatSession(switch_to_sid, llm=llm)
             except (FileNotFoundError, ChatSessionLoadError) as exc:
                 console.print(f"[red]切换失败: {exc}[/red]")
-                # 退回原 sid (旧 chat 已 aclose, 重新打开)
-                chat_session = ChatSession(initial_sid, llm=llm)
+                try:
+                    chat_session = ChatSession(old_sid, llm=llm)
+                except (FileNotFoundError, ChatSessionLoadError) as recover_exc:
+                    console.print(
+                        f"[red]恢复原 session ({old_sid}) 也失败: "
+                        f"{recover_exc}. 退出.[/red]"
+                    )
+                    return
             _apply_budget_flags(
                 chat_session, tool_budget_per_turn, tool_budget_per_session
             )

@@ -111,3 +111,59 @@ class TestReplSwitchSession:
 
         # 第 1 input 时 chat 仍是 src, 第 2 input 时已切到 dst
         assert observed_sids == ["s_22222001", "s_22222002"]
+
+    @pytest.mark.asyncio
+    async def test_switch_failure_recovers_to_previous_not_initial(
+        self, monkeypatch
+    ) -> None:
+        """切失败时回到上次成功 sid, 不是 initial. 防 I-2 (review 2026-05-18) 回归.
+
+        场景: 启动 sid_A → /new 切到 sid_B (成功) → /resume 选 sid_X (sid_X 不存在,
+        切失败). 应该回到 sid_B 而不是 sid_A.
+        """
+        from explain_engine.chat.session import ChatEvent, ChatSession
+        from explain_engine.cli import _run_chat_repl_async
+        from tests.test_chat_session import _make_done_session
+
+        _make_done_session("s_aaaaaa01")  # initial
+        _make_done_session("s_aaaaaa02")  # 第一次切的目标 (成功)
+        # s_aaaaaaff 故意不建 → 第二次切会 FileNotFoundError
+
+        inputs = iter([
+            "switch to b",   # 切 A → B 成功
+            "switch to x",   # 切 B → X 失败
+            "/quit",          # 退出
+        ])
+        monkeypatch.setattr(
+            "builtins.input", lambda *a, **kw: next(inputs)
+        )
+
+        observed_sids: list[str] = []
+
+        async def fake_handle(self, text, llm=None):
+            observed_sids.append(self.sid)
+            if text == "switch to b":
+                yield ChatEvent(
+                    type="slash_switch_session",
+                    content={"sid": "s_aaaaaa02"},
+                )
+            elif text == "switch to x":
+                yield ChatEvent(
+                    type="slash_switch_session",
+                    content={"sid": "s_aaaaaaff"},  # 不存在
+                )
+            elif text == "/quit":
+                yield ChatEvent(type="slash_quit", content="bye")
+
+        monkeypatch.setattr(ChatSession, "handle_user_input", fake_handle)
+
+        await _run_chat_repl_async(
+            initial_sid="s_aaaaaa01",
+            llm=None,
+            tool_budget_per_turn=10,
+            tool_budget_per_session=50,
+        )
+
+        # 第 1 input: A. 第 2 input: B (切 A→B 成功后). 第 3 input: 应该是 B
+        # (切 B→X 失败, recovery 回 B 不是 A).
+        assert observed_sids == ["s_aaaaaa01", "s_aaaaaa02", "s_aaaaaa02"]
