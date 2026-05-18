@@ -164,16 +164,25 @@ class TestChatSessionLoadError:
 
 
 class TestChatSessionDIRemoval:
-    """I1 regression: storage 参数已移除; constructor 仅接 sid."""
+    """I1 regression: storage 参数已移除 (会撞内部 env-driven SessionStore).
 
-    def test_init_signature_takes_only_sid(self) -> None:
+    2026-05-18 放宽: 允许其他 optional kwarg (如本日加的 llm), 但 storage 永远不能复活.
+    """
+
+    def test_init_signature_does_not_take_storage(self) -> None:
+        """I1 regression: storage 参数已移除 (会撞内部 env-driven SessionStore).
+
+        放宽: 允许其他 optional kwarg (如 2026-05-18 加的 llm), 但 storage 永远不能复活.
+        """
         import inspect
 
         from explain_engine.chat.session import ChatSession
         sig = inspect.signature(ChatSession.__init__)
         params = list(sig.parameters.keys())
-        # self + sid only
-        assert params == ["self", "sid"]
+        assert "storage" not in params, f"storage param resurrected: {params}"
+        assert params[:2] == ["self", "sid"], (
+            f"sid must remain positional 2nd param: {params[:2]}"
+        )
 
 
 class TestAlignmentPersistenceE2B:
@@ -201,3 +210,18 @@ class TestAlignmentPersistenceE2B:
         assert chat2.state.last_input_alignment_report is not None
         assert chat2.state.last_input_alignment_report.overlap_score == 4
         assert chat2.state.last_input_alignment_report.question_subject == "Q主体"
+
+
+class TestChatSessionLLM:
+    def test_default_llm_is_none(self) -> None:
+        """Backward compat: 不传 llm 时 chat.llm is None."""
+        _make_done_session("s_11111111")
+        chat = ChatSession("s_11111111")
+        assert chat.llm is None
+
+    def test_accepts_llm_kwarg(self) -> None:
+        """ChatSession(sid, llm=client) — slash /new 路径需要."""
+        _make_done_session("s_22222222")
+        sentinel = object()  # 任意 stub, 此 test 不调它
+        chat = ChatSession("s_22222222", llm=sentinel)  # type: ignore[arg-type]
+        assert chat.llm is sentinel

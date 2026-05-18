@@ -98,8 +98,14 @@ class ChatEvent:
 class ChatSession:
     """Phase 9 outer orchestrator. Wraps query_loop (Task C.2)."""
 
-    def __init__(self, sid: str):
+    def __init__(self, sid: str, llm: LLMClient | None = None):
         """加载 session 的 5 sidecar files.
+
+        Args:
+            sid: session id
+            llm: optional LLMClient — slash handler 调 bootstrap / 其他需 LLM
+                 的操作时通过 chat.llm 访问. 默认 None (backward compat: 老 caller +
+                 不需 LLM 的 slash 不受影响).
 
         Phase 9 Wave C.1 fix · I1: 去掉了 storage 参数 — 内部 SessionStore
         本来就 env-driven (EXPLAIN_HOME / EXPLAIN_PROJECT_ID), 传 custom
@@ -110,6 +116,7 @@ class ChatSession:
             ChatSessionLoadError: 5 sidecar 中任一损坏 (I2)
         """
         self.sid = sid
+        self.llm = llm  # NEW: for /new handler chain (2026-05-18 slash 扩展)
         self.storage = StorageV2()  # env-based default
         self._session_store = SessionStore()  # for graph + metadata
         # Load Session (metadata + state.graph)
