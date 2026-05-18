@@ -1007,6 +1007,14 @@ async def _run_chat_repl_async(
         # ── Build prompt_toolkit session (reuse across turns for history) ──
         pt_session = _make_session(log_handler)
 
+        # F-1 (2026-05-18 Wave 5 review follow-up): 暴露 prompt_toolkit input
+        # 给 slash handler 用 (e.g. /resume picker 收选号). 让 sub-prompt 也走
+        # prompt_toolkit, 享 bottom toolbar + ctrl+o + 中文 backspace fix,
+        # 而非 bare input() 回 readline regression.
+        chat_session.input_provider = lambda prompt: read_input(
+            pt_session, prompt_text=prompt
+        )
+
         while True:
             try:
                 user_input = await read_input(pt_session)
@@ -1057,6 +1065,11 @@ async def _run_chat_repl_async(
                         return
                 _apply_budget_flags(
                     chat_session, tool_budget_per_turn, tool_budget_per_session
+                )
+                # F-1: 切 session 后新 ChatSession 实例的 input_provider 默认 None,
+                # 需重新挂 lambda 让下次 /resume picker 仍走 prompt_toolkit.
+                chat_session.input_provider = lambda prompt: read_input(
+                    pt_session, prompt_text=prompt
                 )
                 console.print(
                     f"[green]Switched to {chat_session.sid}.[/green]"

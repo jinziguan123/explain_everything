@@ -294,11 +294,15 @@ async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
         table.add_row(f"{is_current}{i}", m.session_id, m.question, m.stage, ts)
     console.print(table)
 
-    # 收 user input
+    # 收 user input. F-1 (2026-05-18): chat.input_provider set 时 (REPL 启动
+    # 时挂上 read_input wrapper), 走 prompt_toolkit 享 bottom toolbar / ctrl+o /
+    # 中文 backspace fix; 否则 fallback bare input (test / 非 chat REPL 路径).
+    prompt_msg = "选 # (q 取消): "
     try:
-        choice = await asyncio.to_thread(
-            input, "选 # (q 取消): "
-        )
+        if chat.input_provider is not None:
+            choice = await chat.input_provider(prompt_msg)
+        else:
+            choice = await asyncio.to_thread(input, prompt_msg)
     except (EOFError, KeyboardInterrupt):
         return [ChatEvent(type="slash_resume", content="已取消.")]
 

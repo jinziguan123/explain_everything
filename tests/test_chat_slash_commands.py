@@ -352,3 +352,79 @@ class TestSlashResume:
             e for e in events if e.type == "slash_resume"
         )
         assert "已在" in info.content or "current" in info.content.lower()
+
+
+class TestSlashResumeProvider:
+    """F-1 (2026-05-18 review): /resume 通过 chat.input_provider 拿 input.
+
+    若 input_provider set (e.g. cli REPL 启动时挂上), handler 用它而非
+    bare input() 走 fallback. 保证 chat 模式内 picker 也走 prompt_toolkit.
+    """
+
+    @pytest.mark.asyncio
+    async def test_picks_session_uses_input_provider(self, monkeypatch):
+        """Set chat.input_provider 后, handler 用 provider 不走 to_thread(input)."""
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.persistence.session import (
+            Session,
+            SessionMeta,
+            SessionStore,
+        )
+        from explain_engine.schema.graph import ExplanationGraph
+        from explain_engine.schema.state import CognitiveState
+
+        _make_done_session("s_f1f10001")
+        # 加第二 session, created_at 更晚让它排第 1
+        meta_b = SessionMeta.new(question="qb")
+        meta_b.session_id = "s_f1f10099"
+        meta_b.created_at = 9999999999.0
+        state_b = CognitiveState(
+            graph=ExplanationGraph(root_question="qb"),
+            budget_remaining=10, root_question="qb",
+        )
+        SessionStore().save(Session(meta=meta_b, state=state_b))
+
+        chat = ChatSession("s_f1f10001")
+
+        provider_calls = []
+
+        async def fake_provider(prompt_text):
+            provider_calls.append(prompt_text)
+            return "1"
+
+        chat.input_provider = fake_provider
+
+        # 同时 monkeypatch builtins.input 抛 — 验证 handler 没 fallback
+        def _input_should_not_be_called(*a, **kw):
+            raise AssertionError(
+                "handler 应该用 input_provider, 不该走 input() fallback"
+            )
+
+        monkeypatch.setattr("builtins.input", _input_should_not_be_called)
+
+        events = await dispatch_slash(chat, "/resume")
+        types = [e.type for e in events]
+        assert "slash_switch_session" in types
+        # provider 被调一次
+        assert len(provider_calls) == 1
+        assert "选" in provider_calls[0]
+        # switch 到 latest session
+        switch_ev = next(e for e in events if e.type == "slash_switch_session")
+        assert switch_ev.content["sid"] == "s_f1f10099"
+
+    @pytest.mark.asyncio
+    async def test_no_provider_falls_back_to_input(self, monkeypatch):
+        """chat.input_provider is None (default), handler fallback to_thread(input)."""
+        from explain_engine.chat.session import ChatSession
+
+        _make_done_session("s_f1f20002")
+        chat = ChatSession("s_f1f20002")  # 不 set input_provider
+
+        assert chat.input_provider is None  # baseline
+
+        monkeypatch.setattr("builtins.input", lambda *a, **kw: "q")
+        events = await dispatch_slash(chat, "/resume")
+        # q 取消 → slash_resume info, 无 switch
+        types = [e.type for e in events]
+        assert "slash_resume" in types
+        assert "slash_switch_session" not in types

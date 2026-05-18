@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -128,6 +128,15 @@ class ChatSession:
         """
         self.sid = sid
         self.llm = llm  # NEW: for /new handler chain (2026-05-18 slash 扩展)
+        # F-1 (2026-05-18 Wave 5 review follow-up): optional async input callable
+        # for slash handler 需 sub-prompt (e.g. /resume picker 收选号). REPL caller
+        # (cli._run_chat_repl_async) 启动时 set →
+        # lambda prompt: read_input(pt_session, prompt_text=prompt).
+        # Handler 用 `await chat.input_provider(prompt)` 拿用户输入, 自动走
+        # prompt_toolkit (bottom toolbar / ctrl+o / 中文 backspace fix).
+        # 默认 None — 旧 caller (test / cli new 路径) 不影响, handler fallback
+        # to_thread(input).
+        self.input_provider: Callable[[str], Awaitable[str]] | None = None
         self.storage = StorageV2()  # env-based default
         self._session_store = SessionStore()  # for graph + metadata
         # Load Session (metadata + state.graph)
