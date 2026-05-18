@@ -16,7 +16,7 @@
 ### S1: `explain` 默认进 REPL ephemeral
 
 ```bash
-.venv/bin/python -m explain_engine
+.venv/bin/python -m explain_engine.cli
 # 或 `explain` (若已 pip install)
 ```
 
@@ -124,18 +124,18 @@ REPL 内输 `/budget`. **预期**: 显 current limit (e.g. `per-turn: 10, per-se
 REPL 内 `/quit` 退出. 跑老 cli:
 
 ```bash
-.venv/bin/python -m explain_engine show <sid1>
-.venv/bin/python -m explain_engine compress <sid2> --no-chat  # 注: Wave 2.5 删了 --tool-budget-* flag, --no-chat 仍保
-.venv/bin/python -m explain_engine new "新问题" --no-chat
-.venv/bin/python -m explain_engine lexicon
-.venv/bin/python -m explain_engine list
-.venv/bin/python -m explain_engine check <sid1>
-.venv/bin/python -m explain_engine predict <sid1> "如果 X 增加"
-.venv/bin/python -m explain_engine counterfactual <sid1> "把 Y 替换为 Z"
-.venv/bin/python -m explain_engine rescore <sid1>
-.venv/bin/python -m explain_engine run <sid1>
-.venv/bin/python -m explain_engine migrate --dry-run
-.venv/bin/python -m explain_engine chat <sid1>
+.venv/bin/python -m explain_engine.cli show <sid1>
+.venv/bin/python -m explain_engine.cli compress <sid2>  # 注: compress 无 --no-chat flag (仅 new 有)
+.venv/bin/python -m explain_engine.cli new "新问题" --no-chat
+.venv/bin/python -m explain_engine.cli lexicon
+.venv/bin/python -m explain_engine.cli list
+.venv/bin/python -m explain_engine.cli check <sid1>
+.venv/bin/python -m explain_engine.cli predict <sid1> "如果 X 增加"
+.venv/bin/python -m explain_engine.cli counterfactual <sid1> "把 Y 替换为 Z"
+.venv/bin/python -m explain_engine.cli rescore <sid1>
+.venv/bin/python -m explain_engine.cli run <sid1>
+.venv/bin/python -m explain_engine.cli migrate --dry-run
+.venv/bin/python -m explain_engine.cli chat <sid1>
 ```
 
 **预期**: 全部老 typer subcommand 仍 work, 0 break. 12 个 cmd 是 Phase 0-10 的接口, Phase 11 不许动.

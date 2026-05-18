@@ -156,6 +156,10 @@ async def enter_repl_async() -> None:
                 async for ev in chat.handle_user_input(text, llm=llm):
                     if ev.type == "slash_switch_session":
                         new_sid = ev.content["sid"]
+                        # Final review I-1: snapshot old_sid 前 aclose, 切换
+                        # 失败 (e.g. graph.json corrupt) 时 fallback 重建 old
+                        # chat 防 chat 指向 already-closed instance.
+                        old_sid = chat.sid
                         try:
                             await chat.aclose()
                             chat = ChatSession(new_sid, llm=llm)
@@ -167,6 +171,18 @@ async def enter_repl_async() -> None:
                             console.print(
                                 f"[red]切换失败: {type(exc).__name__}: {exc}[/red]"
                             )
+                            try:
+                                chat = ChatSession(old_sid, llm=llm)
+                                chat.input_provider = _input_provider
+                                console.print(
+                                    f"[dim]恢复至原 session {old_sid}.[/dim]"
+                                )
+                            except Exception as recover_exc:
+                                console.print(
+                                    f"[red]恢复原 session ({old_sid}) 也失败: "
+                                    f"{recover_exc}. 退出 REPL.[/red]"
+                                )
+                                return
                         break  # 退出 async for, 老 chat generator 不再继续 yield
                     _render_event(console, ev)
                     if ev.type == "slash_quit":
