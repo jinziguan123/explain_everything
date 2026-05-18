@@ -20,7 +20,7 @@ from openai import (
 )
 from pydantic import BaseModel, ValidationError
 
-from explain_engine.llm.client import Message, Response
+from explain_engine.llm.client import Message, Response, ToolsResponse
 from explain_engine.llm.errors import LLMError, SchemaValidationError
 
 Mode = Literal["json_schema", "json_object"]
@@ -109,3 +109,76 @@ class OpenAIProtocolClient:
             raise LLMError(f"invalid JSON in response: {exc}") from exc
         except ValidationError as exc:
             raise SchemaValidationError(str(exc)) from exc
+
+    async def chat_with_tools(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        model: str | None = None,
+    ) -> ToolsResponse:
+        """Phase 9 Wave F.3: OpenAI function-calling for chat agent loop.
+
+        Args:
+            system: system prompt (OpenAI 走 messages[0] role=system, 无独立参数)
+            messages: list of {role, content} (Anthropic-style; 当前仅支持
+                      content=str. Anthropic-style list content 多轮 tool 对话
+                      暂不支持, 见已知 limitations)
+            tools: Anthropic-style tool schemas [{name, description, input_schema}]
+                   - 内部翻译成 OpenAI function tools
+                     [{type: "function", function: {name, description, parameters}}]
+            model: optional override
+
+        Returns:
+            ToolsResponse(text, tool_uses, stop_reason)
+        """
+        try:
+            # 翻译 Anthropic-style tools → OpenAI function tools
+            openai_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t.get("description", ""),
+                        "parameters": t.get("input_schema", {}),
+                    },
+                }
+                for t in tools
+            ]
+            # OpenAI 把 system 放 messages[0], 无独立 system 参数
+            openai_messages = [{"role": "system", "content": system}, *messages]
+
+            call_kwargs: dict[str, Any] = {
+                "model": model or self._default_model,
+                "messages": openai_messages,
+                "max_tokens": 4096,
+            }
+            if openai_tools:
+                call_kwargs["tools"] = openai_tools
+                call_kwargs["tool_choice"] = "auto"
+
+            api_resp = await self._client.chat.completions.create(**call_kwargs)
+
+            choice = api_resp.choices[0]
+            text = choice.message.content or ""
+            tool_uses: list[dict[str, Any]] = []
+            for tc in choice.message.tool_calls or []:
+                try:
+                    args_dict = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    # vendor 偶尔返非法 JSON; 不抛, 走空 dict (caller 容错)
+                    args_dict = {}
+                tool_uses.append(
+                    {
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "input": args_dict,
+                    }
+                )
+            return ToolsResponse(
+                text=text,
+                tool_uses=tool_uses,
+                stop_reason=choice.finish_reason or "",
+            )
+        except (APIConnectionError, APITimeoutError, RateLimitError, APIError) as exc:
+            raise LLMError(str(exc)) from exc

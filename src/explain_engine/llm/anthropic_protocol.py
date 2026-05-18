@@ -15,7 +15,7 @@ from anthropic import (
 )
 from pydantic import BaseModel, ValidationError
 
-from explain_engine.llm.client import Message, Response
+from explain_engine.llm.client import Message, Response, ToolsResponse
 from explain_engine.llm.errors import LLMError, SchemaValidationError
 
 
@@ -92,3 +92,56 @@ class AnthropicProtocolClient:
             raise LLMError(str(exc)) from exc
         except ValidationError as exc:
             raise SchemaValidationError(str(exc)) from exc
+
+    async def chat_with_tools(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        model: str | None = None,
+    ) -> ToolsResponse:
+        """Phase 9 Wave F.3: Anthropic native tool_use API for chat agent loop.
+
+        Args:
+            system: system prompt string (Anthropic API 走独立 system 参数)
+            messages: list of {role, content} dicts (content 可为 str OR
+                      list of blocks; query_loop 当前送 str content)
+            tools: list of Anthropic tool schemas {name, description, input_schema}
+            model: optional override
+
+        Returns:
+            ToolsResponse(text, tool_uses, stop_reason)
+        """
+        try:
+            call_kwargs: dict[str, Any] = {
+                "model": model or self._default_model,
+                "max_tokens": 4096,
+                "system": system,
+                "messages": messages,
+            }
+            if tools:
+                call_kwargs["tools"] = tools
+                call_kwargs["tool_choice"] = {"type": "auto"}
+
+            api_resp = await self._client.messages.create(**call_kwargs)
+
+            text = ""
+            tool_uses: list[dict[str, Any]] = []
+            for block in api_resp.content:
+                if block.type == "text":
+                    text += block.text
+                elif block.type == "tool_use":
+                    tool_uses.append(
+                        {
+                            "id": block.id,
+                            "name": block.name,
+                            "input": dict(block.input),
+                        }
+                    )
+            return ToolsResponse(
+                text=text,
+                tool_uses=tool_uses,
+                stop_reason=api_resp.stop_reason or "",
+            )
+        except (APIConnectionError, APITimeoutError, RateLimitError, APIError) as exc:
+            raise LLMError(str(exc)) from exc

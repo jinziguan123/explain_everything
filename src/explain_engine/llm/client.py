@@ -3,6 +3,7 @@
 三个 provider (Claude / OpenAI / DeepSeek) 都实现这个 Protocol。
 """
 
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
@@ -22,11 +23,33 @@ class Response(BaseModel):
     usage: dict[str, int]
 
 
+@dataclass
+class ToolsResponse:
+    """Phase 9 Wave F.3: facade for chat_with_tools across providers.
+
+    解耦 SDK 升级风险 — query_loop 只认 (text, tool_uses, stop_reason) 三字段,
+    不直接吃 raw SDK Message 对象.
+
+    Fields:
+        text: concat 所有 TextBlock.text in Anthropic Message.content
+              (OpenAI 等同 choices[0].message.content)
+        tool_uses: list of {id, name, input(dict)}
+                   (对应 Anthropic ToolUseBlock / OpenAI ToolCall)
+        stop_reason: forward 原值 ("end_turn", "tool_use", "max_tokens" /
+                     OpenAI "stop", "tool_calls", "length")
+    """
+
+    text: str = ""
+    tool_uses: list[dict[str, Any]] = field(default_factory=list)
+    stop_reason: str = ""
+
+
 @runtime_checkable
 class LLMClient(Protocol):
     """统一的 LLM 调用接口。
 
-    每个 provider 实现 `chat`。`schema` 不为 None 时启用 structured
+    每个 provider 实现 `chat` (structured output) + `chat_with_tools`
+    (Phase 9 chat agent loop). `schema` 不为 None 时启用 structured
     output (provider 内部选择 tools / response_format / JSON mode)。
     """
 
@@ -36,3 +59,11 @@ class LLMClient(Protocol):
         schema: type[BaseModel] | None = None,
         model: str | None = None,
     ) -> Response: ...
+
+    async def chat_with_tools(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        model: str | None = None,
+    ) -> ToolsResponse: ...
