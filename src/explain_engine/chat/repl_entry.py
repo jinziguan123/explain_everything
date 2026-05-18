@@ -143,6 +143,14 @@ async def enter_repl_async() -> None:
             # Wave 1 review I-4 fold: slash_switch_session 后 break 出 async for,
             # 让外 while 下次 iter 用新 chat. 否则后续 yield 的 event 作用到
             # 新 chat (绑定 mistake).
+            #
+            # Wave 4 review I-A (Wave 5 fold): 这里用 immediate-break 而非
+            # `cli._run_chat_repl_async` 的 post-loop swap (capture switch_to_sid
+            # → 退出 async for → 再 swap) pattern. 选择理由: REPL 入口里
+            # `handle_user_input` 通常只 yield 一组 slash_switch_session (来自
+            # /resume 单 dispatch), 后续 event 极少, immediate-break 更直观.
+            # 若未来 handler yield mixed events (switch + 后续 info text),
+            # 与 cli 同步改 post-loop swap pattern (forward-proof note).
             quit_requested = False
             try:
                 async for ev in chat.handle_user_input(text, llm=llm):

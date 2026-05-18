@@ -1011,7 +1011,7 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
 
 
 def _command_by_name(name: str) -> SlashCommand | None:
-    """Linear lookup OK — 8 commands, no hash table needed."""
+    """Linear lookup OK — small N (~20 commands), no hash table needed."""
     for cmd in DEFAULT_COMMANDS:
         if cmd.name == name:
             return cmd

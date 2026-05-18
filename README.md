@@ -22,13 +22,44 @@
 
 ## Status
 
+**Phase 11 milestone (2026-05-18)** — REPL Unification (default `explain` 进 ephemeral REPL + 18 slash 化)。
+806 tests pass，ruff 0。Phase 0-11 全部实施完。下一步: Phase 12 Theory Formation + Candidate E Variable Embedding。
+
 **Phase 10 milestone (2026-05-18)** — Persistent World Model (跨 session Variable Lexicon)。
-728 tests pass，ruff 0。Phase 0-10 全部实施完。下一步: Phase 11 Theory Formation + Candidate E Variable Embedding。
+728 tests pass，ruff 0。
 
 **Phase 9 milestone (2026-05-17/18)** — Conversational Cognitive Engine (Claude Code 风格 chat REPL)。
 chat /new + /resume slash 命令 + prompt_toolkit REPL UX 升级。Phase 11 直接 motivation：
 cross-session motif detection on lexicon graph / real Anthropic tool_use adapter
 （详见 [Phase 9 acceptance evidence](docs/plans/2026-05-17-conversational-cognitive-engine-acceptance.md)）。
+
+## Phase 11 (2026-05-18) — REPL Unification
+
+`explain` 默认进 **prompt_toolkit REPL ephemeral session** (in-memory, 不持久化)。用户首句自然语言 → 自动 implicit `/new` 走 bootstrap+HITL+持久化。12 个 typer cmd 全部做成 slash (含 `/cf` alias of `/counterfactual`), 所有 slash **无 explicit 参数** — 需参数走 `chat.input_provider` sequential prompt。`/budget` config 流取代 cli flag。
+
+**核心 (brainstorming Q&A 锁)**:
+- 首句自然语言: 自动 implicit /new (option 1)
+- typer cmd 转 slash: 全 12 个 (15 default + /cf alias + 3 cross-session = 18 total)
+- HITL 嵌入: async + input_provider (review_phenomena_async + review_insights_async)
+- slash 参数化: 全无 explicit 参数, 需参数走 sequential prompt
+- budget 调: /budget config slash (删 cli --tool-budget-* flag)
+- cli mode: typer subcommand 路径 0 break
+
+**18 个 slash command**:
+- base (8): /quit /help /show /budget /compact /save /new /resume
+- single-session (6 + /cf alias): /compress /run /check /predict /counterfactual /rescore /cf
+- cross-session (3): /list /lexicon /migrate
+
+**新 cli 入口**:
+- `explain` — 默认进 REPL ephemeral
+- `explain <subcommand> [args]` — 老 typer cli (12 subcommand, 0 break)
+
+**含 Wave 0 deepseek-v4-pro 400 bug fix**: compress 频繁撞 HTTP 400 (forced tool_choice → auto → Pydantic catch malformed)。Fix: prompt 加 JSON schema 强约束 + retry 2 次兜底。
+
+**文档**:
+- design: [docs/plans/2026-05-18-phase11-repl-unification-design.md](docs/plans/2026-05-18-phase11-repl-unification-design.md)
+- plan: [docs/plans/2026-05-18-phase11-repl-unification-plan.md](docs/plans/2026-05-18-phase11-repl-unification-plan.md)
+- acceptance: [docs/plans/2026-05-18-phase11-repl-unification-acceptance.md](docs/plans/2026-05-18-phase11-repl-unification-acceptance.md)
 
 ## Phase 10 (2026-05-18) — Persistent World Model (Variable Lexicon)
 

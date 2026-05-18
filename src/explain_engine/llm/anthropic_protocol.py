@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 
 # Phase 11 Wave 0: deepseek-v4-pro forced→auto fallback 后偶尔返 free text
 # (parsed=None). retry 2 次, append reminder. 总 3 次调用.
+#
+# Scope (Wave 5 review fold): 本 retry 仅 cover `parsed is None` (LLM auto
+# fallback 后返 free text, 没出 structured output, downstream Response.parsed=None).
+# schema-shape malformed (LLM 返 JSON 但字段 missing / type mismatch → Pydantic
+# ValidationError) 由调用方 outer retry 处理 (e.g. engines/_llm_retry 的
+# call_with_retry); 两层 layered defense.
 MAX_RETRIES_ON_MALFORMED = 2
 _REMINDER_MSG = (
     "Previous response was not valid JSON matching the requested schema. "
