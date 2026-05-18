@@ -953,97 +953,124 @@ async def _run_chat_repl_async(
     tool_budget_per_turn: int,
     tool_budget_per_session: int,
 ) -> None:
-    """REPL 主循环 (从 chat() 命令抽出便于测试 + slash 切换需 mutable chat_session ref).
+    """REPL 主循环 (Wave 2 抽出 + 2026-05-18 prompt_toolkit 升级).
 
-    切换契约: handler yield ChatEvent(type='slash_switch_session', content={'sid': X})
-    后, 本函数在单 turn iter 结束后做 `await old.aclose() + new ChatSession(X, llm)`,
-    并 _apply_budget_flags 继承 cli flag.
+    chat 模式期间:
+    - swap root logging handler (stdout → BufferedLogHandler), 退出 restore
+    - 用 prompt_toolkit PromptSession + read_input 替代 asyncio.to_thread(input)
+    - 用户输入 ctrl+o 弹 log popup 看 buffered log (灰色样式)
+    - 输 / 自动弹 slash command 联想菜单
+
+    切换契约: handler yield ChatEvent(type='slash_switch_session', ...) 后,
+    本函数 single turn iter 结束后做 aclose+reload (Wave 2 不变).
     """
+    from explain_engine.chat.repl_input import (
+        BufferedLogHandler,
+        _make_session,
+        read_input,
+    )
     from explain_engine.chat.session import ChatSession, ChatSessionLoadError
 
+    # ── chat 模式 enter: swap logging handler ──
+    log_handler = BufferedLogHandler(capacity=200)
+    log_handler.setFormatter(logging.Formatter("%(message)s"))
+    root_logger = logging.getLogger()
+    original_handlers = root_logger.handlers[:]
+    original_level = root_logger.level
+    root_logger.handlers = [log_handler]
+    root_logger.setLevel(logging.INFO)
+
     try:
-        chat_session = ChatSession(initial_sid, llm=llm)
-    except FileNotFoundError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
+        try:
+            chat_session = ChatSession(initial_sid, llm=llm)
+        except FileNotFoundError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
 
-    _apply_budget_flags(
-        chat_session, tool_budget_per_turn, tool_budget_per_session
-    )
-
-    has_tools_api = (
-        hasattr(llm, "chat_with_tools") if llm is not None else False
-    )
-    console.print(
-        f"[dim]Loaded session {initial_sid}. "
-        f"Type /help for commands. /quit to exit.[/dim]"
-    )
-    if llm is not None and not has_tools_api:
-        console.print(
-            "[yellow]⚠️  LLM dispatch 未实装 (LLMClient.chat_with_tools 不存在). "
-            "自然语言输入会无响应; 仅 slash 命令工作.[/yellow]"
+        _apply_budget_flags(
+            chat_session, tool_budget_per_turn, tool_budget_per_session
         )
 
-    while True:
-        try:
-            user_input = await asyncio.to_thread(input, "\n> ")
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]Interrupted. Saving...[/dim]")
-            break
-
-        user_input = user_input.strip()
-        if not user_input:
-            continue
-
-        quit_requested = False
-        switch_to_sid: str | None = None
-        try:
-            async for event in chat_session.handle_user_input(
-                user_input, llm=llm
-            ):
-                # I-1 (review 2026-05-18): slash_switch_session 是内部 signal,
-                # 不渲染 dict payload (UX noise: `{'sid': 's_xxx'}` 字面 dump).
-                # 实际 "Switched to X" 由切换分支显式 print.
-                if event.type == "slash_switch_session":
-                    switch_to_sid = event.content["sid"]
-                    continue
-                _render_event(console, event)
-                if event.type == "slash_quit":
-                    quit_requested = True
-        except Exception as exc:
-            console.print(f"[red]Error: {type(exc).__name__}: {exc}[/red]")
-            continue
-
-        # 单 turn 结束后再切, 避免 iter 中 mutate
-        if switch_to_sid and switch_to_sid != chat_session.sid:
-            # I-2 (review 2026-05-18): snapshot 切前 sid, fallback 回上次成功的,
-            # 不回 initial. 防多次切换后 surprise (用户期望: 失败 → 回当前 sid).
-            old_sid = chat_session.sid
-            await chat_session.aclose()
-            try:
-                chat_session = ChatSession(switch_to_sid, llm=llm)
-            except (FileNotFoundError, ChatSessionLoadError) as exc:
-                console.print(f"[red]切换失败: {exc}[/red]")
-                try:
-                    chat_session = ChatSession(old_sid, llm=llm)
-                except (FileNotFoundError, ChatSessionLoadError) as recover_exc:
-                    console.print(
-                        f"[red]恢复原 session ({old_sid}) 也失败: "
-                        f"{recover_exc}. 退出.[/red]"
-                    )
-                    return
-            _apply_budget_flags(
-                chat_session, tool_budget_per_turn, tool_budget_per_session
-            )
+        has_tools_api = (
+            hasattr(llm, "chat_with_tools") if llm is not None else False
+        )
+        console.print(
+            f"[dim]Loaded session {initial_sid}. "
+            f"Type /help for commands. /quit to exit. ctrl+o toggle log.[/dim]"
+        )
+        if llm is not None and not has_tools_api:
             console.print(
-                f"[green]Switched to {chat_session.sid}.[/green]"
+                "[yellow]⚠️  LLM dispatch 未实装 (LLMClient.chat_with_tools 不存在). "
+                "自然语言输入会无响应; 仅 slash 命令工作.[/yellow]"
             )
 
-        if quit_requested:
-            break
+        # ── Build prompt_toolkit session (reuse across turns for history) ──
+        pt_session = _make_session(log_handler)
 
-    await chat_session.aclose()
-    console.print(f"[green]Session {chat_session.sid} saved.[/green]")
+        while True:
+            try:
+                user_input = await read_input(pt_session)
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[dim]Interrupted. Saving...[/dim]")
+                break
+
+            user_input = user_input.strip()
+            if not user_input:
+                continue
+
+            quit_requested = False
+            switch_to_sid: str | None = None
+            try:
+                async for event in chat_session.handle_user_input(
+                    user_input, llm=llm
+                ):
+                    # I-1 (review 2026-05-18): slash_switch_session 是内部 signal,
+                    # 不渲染 dict payload (UX noise: `{'sid': 's_xxx'}` 字面 dump).
+                    # 实际 "Switched to X" 由切换分支显式 print.
+                    if event.type == "slash_switch_session":
+                        switch_to_sid = event.content["sid"]
+                        continue
+                    _render_event(console, event)
+                    if event.type == "slash_quit":
+                        quit_requested = True
+            except Exception as exc:
+                console.print(f"[red]Error: {type(exc).__name__}: {exc}[/red]")
+                continue
+
+            # 单 turn 结束后再切, 避免 iter 中 mutate
+            if switch_to_sid and switch_to_sid != chat_session.sid:
+                # I-2 (review 2026-05-18): snapshot 切前 sid, fallback 回上次成功的,
+                # 不回 initial. 防多次切换后 surprise (用户期望: 失败 → 回当前 sid).
+                old_sid = chat_session.sid
+                await chat_session.aclose()
+                try:
+                    chat_session = ChatSession(switch_to_sid, llm=llm)
+                except (FileNotFoundError, ChatSessionLoadError) as exc:
+                    console.print(f"[red]切换失败: {exc}[/red]")
+                    try:
+                        chat_session = ChatSession(old_sid, llm=llm)
+                    except (FileNotFoundError, ChatSessionLoadError) as recover_exc:
+                        console.print(
+                            f"[red]恢复原 session ({old_sid}) 也失败: "
+                            f"{recover_exc}. 退出.[/red]"
+                        )
+                        return
+                _apply_budget_flags(
+                    chat_session, tool_budget_per_turn, tool_budget_per_session
+                )
+                console.print(
+                    f"[green]Switched to {chat_session.sid}.[/green]"
+                )
+
+            if quit_requested:
+                break
+
+        await chat_session.aclose()
+        console.print(f"[green]Session {chat_session.sid} saved.[/green]")
+    finally:
+        # ── chat 模式 exit: restore log handlers ──
+        root_logger.handlers = original_handlers
+        root_logger.setLevel(original_level)
 
 
 @app.command()

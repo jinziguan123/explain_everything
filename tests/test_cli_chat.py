@@ -79,10 +79,15 @@ class TestReplSwitchSession:
         _make_done_session("s_22222002")
 
         # input 序列: 1st 触发切换, 2nd /quit
+        # Wave 4 (2026-05-18): cli._run_chat_repl_async 内部 local import
+        # `from explain_engine.chat.repl_input import read_input` — patch source.
         inputs = iter(["switch please", "/quit"])
+
+        async def fake_read_input(pt_session, prompt_text="\n> "):
+            return next(inputs)
+
         monkeypatch.setattr(
-            "builtins.input",
-            lambda *a, **kw: next(inputs),
+            "explain_engine.chat.repl_input.read_input", fake_read_input
         )
 
         # 跟踪每次 handle_user_input 调用时 chat_session.sid
@@ -134,8 +139,12 @@ class TestReplSwitchSession:
             "switch to x",   # 切 B → X 失败
             "/quit",          # 退出
         ])
+
+        async def fake_read_input(pt_session, prompt_text="\n> "):
+            return next(inputs)
+
         monkeypatch.setattr(
-            "builtins.input", lambda *a, **kw: next(inputs)
+            "explain_engine.chat.repl_input.read_input", fake_read_input
         )
 
         observed_sids: list[str] = []
