@@ -28,3 +28,7 @@ user_template: |
 
   请输出 {min_count}-{max_count} 个 abstract candidate variable。
   每个候选的 coverage 的 concrete_id 必须从上述现象的 <id> 中选（如 p_001 / p_002 / ...）。
+
+  IMPORTANT: Respond ONLY with valid JSON matching the requested schema.
+  No markdown code fences, no explanation, no preamble.
+  If you cannot determine the answer, return an empty list / object - do NOT include free text.

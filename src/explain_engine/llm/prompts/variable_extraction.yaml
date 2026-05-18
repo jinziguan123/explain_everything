@@ -36,3 +36,7 @@ user_template: |
 
   请输出 {min_count}-{max_count} 个**跨领域的相关外围现象**，
   让后续认知引擎能从中找到隐藏的高维变量。
+
+  IMPORTANT: Respond ONLY with valid JSON matching the requested schema.
+  No markdown code fences, no explanation, no preamble.
+  If you cannot determine the answer, return an empty list / object - do NOT include free text.
