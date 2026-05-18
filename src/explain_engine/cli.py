@@ -11,6 +11,13 @@ Phase 3 v0.1 / Phase 4。
 
 import asyncio
 import logging
+
+# Phase 9 chat input fix: 默认 input() 不开 readline, 中文多字节字符删除会有
+# byte-level cursor 错位 (输入'你好' backspace 出现空格 / 字无法删).
+# `import readline` 启用 GNU readline (Linux) / libedit (macOS) 让 input()
+# 走 line-editing 模式, 大部分 multi-byte 删除问题立刻好.
+# 注: macOS libedit Unicode 不完美, 如果还有问题, 后续可考虑 prompt_toolkit.
+import readline  # noqa: F401 — imported for side effect (enable line editing)
 from datetime import datetime
 
 import typer
