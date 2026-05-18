@@ -251,3 +251,112 @@ class TestCliNewChatIntegration:
         assert result.exit_code == 0
         assert chat_call_args[0]["budget_turn"] == 20
         assert chat_call_args[0]["budget_session"] == 100
+
+
+class TestCliNewLexiconIntegration:
+    """Phase 10 Wave 4: cli new 加 lexicon prior (传给 bootstrap_phenomena)."""
+
+    def test_bootstrap_receives_lexicon(
+        self, runner, setup_env, mock_llm_chat, mock_review_phenomena, monkeypatch
+    ):
+        """有 lexicon seed 时, bootstrap_phenomena 收到非空 lexicon 参数."""
+        from explain_engine.engines.lexicon import _now_iso, _save_lexicon
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        del setup_env
+
+        # seed lexicon w/ 1 var
+        _save_lexicon(
+            StorageV2().knowledge_dir() / "variables.json",
+            {
+                "version": 1,
+                "updated_at": _now_iso(),
+                "variables": [{
+                    "global_id": "v_seeded",
+                    "name": "seed_var",
+                    "description": "x",
+                    "abstraction_level": 2,
+                    "epistemic": "insight",
+                    "fitness": {
+                        "reuse_count": 1,
+                        "avg_essentialness": 0.5,
+                        "avg_consistency": 0.5,
+                        "first_seen_at": _now_iso(),
+                        "last_seen_at": _now_iso(),
+                    },
+                    "canonical_mechanism": "通常 cause X",
+                    "source_sessions": ["s_001"],
+                }],
+            },
+        )
+
+        # Wrap bootstrap_phenomena 验它收到 lexicon
+        from explain_engine.engines.bootstrap import (
+            bootstrap_phenomena as real_bootstrap,
+        )
+
+        captured_lexicon: list = []
+        captured_top_k: list = []
+
+        async def _wrapped(
+            question, llm, lexicon=None, lexicon_top_k=20, **kw
+        ):
+            captured_lexicon.append(lexicon)
+            captured_top_k.append(lexicon_top_k)
+            # 递归真 bootstrap 但 lexicon=None (防 stack overflow + 让 LLM mock
+            # 走原 phenomena flow)
+            return await real_bootstrap(
+                question, llm, lexicon=None, lexicon_top_k=0, **kw
+            )
+
+        monkeypatch.setattr(
+            "explain_engine.cli.bootstrap_phenomena", _wrapped
+        )
+
+        mock_llm_chat([{"name": "x", "description": "y"}])
+        mock_review_phenomena("all")
+
+        result = runner.invoke(app, ["new", "why?", "--no-chat"])
+        assert result.exit_code == 0, result.output
+        assert len(captured_lexicon) == 1
+        assert captured_lexicon[0] is not None
+        assert len(captured_lexicon[0]) == 1
+        assert captured_lexicon[0][0]["name"] == "seed_var"
+        assert captured_top_k[0] == 20  # 默认 top_k
+
+    def test_lexicon_top_k_zero_skips_prior(
+        self, runner, setup_env, mock_llm_chat, mock_review_phenomena, monkeypatch
+    ):
+        """--lexicon-top-k 0 时, bootstrap 收 lexicon=None (跳过 prior)."""
+        del setup_env
+
+        captured_lexicon: list = []
+        captured_top_k: list = []
+
+        from explain_engine.engines.bootstrap import (
+            bootstrap_phenomena as real_bootstrap,
+        )
+
+        async def _wrapped(
+            question, llm, lexicon=None, lexicon_top_k=20, **kw
+        ):
+            captured_lexicon.append(lexicon)
+            captured_top_k.append(lexicon_top_k)
+            return await real_bootstrap(
+                question, llm, lexicon=None, lexicon_top_k=0, **kw
+            )
+
+        monkeypatch.setattr(
+            "explain_engine.cli.bootstrap_phenomena", _wrapped
+        )
+
+        mock_llm_chat([{"name": "x", "description": "y"}])
+        mock_review_phenomena("all")
+
+        result = runner.invoke(
+            app, ["new", "why?", "--no-chat", "--lexicon-top-k", "0"]
+        )
+        assert result.exit_code == 0, result.output
+        assert len(captured_lexicon) == 1
+        assert captured_lexicon[0] is None
+        assert captured_top_k[0] == 0

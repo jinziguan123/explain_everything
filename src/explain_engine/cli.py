@@ -75,13 +75,18 @@ def new(
         50, "--tool-budget-per-session",
         help="Max tool calls per chat session (默认进 chat 时生效)",
     ),
+    lexicon_top_k: int = typer.Option(
+        20, "--lexicon-top-k",
+        help="bootstrap 拉 top-K lexicon var 作 prior (默认 20, 0 跳过)",
+    ),
 ) -> None:
     """启动新 session: Bootstrap + HITL + (默认) 直接进 chat REPL.
 
     `--no-chat` 仅 print sid 退出 (脚本/CI 场景).
     """
     asyncio.run(_run_new(
-        question, no_chat, tool_budget_per_turn, tool_budget_per_session,
+        question, no_chat, tool_budget_per_turn,
+        tool_budget_per_session, lexicon_top_k,
     ))
 
 
@@ -90,16 +95,29 @@ async def _run_new(
     no_chat: bool = False,
     tool_budget_per_turn: int = 10,
     tool_budget_per_session: int = 50,
+    lexicon_top_k: int = 20,
 ) -> None:
     settings = Settings()
     llm = make_llm_client()
+
+    # Phase 10 Wave 4: load lexicon prior (lexicon_top_k=0 跳过)
+    from explain_engine.engines.lexicon import _load_lexicon
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2()
+    lexicon_path = storage.knowledge_dir() / "variables.json"
+    lexicon_data = _load_lexicon(lexicon_path)
+    lexicon = lexicon_data["variables"] if lexicon_top_k > 0 else None
 
     import os
     proto = os.environ.get("LLM_PROTOCOL", "?")
     model = os.environ.get("LLM_MODEL", "?")
     console.print(f"\n[INFO] 调 LLM ({proto} / {model}) 生现象...")
     try:
-        phenomena = await bootstrap_phenomena(question, llm)
+        phenomena = await bootstrap_phenomena(
+            question, llm,
+            lexicon=lexicon, lexicon_top_k=lexicon_top_k,
+        )
     except SchemaValidationError as exc:
         console.print(f"[red]LLM 输出不合规: {exc}[/red]")
         raise typer.Exit(2) from exc
@@ -272,6 +290,17 @@ async def _run_compress(session_id: str) -> None:
     except OSError as exc:
         console.print(f"[red]保存失败: {exc}[/red]")
         raise typer.Exit(3) from exc
+
+    # Phase 10 Wave 4: session done 触发 flush_to_lexicon (best-effort,
+    # exception 不 fail 整个 compress — lexicon 是 supplementary store).
+    from explain_engine.engines.lexicon import flush_to_lexicon
+    from explain_engine.persistence.storage_v2 import StorageV2
+    try:
+        n = await flush_to_lexicon(session, StorageV2(), llm=llm)
+        if n > 0:
+            console.print(f"[INFO] {n} var 写入 lexicon")
+    except Exception as exc:
+        console.print(f"[yellow]lexicon flush 失败 (非关键): {exc}[/yellow]")
 
     console.print(f"\n[green]Session {session_id} 已完成。[/green]")
 
@@ -1117,6 +1146,22 @@ async def _run_chat_repl_async(
 
         await chat_session.aclose()
         console.print(f"[green]Session {chat_session.sid} saved.[/green]")
+
+        # Phase 10 Wave 4: chat 退出时 flush lexicon (chat 期间可能产新 var,
+        # 包括 graph 增 L1/L2). best-effort: exception 不 fail chat exit.
+        # aclose 已 persist session, 这里仅同步到 cross-session lexicon.
+        try:
+            from explain_engine.engines.lexicon import flush_to_lexicon
+            from explain_engine.persistence.storage_v2 import StorageV2
+            n = await flush_to_lexicon(
+                chat_session._session, StorageV2(), llm=llm,
+            )
+            if n > 0:
+                console.print(f"[dim]{n} var 写入 lexicon[/dim]")
+        except Exception as exc:
+            console.print(
+                f"[yellow]lexicon flush 失败 (非关键): {exc}[/yellow]"
+            )
     finally:
         # ── chat 模式 exit: restore log handlers ──
         root_logger.handlers = original_handlers
@@ -1170,6 +1215,62 @@ def migrate(
         console.print(
             f"\n[green]Migrated {migrated_count}/{len(sids)} sessions.[/green]"
         )
+
+
+@app.command()
+def lexicon(
+    dump_json: bool = typer.Option(
+        False, "--dump-json", help="raw JSON 输到 stdout"
+    ),
+    top_k: int = typer.Option(
+        0, "--top-k", help="仅显 top-K (默认 0=全显)"
+    ),
+) -> None:
+    """显 knowledge/variables.json 内容 (Phase 10 lexicon)."""
+    import json as _json
+
+    from explain_engine.engines.lexicon import (
+        _load_lexicon,
+        _select_top_k_vars,
+    )
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2()
+    path = storage.knowledge_dir() / "variables.json"
+    lex = _load_lexicon(path)
+
+    if dump_json:
+        print(_json.dumps(lex, indent=2, ensure_ascii=False))
+        return
+
+    variables = lex["variables"]
+    if top_k > 0:
+        variables = _select_top_k_vars(lex, k=top_k)
+
+    if not variables:
+        console.print(
+            "[dim]lexicon 暂无变量. "
+            "跑 explain compress / chat 完成后再看.[/dim]"
+        )
+        return
+
+    table = Table(title=f"Variable Lexicon ({len(variables)} vars)")
+    table.add_column("global_id", style="cyan")
+    table.add_column("名称", style="bold")
+    table.add_column("Level", justify="right")
+    table.add_column("reuse", justify="right")
+    table.add_column("avg_ess", justify="right")
+    table.add_column("last_seen", style="dim")
+    for v in variables:
+        table.add_row(
+            v["global_id"],
+            v["name"],
+            f"L{v['abstraction_level']}",
+            str(v["fitness"]["reuse_count"]),
+            f"{v['fitness']['avg_essentialness']:.2f}",
+            v["fitness"]["last_seen_at"][:10],
+        )
+    console.print(table)
 
 
 if __name__ == "__main__":

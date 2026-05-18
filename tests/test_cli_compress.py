@@ -127,13 +127,23 @@ class TestCompress:
         s.meta.stage = "insight_pending"
         store.save(s)
 
+        # Phase 10 Wave 4: compress 完毕后 flush_to_lexicon 会调 1 次 LLM
+        # 生 canonical_mechanism (c_001 默认 activation=1.0, 满足 promote 阈值).
+        # 验"compress + score 不调 LLM" 用 stage 转换 + canonical text 校验,
+        # 而非 await_count==0.
         fake_llm = AsyncMock()
-        # LLM 不该被调用
+        canon_resp = Response(
+            text="通常 cause downstream",
+            parsed=None,
+            model="t", usage={"input_tokens": 0, "output_tokens": 0},
+        )
+        fake_llm.chat.side_effect = [canon_resp]
         with patch("explain_engine.cli.make_llm_client", return_value=fake_llm), \
              patch("rich.prompt.Prompt.ask", side_effect=["k"]):
             result = runner.invoke(app, ["compress", sid])
         assert result.exit_code == 0
-        assert fake_llm.chat.await_count == 0
+        # 仅 1 LLM call — flush 的 canonical_mechanism. compress + score 全 skip.
+        assert fake_llm.chat.await_count == 1
         s2 = store.load(sid)
         assert s2.meta.stage == "done"
 
@@ -158,3 +168,54 @@ class TestCompress:
         with patch("explain_engine.cli.make_llm_client", return_value=fake_llm):
             result = runner.invoke(app, ["compress", sid])
         assert result.exit_code == 2
+
+
+class TestCliCompressLexiconFlush:
+    """Phase 10 Wave 4: compress 完成 (stage=done) 后触发 flush_to_lexicon."""
+
+    def test_compress_done_triggers_lexicon_flush(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """跑 compress 全流程, 验 knowledge/variables.json 含 promoted L1."""
+        sid = _setup_bootstrap_session(tmp_path)
+        _mock_settings_to_tmp(monkeypatch, tmp_path)
+
+        fake_llm = AsyncMock()
+        # 1 compression + 4 scoring + 2 canonical_mechanism (L1 vars × 2)
+        canon_resp = Response(
+            text="通常 cause downstream effect",
+            parsed=None,
+            model="t", usage={"input_tokens": 0, "output_tokens": 0},
+        )
+        fake_llm.chat.side_effect = (
+            [_comp_response()]
+            + [_score_response()] * 4
+            + [canon_resp] * 2
+        )
+
+        with patch(
+            "explain_engine.cli.make_llm_client", return_value=fake_llm
+        ), patch("rich.prompt.Prompt.ask", side_effect=["k", "k"]):
+            result = runner.invoke(app, ["compress", sid])
+        assert result.exit_code == 0, result.output
+
+        # 验 stage=done
+        store = SessionStore(directory=tmp_path)
+        s = store.load(sid)
+        assert s.meta.stage == "done"
+
+        # 验 lexicon 写入 — 2 L1 (activation=1.0 默认 >= 0.5, lifecycle=active)
+        from explain_engine.engines.lexicon import _load_lexicon
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        path = StorageV2().knowledge_dir() / "variables.json"
+        lex = _load_lexicon(path)
+        assert len(lex["variables"]) >= 2
+        names = {v["name"] for v in lex["variables"]}
+        assert {"abs_1", "abs_2"}.issubset(names)
+        # 验 source_sessions 含此 sid
+        for v in lex["variables"]:
+            if v["name"] in {"abs_1", "abs_2"}:
+                assert sid in v["source_sessions"]
+        # 验 INFO 信息 print
+        assert "var 写入 lexicon" in result.output
