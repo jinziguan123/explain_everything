@@ -217,6 +217,106 @@ async def _handle_show(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     return [ChatEvent(type="slash_show", content="\n".join(lines))]
 
 
+async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 12 (2026-05-19): /graph — visual rendering via graphviz inline.
+
+    Pipeline:
+      1. Empty graph → return warning, no graphviz call.
+      2. Check dot binary present, friendly error if missing.
+      3. Build graphviz.Digraph from chat.state.graph (含 weak_l1 marker).
+      4. Render PNG to session tmpdir.
+      5. Detect terminal capability (iTerm/Kitty/chafa), inline display.
+         若无 inline renderer 可用, 输 PNG path + install hint.
+      6. Footer: PNG path + multi-signal verdict 4 行.
+
+    设计详见 docs/plans/2026-05-19-slash-show-graph-detail-design.md §4.2.
+    """
+    import os
+    import shutil
+    import subprocess
+
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.engines.simulation import aggregate_acceptance
+
+    state = chat.state
+    g = state.graph
+
+    # Edge: empty graph
+    if len(g.nodes) == 0:
+        return [ChatEvent(
+            type="slash_graph",
+            content="(empty graph, nothing to render)",
+        )]
+
+    # Edge: dot binary missing
+    if shutil.which("dot") is None:
+        return [ChatEvent(
+            type="slash_graph",
+            content=(
+                "dot binary not found.\n"
+                "Install: brew install graphviz"
+            ),
+        )]
+
+    # Compute weak_l1_ids (gracefully handle agg failure — render still works)
+    weak_l1_ids: set[str] = set()
+    report = None
+    try:
+        report = aggregate_acceptance(state)
+        weak_l1_ids = set(report.weak_chain_l1s or [])
+    except Exception:
+        pass
+
+    # Build + render
+    dg = _build_digraph(state, weak_l1_ids=weak_l1_ids)
+    tmpdir = _get_session_tmpdir()
+    tick = getattr(state, "tick", 0)
+    base = os.path.join(tmpdir, f"graph_{chat.sid}_{tick}")
+    png_path = dg.render(filename=base, cleanup=True)
+
+    # Header
+    n_l0 = sum(1 for n in g.nodes.values() if n.abstraction_level == 0)
+    n_l1 = sum(1 for n in g.nodes.values() if n.abstraction_level == 1)
+    n_l2 = sum(1 for n in g.nodes.values() if n.abstraction_level == 2)
+    header = (
+        f"/graph tick={tick} · {len(g.nodes)} nodes "
+        f"({n_l0} L0 / {n_l1} L1 / {n_l2} L2), {len(g.edges)} edges"
+    )
+
+    # Inline display
+    cmd, renderer = _detect_inline_renderer(png_path)
+    if cmd is not None:
+        try:
+            subprocess.run(cmd, check=False)
+            inline_msg = f"(rendered inline via {renderer})"
+        except Exception as exc:
+            inline_msg = f"(inline render via {renderer} failed: {type(exc).__name__})"
+    else:
+        inline_msg = "(install chafa for inline preview: brew install chafa)"
+
+    # Footer
+    footer_lines = [
+        "",
+        inline_msg,
+        f"PNG: {png_path}",
+        "",
+    ]
+    if report is not None:
+        footer_lines.append(
+            f"Multi-signal: consistency={report.avg_consistency:.3f} "
+            f"essentialness={report.avg_essentialness:.3f} "
+            f"coverage={report.rollout_coverage:.3f}"
+        )
+        weak_ids = sorted(report.weak_chain_l1s or [])
+        if weak_ids:
+            footer_lines.append(f"weak L1: {' '.join(weak_ids)}")
+    else:
+        footer_lines.append("Multi-signal: (aggregate_acceptance failed)")
+
+    content = header + "\n" + "\n".join(footer_lines)
+    return [ChatEvent(type="slash_graph", content=content)]
+
+
 async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     """Phase 11 Wave 2.5: interactive config (取代 cli `--tool-budget-*` flag).
 
@@ -1349,6 +1449,7 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("quit", "Exit chat session (saves first).", _handle_quit),
     SlashCommand("help", "List slash commands and available tools.", _handle_help),
     SlashCommand("show", "Show graph snapshot + multi-signal.", _handle_show),
+    SlashCommand("graph", "渲染 graph 可视化 (graphviz inline via iTerm/Kitty/chafa).", _handle_graph),
     SlashCommand("budget", "Show budget + interactive config per-turn / per-session limit.", _handle_budget),
     SlashCommand("compact", "Force trigger sessionMemory compaction.", _handle_compact),
     SlashCommand("save", "Explicit flush of all sidecar files.", _handle_save),
