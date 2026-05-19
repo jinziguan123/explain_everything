@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.100.0",
+    "graphviz>=0.20",
     "networkx>=3.5",
     "openai>=2.36.0",
     "prompt-toolkit>=3.0.52",
