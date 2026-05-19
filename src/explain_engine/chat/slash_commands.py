@@ -661,6 +661,81 @@ def _get_session_tmpdir() -> str:
     return _SESSION_TMPDIR
 
 
+_EDGE_TYPE_SHORT = {
+    "causes": "cau",
+    "amplifies": "amp",
+    "suppresses": "sup",
+    "constrains": "con",
+    "manifests_as": "man",
+}
+
+_L_SHAPE = {0: "box", 1: "ellipse", 2: "doubleoctagon"}
+_L_FILL = {0: "lightblue", 1: "lightyellow", 2: "lightcoral"}
+
+
+def _build_digraph(state, weak_l1_ids: set[str]):
+    """Phase 12 /graph: build graphviz.Digraph from ChatState.graph.
+
+    Visual encoding 见 docs/plans/2026-05-19-slash-show-graph-detail-design.md §4.2.
+
+    Args:
+        state: ChatState (含 graph).
+        weak_l1_ids: 来自 aggregate_acceptance().weak_chain_l1s, 用于 weak L1 红边框.
+
+    Returns:
+        graphviz.Digraph (caller render to PNG).
+    """
+    import graphviz
+
+    dg = graphviz.Digraph(format="png")
+    dg.attr(rankdir="TB")
+    dg.attr("node", style="filled", fontname="Helvetica")
+
+    for node in state.graph.nodes.values():
+        shape = _L_SHAPE.get(node.abstraction_level, "box")
+        fill = _L_FILL.get(node.abstraction_level, "white")
+        label = f"{node.id}\n「{node.name}」\n[{node.confidence:.2f}]"
+
+        attrs: dict[str, str] = {
+            "shape": shape,
+            "fillcolor": fill,
+            "label": label,
+        }
+
+        # lifecycle 优先 (decayed > stale > default)
+        if node.lifecycle_state == "decayed":
+            attrs["style"] = "dashed,filled"
+            attrs["fillcolor"] = "gray80"
+        elif node.lifecycle_state == "stale":
+            attrs["style"] = "dotted,filled"
+
+        # weak L1: 红边框 (与 lifecycle 视觉叠加)
+        if node.id in weak_l1_ids:
+            attrs["color"] = "red"
+            attrs["penwidth"] = "2"
+
+        dg.node(node.id, **attrs)
+
+    for edge in state.graph.edges.values():
+        short = _EDGE_TYPE_SHORT.get(edge.relation_type, edge.relation_type[:3])
+        label = f"{short} {edge.confidence:.2f}"
+
+        edge_attrs: dict[str, str] = {"label": label}
+
+        if edge.relation_type == "amplifies":
+            edge_attrs["penwidth"] = "2.5"
+        elif edge.relation_type == "suppresses":
+            edge_attrs["color"] = "red"
+        elif edge.relation_type == "constrains":
+            edge_attrs["color"] = "blue"
+        elif edge.relation_type == "manifests_as":
+            edge_attrs["style"] = "dashed"
+
+        dg.edge(edge.source_node, edge.target_node, **edge_attrs)
+
+    return dg
+
+
 def _ephemeral_reject(name: str) -> list[ChatEvent]:
     """Phase 11 Wave 3: ephemeral 时统一 reject 模板.
 
