@@ -91,12 +91,16 @@ class EphemeralChatSession:
         lexicon = lexicon_data["variables"]
 
         # bootstrap (raise → caller 留 ephemeral; ephemeral.state 不动)
-        phenomena = await bootstrap_phenomena(
-            question,
-            llm,
-            lexicon=lexicon if lexicon else None,
-            lexicon_top_k=20,
-        )
+        # 2026-05-19 polish: Rich Status spinner LLM 调用期间反馈 (5-15s)
+        from rich.console import Console
+        _console = Console()
+        with _console.status("[bold green]调 LLM 生现象...[/bold green]"):
+            phenomena = await bootstrap_phenomena(
+                question,
+                llm,
+                lexicon=lexicon if lexicon else None,
+                lexicon_top_k=20,
+            )
 
         # HITL — Wave 1 stub: 全 accept. Wave 2 接 input_provider + k/e/d.
         final_phenomena = await review_phenomena_async(

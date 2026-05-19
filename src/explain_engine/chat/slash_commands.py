@@ -524,26 +524,36 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
             content="/compress 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
         )]
 
+    from rich.console import Console
+
     from explain_engine.engines.compression import propose_candidates
     from explain_engine.engines.lexicon import flush_to_lexicon
     from explain_engine.hitl.cli_interactive import review_insights_async
 
+    _console = Console()
+
+    # 2026-05-19 polish: Rich Status spinner — propose_candidates LLM 调用
     try:
-        await propose_candidates(chat.state, chat.llm)
+        with _console.status("[bold green]调 LLM 提候选 (compress)...[/bold green]"):
+            await propose_candidates(chat.state, chat.llm)
     except Exception as exc:
         return [ChatEvent(
             type="slash_error",
             content=f"/compress propose_candidates 失败: {type(exc).__name__}: {exc}",
         )]
 
-    # HITL async review (走 chat.input_provider, None 时 accept-all)
+    # HITL async review (走 chat.input_provider, None 时 accept-all). 不包 spinner
+    # — HITL 期间 prompt 显式 wait user, spinner 会撞.
     await review_insights_async(chat.state, chat.input_provider)
 
     # persist sidecar + flush lexicon (best-effort — lexicon 失败不该 fail compress)
     chat.persist()
     n = 0
     try:
-        n = await flush_to_lexicon(chat._session, chat.storage, llm=chat.llm)
+        with _console.status(
+            "[bold green]写入 lexicon (LLM 生 canonical mechanism)...[/bold green]"
+        ):
+            n = await flush_to_lexicon(chat._session, chat.storage, llm=chat.llm)
     except Exception:
         n = 0
 
@@ -579,11 +589,18 @@ async def _handle_run(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
             content="/run 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
         )]
 
+    from rich.console import Console
+
     from explain_engine.runtime.runtime import run as runtime_run
 
     budget = max(chat.state.budget_remaining, 1)
     try:
-        reason = await runtime_run(chat.state, chat.llm, budget=budget)
+        # 2026-05-19 polish: Rich Status spinner — runtime.run 跑 reasoning loop
+        # (多次 LLM 调用, 总耗时几十秒到几分钟取决于 budget)
+        with Console().status(
+            "[bold green]调 LLM 跑 reasoning loop (含 expand/reflect/decay)...[/bold green]"
+        ):
+            reason = await runtime_run(chat.state, chat.llm, budget=budget)
     except Exception as exc:
         return [ChatEvent(
             type="slash_error",
@@ -674,9 +691,15 @@ async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     if not intervention or intervention.lower() in ("q", "quit"):
         return [ChatEvent(type="slash_predict", content="已取消.")]
 
+    from rich.console import Console
+
     from explain_engine.engines.prediction import predict as prediction_predict
     try:
-        report = await prediction_predict(chat.state, intervention, chat.llm)
+        # 2026-05-19 polish: Rich Status spinner — prediction LLM 调用 (~5-15s)
+        with Console().status(
+            "[bold green]调 LLM 跑 prediction...[/bold green]"
+        ):
+            report = await prediction_predict(chat.state, intervention, chat.llm)
     except Exception as exc:
         return [ChatEvent(
             type="slash_error",
@@ -732,9 +755,15 @@ async def _handle_counterfactual(chat: ChatSession, args: list[str]) -> list[Cha
     if not intervention or intervention.lower() in ("q", "quit"):
         return [ChatEvent(type="slash_counterfactual", content="已取消.")]
 
+    from rich.console import Console
+
     from explain_engine.engines.counterfactual import substitute
     try:
-        report = await substitute(chat.state, intervention, chat.llm)
+        # 2026-05-19 polish: Rich Status spinner — counterfactual LLM 调用 (~5-15s)
+        with Console().status(
+            "[bold green]调 LLM 跑 counterfactual...[/bold green]"
+        ):
+            report = await substitute(chat.state, intervention, chat.llm)
     except Exception as exc:
         return [ChatEvent(
             type="slash_error",
@@ -787,10 +816,16 @@ async def _handle_rescore(chat: ChatSession, args: list[str]) -> list[ChatEvent]
             content="/rescore 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
         )]
 
+    from rich.console import Console
+
     from explain_engine.engines.rescore import rescore_session
 
     try:
-        new_confs = await rescore_session(chat.state, chat.llm)
+        # 2026-05-19 polish: Rich Status spinner — rescore LLM 多调用 (~25 LLM call)
+        with Console().status(
+            "[bold green]调 LLM 重评 edge confidence (典型 ~25 LLM call)...[/bold green]"
+        ):
+            new_confs = await rescore_session(chat.state, chat.llm)
     except Exception as exc:
         return [ChatEvent(
             type="slash_error",
