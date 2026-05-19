@@ -953,6 +953,65 @@ class TestSlashPredict:
         assert "如果 X 增加" in c
 
     @pytest.mark.asyncio
+    async def test_predict_displays_node_name_and_description(self, monkeypatch):
+        """Fix 3 (2026-05-19 smoke bug 2): /predict 应显 node.name + description,
+        而非裸 ID (c_005). User 看到 c_005 不知是啥, 需 name + 短 desc.
+
+        覆盖 new_nodes / predicted_L0 / activated_existing_L0 / top propagation
+        全 4 处 ID display.
+        """
+        from dataclasses import dataclass
+
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.schema.nodes import VariableNode
+        _make_done_session("s_b0bf0003")
+        chat = ChatSession("s_b0bf0003", llm=object())  # type: ignore[arg-type]
+
+        # 加 c_005 + p_016 + 现有 c_001 到 graph 模拟 prediction 后状态
+        chat.state.graph.add_node(VariableNode(
+            id="c_005", name="银发经济", description="老龄人口消费结构",
+            abstraction_level=1, confidence=0.7, epistemic="insight",
+        ))
+        chat.state.graph.add_node(VariableNode(
+            id="p_016", name="老年 wellness 消费上升",
+            description="50+ 群体健康养生支出占比上升",
+            abstraction_level=0, confidence=0.7, epistemic="observation",
+        ))
+
+        async def fake_provider(prompt):
+            return "对于银发经济会有什么影响"
+        chat.input_provider = fake_provider
+
+        @dataclass
+        class FakeReport:
+            new_node_ids: list
+            predicted_L0_ids: list
+            activated_existing_L0: list
+            propagation_acts: dict
+
+        async def fake_predict(state, intervention_text, llm):
+            return FakeReport(
+                new_node_ids=["c_005"],
+                predicted_L0_ids=["p_016"],
+                activated_existing_L0=["p_001"],  # 现有 L0 from _make_done_session
+                propagation_acts={"c_001": 0.62},  # 现有 c_001 from _make_done_session
+            )
+
+        monkeypatch.setattr(
+            "explain_engine.engines.prediction.predict", fake_predict
+        )
+
+        events = await dispatch_slash(chat, "/predict")
+        c = events[0].content
+        # name 应 surface (非裸 ID)
+        assert "银发经济" in c, "c_005 应显 name 「银发经济」"
+        assert "老年 wellness" in c, "p_016 应显 name"
+        # propagation_acts top entry 也应显 name
+        assert "c_001" in c
+        # ID 也保留 (cross-reference 用)
+        assert "c_005" in c
+
+    @pytest.mark.asyncio
     async def test_predict_displays_propagation_acts(self, monkeypatch):
         """Fix 2 (2026-05-19 smoke bug): /predict 输出应含 top-K propagation_acts.
 

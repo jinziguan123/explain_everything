@@ -232,19 +232,42 @@ async def flush_to_lexicon(
     session: Session,
     storage: StorageV2,
     llm: LLMClient | None = None,
+    llm_canonical_top_k: int = 3,
 ) -> int:
     """Promote 高 fitness var 进 lexicon. 返 promoted count.
 
     Idempotent w.r.t. session_id (同 sid 多次调安全, 不 ++ count).
+
+    Mitigation #2 (2026-05-19): `llm_canonical_top_k` cap LLM call 数量.
+    promoted vars 按 node.activation desc sort, **top-K 真 LLM** 生
+    canonical_mechanism (high-quality 1-line summary), 其余传 llm=None
+    走 edge-based fallback (instant, 略低 quality).
+
+    Use case: typical session 5+ promoted var 时显著省 (N-K) LLM call —
+    e.g. 5 var, K=3 → 省 2 call (~10s). 大 session (Phase 12 motif
+    detection) 时 leverage 更大.
+
+    `llm_canonical_top_k=0` → 全 fallback (lazy mode).
+    `llm_canonical_top_k >= N` → 全 LLM (老 Wave 2 行为).
     """
     path = storage.knowledge_dir() / "variables.json"
     lexicon = _load_lexicon(path)
-    promoted = 0
 
-    for _nid, node in session.state.graph.nodes.items():
-        if not _should_promote(node):
-            continue
-        canonical_mech = await _build_canonical_mechanism(node, session, llm)
+    # 收集 promoted candidates + sort by activation desc
+    candidates = [
+        node
+        for node in session.state.graph.nodes.values()
+        if _should_promote(node)
+    ]
+    candidates.sort(key=lambda n: -n.activation)
+
+    promoted = 0
+    for i, node in enumerate(candidates):
+        # Top-K 用 真 llm; 其余传 None 走 edge fallback
+        effective_llm = llm if i < llm_canonical_top_k else None
+        canonical_mech = await _build_canonical_mechanism(
+            node, session, effective_llm,
+        )
         _upsert_var(lexicon, node, canonical_mech, session.meta.session_id)
         promoted += 1
 

@@ -482,6 +482,31 @@ async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 # ─────────────────────────────────────────────────────────────────────────
 
 
+def _format_node_brief(state, nid: str, max_desc: int = 60) -> str:
+    """Fix 3 (2026-05-19 smoke bug 2): 格式化 node 显 ID + name + 短 description.
+
+    用于 /predict / /counterfactual 等 slash 显 node 时, 避免裸 ID
+    (user 看 c_005 不知是啥). 若 node 不在 state.graph (e.g.
+    counterfactual remove 后 ID 已删), fallback 仅显 ID + "(已删)".
+
+    Returns: "c_005 「银发经济」: 老龄人口消费结构 (...)"
+    """
+    node = state.graph.nodes.get(nid)
+    if node is None:
+        return f"{nid} (节点不在 graph)"
+    desc = node.description[:max_desc]
+    if len(node.description) > max_desc:
+        desc += "..."
+    return f"{nid} 「{node.name}」: {desc}"
+
+
+def _format_node_list(state, nids: list[str], indent: str = "    ") -> str:
+    """格式化 node ID 列表为 multi-line, 每行 1 个 node brief."""
+    if not nids:
+        return f"{indent}(none)"
+    return "\n".join(f"{indent}{_format_node_brief(state, nid)}" for nid in nids)
+
+
 def _ephemeral_reject(name: str) -> list[ChatEvent]:
     """Phase 11 Wave 3: ephemeral 时统一 reject 模板.
 
@@ -722,21 +747,23 @@ async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]
         )]
 
     chat.persist()
-    new_nodes_str = ", ".join(report.new_node_ids) or "(none)"
-    predicted_str = ", ".join(report.predicted_L0_ids) or "(none)"
-    activated_str = ", ".join(report.activated_existing_L0) or "(none)"
+
+    # Fix 3 (2026-05-19 smoke bug 2): 显 node.name + description 而非裸 ID.
+    # _format_node_brief 从 chat.state.graph.nodes 读 — predict 已经把新 node
+    # add 到 graph (predict 副作用), 所以 c_005 / p_xxx 都能查到.
+    new_nodes_block = _format_node_list(chat.state, report.new_node_ids)
+    predicted_block = _format_node_list(chat.state, report.predicted_L0_ids)
+    activated_block = _format_node_list(chat.state, report.activated_existing_L0)
 
     # Fix 2 (2026-05-19 smoke bug): 加 top-3 propagation_acts display.
     # PredictionReport.propagation_acts 是核心信息 (新 concept 通过 edge
-    # 影响现 graph mid-level node 的 activation map). Wave 3 漏显, user
-    # 看 activated_existing_L0=none 误以为 engine 没干事; 实际 propagation
-    # 可能含 L1/L2 变化但 surface 不到. getattr fallback {} 让老 test 没
-    # 该字段时不撞 AttributeError.
+    # 影响现 graph mid-level node 的 activation map). 同样显 name+desc.
     prop_acts = getattr(report, "propagation_acts", {})
     if prop_acts:
         top_acts = sorted(prop_acts.items(), key=lambda kv: -abs(kv[1]))[:3]
         prop_lines = "\n".join(
-            f"    {nid}: {act:+.2f}" for nid, act in top_acts
+            f"    {act:+.2f}  {_format_node_brief(chat.state, nid)}"
+            for nid, act in top_acts
         )
     else:
         prop_lines = "    (无 propagation, intervention 跟现 graph 无 edge 关联)"
@@ -745,10 +772,11 @@ async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]
         type="slash_predict",
         content=(
             f"prediction (intervention={intervention!r}):\n"
-            f"  new_nodes:             {new_nodes_str}\n"
-            f"  predicted_L0:          {predicted_str}\n"
-            f"  activated_existing_L0: {activated_str}\n"
-            f"  top propagation (现 graph mid-level 受影响):\n{prop_lines}"
+            f"  new_nodes:\n{new_nodes_block}\n"
+            f"  predicted_L0:\n{predicted_block}\n"
+            f"  activated_existing_L0:\n{activated_block}\n"
+            f"  top propagation (现 graph mid-level 受影响, sign=activation delta):\n"
+            f"{prop_lines}"
         ),
     )]
 

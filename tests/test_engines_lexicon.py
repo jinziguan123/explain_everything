@@ -345,6 +345,101 @@ class TestFlushToLexicon:
             assert v["fitness"]["reuse_count"] == 1
             assert v["source_sessions"] == ["s_flush003"]
 
+    @pytest.mark.asyncio
+    async def test_top_k_llm_canonical_caps_llm_calls(self, monkeypatch):
+        """Mitigation #2 (2026-05-19): flush_to_lexicon 按 activation desc
+        sort promoted vars, top-K 真 LLM 生 canonical, 其余 fallback (llm=None).
+
+        减少 long compress 时长 — typical 5+ promoted var 时省 (N-K) LLM call.
+        """
+        from explain_engine.engines import lexicon as lex_module
+
+        # 建 graph 含 5 个 L1 不同 activation (高到低)
+        g = ExplanationGraph(root_question="why?")
+        for i, act in enumerate([0.95, 0.85, 0.75, 0.65, 0.55]):
+            g.add_node(VariableNode(
+                id=f"c_00{i}", name=f"v{i}", description=f"d{i}",
+                abstraction_level=1, confidence=0.7, epistemic="insight",
+                activation=act, lifecycle_state="active",
+            ))
+        state = CognitiveState(
+            graph=g, budget_remaining=10, root_question="why?",
+        )
+        meta = SessionMeta.new(question="why?")
+        meta.session_id = "s_topk001"
+        session = Session(meta=meta, state=state)
+
+        # Capture _build_canonical_mechanism's llm arg per call
+        # (不 forward real, 因 real 需真 LLM; spy 仅捕 + 返 stub string)
+        captured_llms = []
+
+        async def spy_build(node, sess, llm):
+            captured_llms.append((node.id, llm))
+            return f"stub mech for {node.id}"
+
+        monkeypatch.setattr(lex_module, "_build_canonical_mechanism", spy_build)
+
+        sentinel_llm = object()  # type: ignore[arg-type]
+        promoted = await flush_to_lexicon(
+            session, StorageV2(),
+            llm=sentinel_llm,  # type: ignore[arg-type]
+            llm_canonical_top_k=3,
+        )
+
+        assert promoted == 5
+        # 验前 3 (highest activation) 真 LLM (llm=sentinel), 后 2 fallback (None)
+        # captured 按 dict iter order — Python 3.7+ insertion order, 应等同 add 顺序
+        assert len(captured_llms) == 5
+        # 排 by activation desc 后 top 3 (c_000/c_001/c_002, activation 0.95/0.85/0.75)
+        top_3_ids = {nid for nid, _ in captured_llms[:3]}
+        bottom_2_ids = {nid for nid, _ in captured_llms[3:]}
+        assert top_3_ids == {"c_000", "c_001", "c_002"}
+        assert bottom_2_ids == {"c_003", "c_004"}
+        # Top-3 收 sentinel_llm, bottom-2 收 None
+        for _nid, llm_arg in captured_llms[:3]:
+            assert llm_arg is sentinel_llm
+        for _nid, llm_arg in captured_llms[3:]:
+            assert llm_arg is None
+
+    @pytest.mark.asyncio
+    async def test_default_top_k_3(self, monkeypatch):
+        """Mitigation #2: default top_k=3 (不显式传时)."""
+        from explain_engine.engines import lexicon as lex_module
+
+        g = ExplanationGraph(root_question="why?")
+        for i, act in enumerate([0.95, 0.85, 0.75, 0.65, 0.55]):
+            g.add_node(VariableNode(
+                id=f"c_01{i}", name=f"v{i}", description=f"d{i}",
+                abstraction_level=1, confidence=0.7, epistemic="insight",
+                activation=act, lifecycle_state="active",
+            ))
+        state = CognitiveState(
+            graph=g, budget_remaining=10, root_question="why?",
+        )
+        meta = SessionMeta.new(question="why?")
+        meta.session_id = "s_topk002"
+        session = Session(meta=meta, state=state)
+
+        captured = []
+
+        async def spy(node, sess, llm):
+            captured.append((node.id, llm))
+            return f"stub for {node.id}"
+
+        monkeypatch.setattr(lex_module, "_build_canonical_mechanism", spy)
+
+        sentinel = object()
+        await flush_to_lexicon(
+            session, StorageV2(), llm=sentinel,  # type: ignore[arg-type]
+        )  # 不传 llm_canonical_top_k, 默认 3
+
+        # 5 captured, 前 3 (sentinel), 后 2 (None)
+        assert len(captured) == 5
+        sentinel_count = sum(1 for _, llm in captured if llm is sentinel)
+        none_count = sum(1 for _, llm in captured if llm is None)
+        assert sentinel_count == 3, f"default top_k=3, 但 sentinel count={sentinel_count}"
+        assert none_count == 2
+
 
 # ── Wave 3: _select_top_k_vars + _render_lexicon_for_prompt ──────────────────
 
