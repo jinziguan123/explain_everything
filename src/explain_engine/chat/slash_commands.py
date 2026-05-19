@@ -482,6 +482,20 @@ async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 # ─────────────────────────────────────────────────────────────────────────
 
 
+_EPI_SHORT_MAP = {
+    "fact": "fact",
+    "observation": "obs",
+    "inference": "inf",
+    "insight": "ins",
+    "speculation": "spec",
+}
+
+
+def _format_epi_short(epi: str) -> str:
+    """Epistemic 5 字 → 3-4 字缩写, 行格式对齐用. 未知 epi fallback 返原值."""
+    return _EPI_SHORT_MAP.get(epi, epi)
+
+
 def _format_node_brief(state, nid: str, max_desc: int = 60) -> str:
     """Fix 3 (2026-05-19 smoke bug 2): 格式化 node 显 ID + name + 短 description.
 
