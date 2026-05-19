@@ -22,8 +22,11 @@
 
 ## Status
 
+**Phase 12 milestone (2026-05-19)** — /show + /graph Detail (`/show` 全展开 graph 4 section + 新加 `/graph` graphviz inline 渲染)。
+866 tests pass，ruff 0。Phase 0-12 全部实施完。下一步: Phase 13 Theory Formation + Candidate E Variable Embedding。
+
 **Phase 11 milestone (2026-05-18)** — REPL Unification (default `explain` 进 ephemeral REPL + 18 slash 化)。
-806 tests pass，ruff 0。Phase 0-11 全部实施完。下一步: Phase 12 Theory Formation + Candidate E Variable Embedding。
+806 tests pass，ruff 0。
 
 **Phase 10 milestone (2026-05-18)** — Persistent World Model (跨 session Variable Lexicon)。
 728 tests pass，ruff 0。
@@ -32,6 +35,35 @@
 chat /new + /resume slash 命令 + prompt_toolkit REPL UX 升级。Phase 11 直接 motivation：
 cross-session motif detection on lexicon graph / real Anthropic tool_use adapter
 （详见 [Phase 9 acceptance evidence](docs/plans/2026-05-17-conversational-cognitive-engine-acceptance.md)）。
+
+## Phase 12 (2026-05-19) — /show + /graph Detail
+
+`/show` 从原 5-line summary 升级为 **4 section 全展开** (Session → Graph by L0/L1/L2 + 核心字段 → Edges 按 relation_type 分组 → Multi-signal verdict)。新加 `/graph` slash 走 **graphviz inline 渲染** (terminal 自动检测 iTerm2/Kitty/Ghostty/chafa)，PNG 进 process-level tempdir，REPL 退出 atexit 自动清理。
+
+**核心 (brainstorming Q&A 锁)**:
+- /show: 整张 graph 全貌 (默认), 节点字段 = id+name+desc+conf+epistemic, edge 按 type 分组
+- /graph: 独立新 slash (18 → 19 total), text + visual 互补 (text 看字段, visual 看拓扑)
+- PNG: 临时 tempdir + atexit cleanup (退出磁盘干净)
+- 终端 capability: iTerm imgcat > Kitty graphics protocol > chafa unicode > "(install chafa)" fallback
+
+**Visual encoding**:
+- L0 box lightblue / L1 ellipse lightyellow / L2 doubleoctagon lightcoral
+- Lifecycle: decayed 虚线 gray80, stale 点线; weak L1 红边框
+- Edge type: causes 实线, amplifies 粗, suppresses red, constrains blue, manifests_as 虚线
+
+**19 个 slash command** (18 → 19, 新加 /graph):
+- base (8): /quit /help /show /budget /compact /save /new /resume
+- single-session (6 + /cf alias): /compress /run /check /predict /counterfactual /rescore /cf
+- cross-session (3): /list /lexicon /migrate
+- **Phase 12 (1)**: /graph
+
+**系统 dep**:
+- `brew install graphviz` (必, 提供 `dot` binary; 缺时 /graph 友好 error 不 crash)
+- `brew install chafa` (可选, 通用 inline fallback; 缺时输 PNG path + install hint)
+
+**文档**:
+- design: [docs/plans/2026-05-19-slash-show-graph-detail-design.md](docs/plans/2026-05-19-slash-show-graph-detail-design.md)
+- plan: [docs/plans/2026-05-19-slash-show-graph-detail-plan.md](docs/plans/2026-05-19-slash-show-graph-detail-plan.md)
 
 ## Phase 11 (2026-05-18) — REPL Unification
 

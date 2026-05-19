@@ -163,6 +163,44 @@ Wave 5 顺手 fold 之前 wave review 留下的 doc minor:
 | 3 | `slash_commands._command_by_name` docstring 写 "8 commands" (Phase 9 时数) | 改 "small N (~20 commands)" generic |
 | 4 I-A | `repl_entry.py` real chat slash_switch_session 处理用 immediate-break, vs `cli._run_chat_repl_async` 的 post-loop swap | 加注释解释为何不同 (REPL 这边 handle_user_input 通常只 yield 1 个 slash_switch_session 来自 /resume 单 dispatch; cli 的 post-loop swap 是 forward-proof). 保 break idiom, 不强制统一 |
 
+---
+
+## Step 11: /graph 可视化 (Phase 12 supplemental, 2026-05-19)
+
+**目标**: 验证新加的 `/graph` slash 渲染 + 退出后 PNG 清理.
+
+**前置**: `which dot` 应返回 `/opt/homebrew/bin/dot` 或类似 (graphviz 系统包已装).
+
+**Steps**:
+1. `explain` → 进 REPL ephemeral
+2. `/resume` → 选含 graph 的旧 session (e.g. ≥5 nodes)
+3. `/show` → 验输出 4 section (Session / Graph by L0/L1/L2 / Edges by type / Multi-signal 末尾)
+4. `/graph` → 渲染图. 验证:
+   - 顶部 header 一行: `/graph tick=N · X nodes (Y L0 / Z L1 / W L2), E edges`
+   - 中间: iTerm2/Kitty/chafa 内联渲染图, 或显 `(install chafa for inline preview: brew install chafa)` fallback msg
+   - 然后: `PNG: /var/folders/.../explain_graph_xxx/graph_<sid>_<tick>.png`
+   - 末尾: `Multi-signal: consistency=X.XXX essentialness=X.XXX coverage=X.XXX` + optional `weak L1: ...`
+5. 记下 PNG 路径 + 退出 REPL: `/quit`
+6. 验证 PNG 已清理:
+   ```bash
+   ls /var/folders/*/T/explain_graph_*
+   ```
+   预期: `No such file or directory` (atexit cleanup 已 rmtree)
+
+**Pass 标准**:
+- /show 4 section 完整输出
+- /graph 不 crash, footer 含 PNG path
+- 退出后 PNG 路径失效
+
+**已知 fail-safe**:
+- 若 `dot` binary 缺 (没 brew install graphviz): /graph 输 `dot binary not found. Install: brew install graphviz` 友好 error, 不 crash
+- 若 chafa/iTerm/Kitty 全无: /graph 仍出 PNG path, 仅 inline 不显
+- 若 aggregate_acceptance 失败: render 仍走, footer 显 `Multi-signal: (aggregate_acceptance failed)`
+
+**文档**:
+- design: [2026-05-19-slash-show-graph-detail-design.md](2026-05-19-slash-show-graph-detail-design.md)
+- plan: [2026-05-19-slash-show-graph-detail-plan.md](2026-05-19-slash-show-graph-detail-plan.md)
+
 ## 长期 (Phase 12+) follow-up
 
 - **Phase 12 Theory Formation**: motif detection on cross-session graph (lexicon 是输入数据层), 评估 Neo4j (图 pattern matching)
