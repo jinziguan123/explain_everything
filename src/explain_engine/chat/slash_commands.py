@@ -736,6 +736,41 @@ def _build_digraph(state, weak_l1_ids: set[str]):
     return dg
 
 
+def _detect_inline_renderer(png_path: str) -> tuple[list[str] | None, str]:
+    """Phase 12 /graph: detect terminal capability, return (cmd, renderer_name).
+
+    检测顺序 (按优先级): iTerm2 → Kitty/Ghostty → chafa → None.
+
+    Returns:
+        (cmd_list, name) — cmd_list None 表示无 inline renderer 可用.
+        name ∈ {"iterm", "kitty", "chafa", "none"}.
+
+    Note:
+        iTerm 检 imgcat 在 PATH (iTerm2 自带 utilities, 但用户可能没装).
+        若 iTerm 检测到但 imgcat 不在 → fall through 下一档 (Kitty/chafa).
+    """
+    import os
+    import shutil
+
+    term_program = os.environ.get("TERM_PROGRAM", "")
+    kitty_window = os.environ.get("KITTY_WINDOW_ID", "")
+
+    # 1. iTerm2 + imgcat
+    if term_program == "iTerm.app" and shutil.which("imgcat"):
+        return ["imgcat", png_path], "iterm"
+
+    # 2. Kitty / Ghostty (kitty graphics protocol)
+    if (kitty_window or term_program == "ghostty") and shutil.which("kitty"):
+        return ["kitty", "+kitten", "icat", png_path], "kitty"
+
+    # 3. chafa (通用 Unicode block art)
+    if shutil.which("chafa"):
+        return ["chafa", "--size", "100x40", png_path], "chafa"
+
+    # 4. None
+    return None, "none"
+
+
 def _ephemeral_reject(name: str) -> list[ChatEvent]:
     """Phase 11 Wave 3: ephemeral 时统一 reject 模板.
 

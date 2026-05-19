@@ -202,3 +202,77 @@ class TestBuildDigraph:
         dg = _build_digraph(state, weak_l1_ids=set())
         src = dg.source
         assert "rankdir=TB" in src or "rankdir=\"TB\"" in src
+
+
+class TestDetectInlineRenderer:
+    """检测顺序: iTerm2 → Kitty/Ghostty → chafa → None."""
+
+    def test_iterm_detected(self, monkeypatch):
+        from explain_engine.chat.slash_commands import _detect_inline_renderer
+        monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+        monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: "/usr/local/bin/imgcat" if x == "imgcat" else None,
+        )
+        cmd, name = _detect_inline_renderer("/tmp/foo.png")
+        assert name == "iterm"
+        assert cmd[0] == "imgcat"
+        assert "/tmp/foo.png" in cmd
+
+    def test_kitty_window_id_detected(self, monkeypatch):
+        from explain_engine.chat.slash_commands import _detect_inline_renderer
+        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+        monkeypatch.setenv("KITTY_WINDOW_ID", "1")
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: "/usr/local/bin/kitty" if x == "kitty" else None,
+        )
+        cmd, name = _detect_inline_renderer("/tmp/foo.png")
+        assert name == "kitty"
+        assert cmd[:3] == ["kitty", "+kitten", "icat"]
+
+    def test_ghostty_detected(self, monkeypatch):
+        from explain_engine.chat.slash_commands import _detect_inline_renderer
+        monkeypatch.setenv("TERM_PROGRAM", "ghostty")
+        monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: "/usr/local/bin/kitty" if x == "kitty" else None,
+        )
+        _cmd, name = _detect_inline_renderer("/tmp/foo.png")
+        assert name == "kitty"
+
+    def test_chafa_fallback(self, monkeypatch):
+        from explain_engine.chat.slash_commands import _detect_inline_renderer
+        monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+        monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: "/usr/local/bin/chafa" if x == "chafa" else None,
+        )
+        cmd, name = _detect_inline_renderer("/tmp/foo.png")
+        assert name == "chafa"
+        assert cmd[0] == "chafa"
+        assert "--size" in cmd
+
+    def test_none_when_all_unavailable(self, monkeypatch):
+        from explain_engine.chat.slash_commands import _detect_inline_renderer
+        monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+        monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+        monkeypatch.setattr("shutil.which", lambda x: None)
+        cmd, name = _detect_inline_renderer("/tmp/foo.png")
+        assert cmd is None
+        assert name == "none"
+
+    def test_iterm_missing_imgcat_falls_to_chafa(self, monkeypatch):
+        """iTerm 但 imgcat 不在 PATH → 试下一档 chafa."""
+        from explain_engine.chat.slash_commands import _detect_inline_renderer
+        monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+        monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: "/usr/local/bin/chafa" if x == "chafa" else None,
+        )
+        _cmd, name = _detect_inline_renderer("/tmp/foo.png")
+        assert name == "chafa"
