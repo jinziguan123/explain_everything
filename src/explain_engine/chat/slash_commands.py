@@ -99,11 +99,13 @@ async def _handle_help(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 
 
 async def _handle_show(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
-    """Graph snapshot + multi-signal acceptance report.
+    """Phase 12 (2026-05-19): /show 全展开 graph + multi-signal acceptance.
 
-    aggregate_acceptance 是 readonly (Phase 2 simulation), 不调 LLM,
-    所以放 slash 里 fresh 跑一次廉价. 异常吞掉 (e.g. graph 空 / no L1)
-    防 inspection 命令 crash 整 session.
+    输出 4 个 section (Session → Graph → Edges → Multi-signal). 详见
+    docs/plans/2026-05-19-slash-show-graph-detail-design.md.
+
+    aggregate_acceptance 是 readonly (Phase 2 simulation), 不调 LLM, 廉价.
+    包 try/except — graph 空 / no L1 / 其他 edge case 不应 crash inspection 命令.
     """
     from explain_engine.chat.session import ChatEvent
     from explain_engine.engines.simulation import aggregate_acceptance
@@ -116,29 +118,96 @@ async def _handle_show(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     n_decayed = sum(1 for n in g.nodes.values() if n.lifecycle_state == "decayed")
     n_stale = sum(1 for n in g.nodes.values() if n.lifecycle_state == "stale")
 
-    lines = [
-        f"Session: {chat.sid}",
-        f"Question: {chat._session.meta.question}",
-        f"Stage: {chat._session.meta.stage}",
-        f"Graph: {len(g.nodes)} nodes ({n_l0} L0 / {n_l1} L1 / {n_l2} L2)",
-        f"Lifecycle: {n_decayed} decayed, {n_stale} stale",
-    ]
-
-    # Multi-signal section (run aggregate_acceptance fresh).
-    # 包 try/except — graph 空 / 边角情况不应 crash inspection 命令.
+    # ─── Multi-signal 提前算 (weak_chain_l1s 要传给 L1 section 给 (weak) marker)
+    weak_l1_set: set[str] = set()
+    report = None
+    agg_err: str | None = None
     try:
         report = aggregate_acceptance(state)
-        lines.append("")
-        lines.append("Multi-signal acceptance:")
-        lines.append(f"  avg_consistency: {report.avg_consistency:.3f}")
-        lines.append(f"  avg_essentialness: {report.avg_essentialness:.3f}")
-        lines.append(f"  weak_chain_l1s: {report.weak_chain_l1s}")
-        lines.append(f"  rollout_coverage: {report.rollout_coverage:.3f}")
-        if report.input_alignment is not None:
-            lines.append(f"  input_alignment: {report.input_alignment:.3f}")
+        weak_l1_set = set(report.weak_chain_l1s or [])
     except Exception as exc:
+        agg_err = type(exc).__name__
+
+    lines: list[str] = []
+
+    # ═══ Section 1: Session ═══
+    lines.append("=== Session ===")
+    lines.append(f"SID:      {chat.sid}")
+    lines.append(f"Question: {chat._session.meta.question}")
+    lines.append(f"Stage:    {chat._session.meta.stage}")
+    lines.append("")
+
+    # ═══ Section 2: Graph (node tree by L) ═══
+    lines.append(
+        f"=== Graph ({len(g.nodes)} nodes: {n_l0} L0 / {n_l1} L1 / {n_l2} L2; "
+        f"{n_decayed} decayed, {n_stale} stale) ==="
+    )
+    lines.append("")
+
+    if len(g.nodes) == 0:
+        lines.append("(empty)")
         lines.append("")
-        lines.append(f"(aggregate_acceptance failed: {type(exc).__name__})")
+    else:
+        # L0 section
+        if n_l0 > 0:
+            lines.append(f"[L0 Observations] ({n_l0})")
+            for nid in sorted(n.id for n in g.nodes.values() if n.abstraction_level == 0):
+                lines.append(f"  {_format_node_brief(state, nid, weak=nid in weak_l1_set)}")
+            lines.append("")
+
+        # L1 section (with weak chain header inline)
+        if n_l1 > 0:
+            l1_header = f"[L1 Concepts] ({n_l1})"
+            l1_weak = [n.id for n in g.nodes.values()
+                       if n.abstraction_level == 1 and n.id in weak_l1_set]
+            if l1_weak:
+                l1_header += f" — weak chain: {' '.join(sorted(l1_weak))}"
+            lines.append(l1_header)
+            for nid in sorted(n.id for n in g.nodes.values() if n.abstraction_level == 1):
+                lines.append(f"  {_format_node_brief(state, nid, weak=nid in weak_l1_set)}")
+            lines.append("")
+
+        # L2 section (always shown — explicit "(none)" when zero)
+        lines.append(f"[L2 Drivers] ({n_l2})")
+        if n_l2 == 0:
+            lines.append("  (none — 尚未 expand 出 root driver)")
+        else:
+            for nid in sorted(n.id for n in g.nodes.values() if n.abstraction_level == 2):
+                lines.append(f"  {_format_node_brief(state, nid)}")
+        lines.append("")
+
+    # ═══ Section 3: Edges (group by relation_type) ═══
+    lines.append(f"=== Edges ({len(g.edges)}) ===")
+    lines.append("")
+    if len(g.edges) == 0:
+        lines.append("(no edges)")
+        lines.append("")
+    else:
+        by_type: dict[str, list] = {}
+        for e in g.edges.values():
+            by_type.setdefault(e.relation_type, []).append(e)
+        for rtype in sorted(by_type):
+            edges = sorted(by_type[rtype], key=lambda e: (e.source_node, e.target_node))
+            lines.append(f"{rtype} ({len(edges)}):")
+            for edge in edges:
+                lines.append(f"  {_format_edge_brief(edge)}")
+            lines.append("")
+
+    # ═══ Section 4: Multi-signal verdict ═══
+    lines.append("=== Multi-signal acceptance ===")
+    if report is not None:
+        lines.append(f"avg_consistency:    {report.avg_consistency:.3f}")
+        lines.append(f"avg_essentialness:  {report.avg_essentialness:.3f}")
+        lines.append(f"rollout_coverage:   {report.rollout_coverage:.3f}")
+        weak_ids = sorted(report.weak_chain_l1s or [])
+        if weak_ids:
+            lines.append(f"weak_chain_l1s ({len(weak_ids)}): {' '.join(weak_ids)}")
+        else:
+            lines.append("weak_chain_l1s: (none)")
+        if report.input_alignment is not None:
+            lines.append(f"input_alignment:    {report.input_alignment:.3f}")
+    else:
+        lines.append(f"(aggregate_acceptance failed: {agg_err})")
 
     return [ChatEvent(type="slash_show", content="\n".join(lines))]
 

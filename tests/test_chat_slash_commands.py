@@ -59,8 +59,11 @@ class TestDispatchSlash:
         chat = ChatSession("s_51a55003")
         events = await dispatch_slash(chat, "/show")
         content = events[0].content
+        # Phase 12 (2026-05-19): /show 重写 4 section layout (Task A4).
+        # 旧断言 "Graph:" 改为 "=== Graph (" — section header 仍含 graph counts,
+        # 测试 intent 不变 (验 Question + graph 计数 + L0 marker 都出现).
         assert "Question:" in content
-        assert "Graph:" in content
+        assert "=== Graph (" in content
         assert "L0" in content
 
     @pytest.mark.asyncio
