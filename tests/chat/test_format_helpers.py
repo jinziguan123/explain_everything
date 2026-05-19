@@ -135,3 +135,48 @@ class TestFormatNodeBrief:
         out = _format_node_brief(state, "p_999")
         assert "p_999" in out
         assert "节点不在 graph" in out
+
+
+class TestFormatEdgeBrief:
+    """Edge 行格式: `{source} → {target} [{conf:.2f}] {mechanism[:max_mech]}...?`"""
+
+    def _make_edge(self, **kwargs):
+        from explain_engine.schema.edges import RelationEdge
+        return RelationEdge(**kwargs)
+
+    def test_basic_format(self):
+        from explain_engine.chat.slash_commands import _format_edge_brief
+        edge = self._make_edge(
+            id="e_001", source_node="c_001", target_node="p_001",
+            relation_type="manifests_as", confidence=0.85,
+            mechanism_description="经济不安全感在房价感受层表现为购房意愿降",
+        )
+        out = _format_edge_brief(edge)
+        assert "c_001" in out
+        assert "→" in out
+        assert "p_001" in out
+        assert "[0.85]" in out
+        assert "经济不安全感在房价感受层表现为购房意愿降" in out
+
+    def test_mechanism_truncation(self):
+        from explain_engine.chat.slash_commands import _format_edge_brief
+        long_mech = "y" * 100
+        edge = self._make_edge(
+            id="e_002", source_node="c_001", target_node="c_002",
+            relation_type="causes", confidence=0.5,
+            mechanism_description=long_mech,
+        )
+        out = _format_edge_brief(edge, max_mech=60)
+        assert "..." in out
+        assert out.endswith("y" * 60 + "...")
+
+    def test_relation_type_not_in_line(self):
+        """type 已在 section header 分组, 行内不重复显."""
+        from explain_engine.chat.slash_commands import _format_edge_brief
+        edge = self._make_edge(
+            id="e_003", source_node="a", target_node="b",
+            relation_type="amplifies", confidence=0.7,
+            mechanism_description="m",
+        )
+        out = _format_edge_brief(edge)
+        assert "amplifies" not in out

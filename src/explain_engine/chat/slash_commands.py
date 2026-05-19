@@ -555,6 +555,20 @@ def _format_node_list(state, nids: list[str], indent: str = "    ") -> str:
     return "\n".join(f"{indent}{_format_node_brief(state, nid)}" for nid in nids)
 
 
+def _format_edge_brief(edge, max_mech: int = 60) -> str:
+    """Phase 12: /show edge 行格式.
+
+    格式: `{source} → {target} [{conf:.2f}] {mechanism[:max_mech]}...?`
+
+    relation_type 不显行内 (caller 已按 type 分 section). source/target
+    只显 ID, 不展开 name — 上方 node tree 可查, 避免行宽爆炸.
+    """
+    mech = edge.mechanism_description[:max_mech]
+    if len(edge.mechanism_description) > max_mech:
+        mech += "..."
+    return f"{edge.source_node} → {edge.target_node} [{edge.confidence:.2f}] {mech}"
+
+
 def _ephemeral_reject(name: str) -> list[ChatEvent]:
     """Phase 11 Wave 3: ephemeral 时统一 reject 模板.
 
