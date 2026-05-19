@@ -144,3 +144,25 @@ class TestSlashGraph:
         events = await dispatch_slash(chat, "/graph")
         content = events[0].content
         assert "Multi-signal" in content or "consistency" in content.lower()
+
+    @pytest.mark.asyncio
+    async def test_render_failure_returns_friendly_error(self, monkeypatch):
+        """dg.render() 失败 (e.g. dot 跑挂 / permission / disk full) → 友好 error, 不 crash."""
+        chat = _make_session_with_graph("s_a5e0b006")
+        # dot binary "在" 但 render 失败
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda x: "/usr/local/bin/dot" if x == "dot" else None,
+        )
+
+        def fake_render_fail(self, filename, **kwargs):
+            raise RuntimeError("dot subprocess returned 1: oom")
+
+        monkeypatch.setattr("graphviz.Digraph.render", fake_render_fail)
+
+        events = await dispatch_slash(chat, "/graph")
+        assert events[0].type == "slash_graph"
+        content = events[0].content.lower()
+        # 不 crash, 输友好 error
+        assert "render" in content or "dot" in content
+        assert "failed" in content or "失败" in content

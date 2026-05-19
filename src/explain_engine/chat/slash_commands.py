@@ -267,12 +267,24 @@ async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     except Exception:
         pass
 
-    # Build + render
+    # Build + render — dg.render() shells out to `dot`; even with dot binary
+    # present (shutil.which check above), the subprocess can fail (segfault,
+    # permission, disk full, dot version mismatch). Catch + report friendly
+    # error instead of crashing the REPL turn.
     dg = _build_digraph(state, weak_l1_ids=weak_l1_ids)
     tmpdir = _get_session_tmpdir()
     tick = getattr(state, "tick", 0)
     base = os.path.join(tmpdir, f"graph_{chat.sid}_{tick}")
-    png_path = dg.render(filename=base, cleanup=True)
+    try:
+        png_path = dg.render(filename=base, cleanup=True)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_graph",
+            content=(
+                f"dot render 失败: {type(exc).__name__}: {exc}\n"
+                "请检查 graphviz 安装 (brew reinstall graphviz) 或磁盘空间."
+            ),
+        )]
 
     # Header
     n_l0 = sum(1 for n in g.nodes.values() if n.abstraction_level == 0)
@@ -287,7 +299,9 @@ async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     cmd, renderer = _detect_inline_renderer(png_path)
     if cmd is not None:
         try:
-            subprocess.run(cmd, check=False)
+            # stderr=DEVNULL: chafa/imgcat 任何 warning 不污染用户 terminal.
+            # stdout=None: 让 chafa/imgcat 把 image bytes 写到 terminal (inline 显示必需).
+            subprocess.run(cmd, check=False, stderr=subprocess.DEVNULL)
             inline_msg = f"(rendered inline via {renderer})"
         except Exception as exc:
             inline_msg = f"(inline render via {renderer} failed: {type(exc).__name__})"
