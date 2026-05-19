@@ -1212,9 +1212,9 @@ class TestWave3Registry:
         for name in ["compress", "run", "check", "predict", "counterfactual", "rescore", "cf"]:
             assert name in names, f"/{name} not registered"
 
-    def test_total_count_is_18(self):
-        """8 base + 6 Wave 3 + 1 alias (cf) + 3 Wave 4 = 18."""
-        assert len(DEFAULT_COMMANDS) == 18
+    def test_total_count_is_19(self):
+        """8 base + 6 Wave 3 + 1 alias (cf) + 3 Wave 4 + 1 Phase 12 (graph) = 19."""
+        assert len(DEFAULT_COMMANDS) == 19
 
     def test_help_lists_all_wave3_commands(self):
         """/help 自动遍历 DEFAULT_COMMANDS — 验 Wave 3 6+1 都列出."""
@@ -1498,3 +1498,22 @@ class TestWave4Registry:
         content = events[0].content
         for name in ["list", "lexicon", "migrate"]:
             assert f"/{name}" in content, f"/help missing /{name}"
+
+
+class TestPhase12Registry:
+    """Phase 12 (2026-05-19): /graph slash 注册验证."""
+
+    def test_graph_registered(self):
+        names = {c.name for c in DEFAULT_COMMANDS}
+        assert "graph" in names, "/graph not registered"
+
+    def test_help_lists_graph(self):
+        """/help 自动遍历 DEFAULT_COMMANDS — 验 /graph 列出."""
+        import asyncio
+
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_aa000005")
+        chat = ChatSession("s_aa000005")
+        events = asyncio.run(dispatch_slash(chat, "/help"))
+        content = events[0].content
+        assert "/graph" in content, "/help missing /graph"
