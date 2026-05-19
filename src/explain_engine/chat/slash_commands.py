@@ -496,22 +496,56 @@ def _format_epi_short(epi: str) -> str:
     return _EPI_SHORT_MAP.get(epi, epi)
 
 
-def _format_node_brief(state, nid: str, max_desc: int = 60) -> str:
-    """Fix 3 (2026-05-19 smoke bug 2): 格式化 node 显 ID + name + 短 description.
+def _format_node_brief(
+    state,
+    nid: str,
+    max_desc: int = 60,
+    weak: bool = False,
+) -> str:
+    """Phase 12 (2026-05-19): /show + /graph detail. Fix 3 升级版.
 
-    用于 /predict / /counterfactual 等 slash 显 node 时, 避免裸 ID
-    (user 看 c_005 不知是啥). 若 node 不在 state.graph (e.g.
-    counterfactual remove 后 ID 已删), fallback 仅显 ID + "(已删)".
+    新行格式:
+      {id} [{epi_short} {conf:.2f}] {marker?} 「{name}」: {desc[:max_desc]}{...}?
 
-    Returns: "c_005 「银发经济」: 老龄人口消费结构 (...)"
+    marker 优先级 (lifecycle > weak): [decayed] > [stale] > (weak) > 空.
+
+    Args:
+        state: ChatState (含 graph).
+        nid: node id.
+        max_desc: desc 截短 char 数, 默认 60.
+        weak: caller 标记此 node 在 weak_chain_l1s 中 (multi-signal 视角).
+              若 lifecycle_state 是 stale/decayed, marker 用 lifecycle 不用 weak.
+
+    Returns:
+        formatted line, 或 fallback "{nid} (节点不在 graph)".
+
+    Used by:
+        - /show (Phase 12) node tree
+        - /predict (Fix 3) report
+        - /counterfactual (Fix 3) report
     """
     node = state.graph.nodes.get(nid)
     if node is None:
         return f"{nid} (节点不在 graph)"
+
+    epi_short = _format_epi_short(node.epistemic)
+    conf_str = f"{node.confidence:.2f}"
+
+    # marker 优先级: lifecycle > weak
+    if node.lifecycle_state == "decayed":
+        marker = "[decayed] "
+    elif node.lifecycle_state == "stale":
+        marker = "[stale] "
+    elif weak:
+        marker = "(weak) "
+    else:
+        marker = ""
+
     desc = node.description[:max_desc]
     if len(node.description) > max_desc:
         desc += "..."
-    return f"{nid} 「{node.name}」: {desc}"
+
+    return f"{nid} [{epi_short} {conf_str}] {marker}「{node.name}」: {desc}"
 
 
 def _format_node_list(state, nids: list[str], indent: str = "    ") -> str:
