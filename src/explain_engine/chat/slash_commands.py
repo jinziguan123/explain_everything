@@ -527,6 +527,7 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
     from rich.console import Console
 
     from explain_engine.engines.compression import propose_candidates
+    from explain_engine.engines.evaluation import score_all
     from explain_engine.engines.lexicon import flush_to_lexicon
     from explain_engine.hitl.cli_interactive import review_insights_async
 
@@ -540,6 +541,20 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
         return [ChatEvent(
             type="slash_error",
             content=f"/compress propose_candidates 失败: {type(exc).__name__}: {exc}",
+        )]
+
+    # Fix 1 (2026-05-19 smoke bug): 加 score_all 让 state.last_gains 非空
+    # (跟 cli `_run_compress` 一致). Phase 11 Wave 3 漏 score_all 导致 HITL
+    # 看 gain 全 0.00 — review_insights_async 实际从 state.last_gains 读.
+    try:
+        with _console.status(
+            "[bold green]调 LLM 评每 L1 候选 (score_all)...[/bold green]"
+        ):
+            await score_all(chat.state, chat.llm)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"/compress score_all 失败: {type(exc).__name__}: {exc}",
         )]
 
     # HITL async review (走 chat.input_provider, None 时 accept-all). 不包 spinner
@@ -710,13 +725,30 @@ async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     new_nodes_str = ", ".join(report.new_node_ids) or "(none)"
     predicted_str = ", ".join(report.predicted_L0_ids) or "(none)"
     activated_str = ", ".join(report.activated_existing_L0) or "(none)"
+
+    # Fix 2 (2026-05-19 smoke bug): 加 top-3 propagation_acts display.
+    # PredictionReport.propagation_acts 是核心信息 (新 concept 通过 edge
+    # 影响现 graph mid-level node 的 activation map). Wave 3 漏显, user
+    # 看 activated_existing_L0=none 误以为 engine 没干事; 实际 propagation
+    # 可能含 L1/L2 变化但 surface 不到. getattr fallback {} 让老 test 没
+    # 该字段时不撞 AttributeError.
+    prop_acts = getattr(report, "propagation_acts", {})
+    if prop_acts:
+        top_acts = sorted(prop_acts.items(), key=lambda kv: -abs(kv[1]))[:3]
+        prop_lines = "\n".join(
+            f"    {nid}: {act:+.2f}" for nid, act in top_acts
+        )
+    else:
+        prop_lines = "    (无 propagation, intervention 跟现 graph 无 edge 关联)"
+
     return [ChatEvent(
         type="slash_predict",
         content=(
             f"prediction (intervention={intervention!r}):\n"
             f"  new_nodes:             {new_nodes_str}\n"
             f"  predicted_L0:          {predicted_str}\n"
-            f"  activated_existing_L0: {activated_str}"
+            f"  activated_existing_L0: {activated_str}\n"
+            f"  top propagation (现 graph mid-level 受影响):\n{prop_lines}"
         ),
     )]
 

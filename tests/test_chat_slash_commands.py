@@ -670,6 +670,10 @@ class TestSlashCompress:
             called["propose"] += 1
             state.insight_candidates = ["c_001"]  # 留 1 个
 
+        async def fake_score(state, llm):
+            # Fix 1 (2026-05-19): /compress 现调 score_all (跟 cli 一致)
+            pass
+
         async def fake_review(state, input_provider, console=None):
             called["review"] += 1
             # accept all 不动 candidates
@@ -680,6 +684,9 @@ class TestSlashCompress:
 
         monkeypatch.setattr(
             "explain_engine.engines.compression.propose_candidates", fake_propose
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.evaluation.score_all", fake_score
         )
         monkeypatch.setattr(
             "explain_engine.hitl.cli_interactive.review_insights_async", fake_review
@@ -693,6 +700,61 @@ class TestSlashCompress:
         assert "完成" in events[0].content
         assert "2 var" in events[0].content
         assert called == {"propose": 1, "review": 1, "flush": 1}
+
+    @pytest.mark.asyncio
+    async def test_compress_runs_score_all_to_populate_gains(self, monkeypatch):
+        """Fix 1 (2026-05-19 smoke bug): /compress 应在 propose 后 score_all,
+        让 state.last_gains 非空, 否则 review_insights 显 gain 全 0.00.
+
+        Root cause: Phase 11 Wave 3 实施 /compress 时漏 score_all step.
+        cli `_run_compress` 有, chat `/compress` 漏. spec gap.
+        """
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_c0000099")
+        chat = ChatSession("s_c0000099", llm=object())  # type: ignore[arg-type]
+
+        called = {"propose": 0, "score": 0, "review": 0, "flush": 0}
+
+        async def fake_propose(state, llm, min_count=3, max_count=5):
+            called["propose"] += 1
+            state.insight_candidates = ["c_001"]
+
+        async def fake_score(state, llm):
+            called["score"] += 1
+            # 真 score_all 写 state.last_gains; fake 模拟
+            state.last_gains = {"c_001": 0.75}
+
+        async def fake_review(state, input_provider, console=None):
+            called["review"] += 1
+            # 验 review 时 last_gains 已 populated (= score_all 在 review 前跑过)
+            assert state.last_gains.get("c_001", 0.0) == 0.75, (
+                "score_all 未在 review_insights 前跑 — gain 会全 0"
+            )
+
+        async def fake_flush(session, storage, llm=None):
+            called["flush"] += 1
+            return 0
+
+        monkeypatch.setattr(
+            "explain_engine.engines.compression.propose_candidates", fake_propose
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.evaluation.score_all", fake_score
+        )
+        monkeypatch.setattr(
+            "explain_engine.hitl.cli_interactive.review_insights_async", fake_review
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.lexicon.flush_to_lexicon", fake_flush
+        )
+
+        events = await dispatch_slash(chat, "/compress")
+        assert events[0].type == "slash_compress"
+        # Fix 1 invariant: 调用顺序 propose → score → review → flush
+        assert called["propose"] == 1
+        assert called["score"] == 1, "score_all 未调用 — gain 会全 0 bug"
+        assert called["review"] == 1
+        assert called["flush"] == 1
 
     @pytest.mark.asyncio
     async def test_propose_failure_returns_error(self, monkeypatch):
@@ -889,6 +951,60 @@ class TestSlashPredict:
         assert "p_999" in c
         assert "p_001" in c
         assert "如果 X 增加" in c
+
+    @pytest.mark.asyncio
+    async def test_predict_displays_propagation_acts(self, monkeypatch):
+        """Fix 2 (2026-05-19 smoke bug): /predict 输出应含 top-K propagation_acts.
+
+        Root cause: PredictionReport.propagation_acts 是核心信息 (新 concept
+        propagation 到现 graph 的 activation map), Wave 3 _handle_predict 漏显.
+        用户看 activated_existing_L0=none 觉得 engine 没干事, 实际 propagation_acts
+        可能含 mid-level 变化但漏 surface.
+        """
+        from dataclasses import dataclass
+
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_b0000099")
+        chat = ChatSession("s_b0000099", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "对于银发经济会有什么影响"
+        chat.input_provider = fake_provider
+
+        @dataclass
+        class FakeReport:
+            new_node_ids: list
+            predicted_L0_ids: list
+            activated_existing_L0: list
+            propagation_acts: dict
+
+        async def fake_predict(state, intervention_text, llm):
+            return FakeReport(
+                new_node_ids=["c_005"],
+                predicted_L0_ids=["p_016", "p_017"],
+                activated_existing_L0=[],
+                propagation_acts={
+                    "c_001": 0.62,
+                    "c_002": 0.45,
+                    "c_003": 0.30,
+                    "c_004": 0.12,
+                    "p_001": 0.08,
+                },
+            )
+
+        monkeypatch.setattr(
+            "explain_engine.engines.prediction.predict", fake_predict
+        )
+
+        events = await dispatch_slash(chat, "/predict")
+        assert events[0].type == "slash_predict"
+        c = events[0].content
+        # Top-3 (by act desc) 应显
+        assert "c_001" in c
+        assert "c_002" in c
+        assert "c_003" in c
+        # Format: 0.62 浮点显示
+        assert "0.62" in c
 
 
 class TestSlashCounterfactual:
