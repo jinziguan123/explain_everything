@@ -24,11 +24,12 @@ logger = logging.getLogger(__name__)
 # Phase 11 Wave 0: deepseek-v4-pro forced→auto fallback 后偶尔返 free text
 # (parsed=None). retry 2 次, append reminder. 总 3 次调用.
 #
-# Scope (Wave 5 review fold): 本 retry 仅 cover `parsed is None` (LLM auto
-# fallback 后返 free text, 没出 structured output, downstream Response.parsed=None).
-# schema-shape malformed (LLM 返 JSON 但字段 missing / type mismatch → Pydantic
-# ValidationError) 由调用方 outer retry 处理 (e.g. engines/_llm_retry 的
-# call_with_retry); 两层 layered defense.
+# Fix 5 (2026-05-19 smoke 扩 scope): 本 retry 现 cover 两种 malformed:
+# 1. parsed is None — LLM auto fallback 后返 free text (Wave 0 原 case)
+# 2. parsed is empty dict `{}` — LLM 返 valid tool_use 但 input 空 (production
+#    deepseek 撞到, 之前 yaml prompt 给了 "return empty object" escape hatch 制造)
+# 仍由 caller (engines/_llm_retry) outer 处理 schema-shape mismatch
+# (字段类型错等). 两层 layered defense.
 MAX_RETRIES_ON_MALFORMED = 2
 _REMINDER_MSG = (
     "Previous response was not valid JSON matching the requested schema. "
@@ -66,9 +67,13 @@ class AnthropicProtocolClient:
                 last_response = await self._single_chat_call(
                     current_messages, schema=schema, model=model
                 )
-                if schema is None or last_response.parsed is not None:
+                # Fix 5 (2026-05-19): cover empty dict / list 也算 malformed.
+                # `parsed is not None and parsed` 同时排 None + falsy (e.g. {}, [], "")
+                if schema is None or (
+                    last_response.parsed is not None and last_response.parsed
+                ):
                     return last_response
-                # malformed: parsed=None 而 schema 要求 structured output
+                # malformed: parsed=None 或 empty 而 schema 要求 structured output
                 if attempt < MAX_RETRIES_ON_MALFORMED:
                     logger.warning(
                         "LLM response malformed (attempt %d/%d, model=%s). "

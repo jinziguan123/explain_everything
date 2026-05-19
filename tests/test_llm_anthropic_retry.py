@@ -96,6 +96,32 @@ class TestAnthropicProtocolRetry:
         # raw text preview 在 error message 里 (诊断用)
         assert "Sorry, I cannot" in str(exc_info.value)
 
+    async def test_retry_on_empty_dict_parsed(self, mock_anthropic):
+        """Fix 5 (2026-05-19 smoke): LLM 返 valid tool_use 但 input={} 空 dict
+        (字段缺失) → 应 retry, 不直接返让 caller raise.
+
+        Root cause: Wave 0 retry condition `parsed is not None` 漏 cover
+        empty dict (truthy=False 但 `is not None`=True 仍走 return path).
+        production 撞 deepseek 返 `{"input":{}}` → CompressionOutput.model_validate({})
+        ValidationError → SchemaValidationError.
+        """
+        mock_anthropic.messages.create = AsyncMock(
+            side_effect=[
+                _tool_use_resp({}),  # 空 dict 不符 schema
+                _tool_use_resp({"answer": "yes", "confidence": 0.7}),  # valid
+            ]
+        )
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="deepseek-v4-pro"
+        )
+        r = await client.chat(
+            [Message(role="user", content="hi")],
+            schema=_DemoSchema,
+        )
+        assert r.parsed == {"answer": "yes", "confidence": 0.7}
+        # 应 retry: 2 次调用
+        assert mock_anthropic.messages.create.call_count == 2
+
     async def test_valid_first_time_no_retry(self, mock_anthropic):
         """LLM 第一次就 valid → mock call 1 次, 无 retry."""
         mock_anthropic.messages.create = AsyncMock(

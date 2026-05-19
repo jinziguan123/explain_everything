@@ -29,6 +29,21 @@ user_template: |
   请输出 {min_count}-{max_count} 个 abstract candidate variable。
   每个候选的 coverage 的 concrete_id 必须从上述现象的 <id> 中选（如 p_001 / p_002 / ...）。
 
-  IMPORTANT: Respond ONLY with valid JSON matching the requested schema.
-  No markdown code fences, no explanation, no preamble.
-  If you cannot determine the answer, return an empty list / object - do NOT include free text.
+  IMPORTANT: Respond ONLY with valid JSON matching this exact schema:
+
+  {{
+    "candidates": [
+      {{
+        "name": "<abstract variable name, e.g. 长期不确定性>",
+        "description": "<明确边界, 30-80 字>",
+        "coverage": [
+          {{"concrete_id": "p_001", "manifestation": "<为何此 abstract 在此现象上显现>"}},
+          {{"concrete_id": "p_003", "manifestation": "..."}}
+        ]
+      }}
+    ]
+  }}
+
+  No markdown code fences, no explanation, no preamble. **必须返至少 {min_count}
+  candidates** — 即使你觉得难压缩, 也要给出 best-effort attempt (e.g. 按现象主题
+  粗粒度分组), 绝不返空 `{{"candidates": []}}` 或 `{{}}`.

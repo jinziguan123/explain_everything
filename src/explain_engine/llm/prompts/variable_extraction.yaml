@@ -37,6 +37,17 @@ user_template: |
   请输出 {min_count}-{max_count} 个**跨领域的相关外围现象**，
   让后续认知引擎能从中找到隐藏的高维变量。
 
-  IMPORTANT: Respond ONLY with valid JSON matching the requested schema.
-  No markdown code fences, no explanation, no preamble.
-  If you cannot determine the answer, return an empty list / object - do NOT include free text.
+  IMPORTANT: Respond ONLY with valid JSON matching this exact schema:
+
+  {{
+    "phenomena": [
+      {{
+        "name": "<现象简短名, 如 房价上涨>",
+        "description": "<1-2 句具体形态, 不说 '因为...所以...'>"
+      }}
+    ]
+  }}
+
+  No markdown code fences, no explanation, no preamble. **必须返至少 {min_count}
+  phenomena** — 即使问题不清晰, 也要给出 best-effort 跨领域猜测, 绝不返空
+  `{{"phenomena": []}}` 或 `{{}}`.
