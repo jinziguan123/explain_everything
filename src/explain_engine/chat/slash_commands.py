@@ -20,6 +20,11 @@ transcript / turn_count (因为非真正 user→assistant 对话).
 
 from __future__ import annotations
 
+# Phase 12 /graph: tmpdir lifecycle. aliased _atexit/_shutil/_tempfile 让
+# test 可 monkeypatch sc._atexit.register (验 atexit 注册).
+import atexit as _atexit
+import shutil as _shutil
+import tempfile as _tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -636,6 +641,24 @@ def _format_edge_brief(edge, max_mech: int = 60) -> str:
     if len(edge.mechanism_description) > max_mech:
         mech += "..."
     return f"{edge.source_node} → {edge.target_node} [{edge.confidence:.2f}] {mech}"
+
+
+_SESSION_TMPDIR: str | None = None
+"""Phase 12: lazy session-scoped tmpdir for /graph PNG output.
+
+进程级 (非 session 级), 同一 REPL 内 /new /resume 多 session 共享,
+filename 含 sid 区分 (graph_<sid>_<tick>.png). atexit 进程退出清.
+退出后路径失效 — 符合用户预期 '磁盘干净'.
+"""
+
+
+def _get_session_tmpdir() -> str:
+    """Lazy init + atexit cleanup. 不用 /graph 的 session 完全不创目录."""
+    global _SESSION_TMPDIR
+    if _SESSION_TMPDIR is None:
+        _SESSION_TMPDIR = _tempfile.mkdtemp(prefix="explain_graph_")
+        _atexit.register(_shutil.rmtree, _SESSION_TMPDIR, ignore_errors=True)
+    return _SESSION_TMPDIR
 
 
 def _ephemeral_reject(name: str) -> list[ChatEvent]:
