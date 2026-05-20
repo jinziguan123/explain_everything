@@ -1094,6 +1094,8 @@ class TestUpsertVarEmbeddingMerge:
         assert len(audit_logs) == 1
         rec = json.loads(audit_logs[0].read_text(encoding="utf-8").strip())
         assert rec["merged_into"] == "v_aaaa1111"
+        # Phase 13 final review: merged_into_canonical 自包含 audit
+        assert rec["merged_into_canonical"] == "existing_canonical"
         assert "新候选" in rec["merged_from"]
         assert rec["sim"] == pytest.approx(1.0, abs=0.01)
         assert rec["evidence_ids"] == ["s_bbbb0002"]

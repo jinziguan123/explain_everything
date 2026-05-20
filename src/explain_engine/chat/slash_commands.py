@@ -1003,8 +1003,9 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
         content=(
             f"compress 完成. {len(chat.state.insight_candidates)} 候选保留. "
             f"{n} var 写入 lexicon.\n"
-            f"compress dedup: {total} candidates → {dedup_stats['reused']} reused / "
-            f"{dedup_stats['new']} new (embedding pre-check)"
+            f"compress dedup: {total} candidates → {dedup_stats['reused']} near-dup "
+            f"(cos≥0.75) / {dedup_stats['new']} new (embedding pre-check; "
+            f"actual merge happens at flush_to_lexicon with cos≥0.85)"
         ),
     )]
 

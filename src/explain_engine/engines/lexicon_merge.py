@@ -49,6 +49,7 @@ def find_duplicate(
 def write_merge_audit(
     log_dir: Path,
     merged_into: str,
+    merged_into_canonical: str,
     merged_from: str,
     sim: float,
     evidence_ids: list[str],
@@ -62,6 +63,9 @@ def write_merge_audit(
         log_dir: directory containing the date-stamped JSONL file
             (auto-created if missing)
         merged_into: lexicon entry global_id that absorbed evidence
+        merged_into_canonical: short summary of the target entry's
+            canonical_mechanism (truncated to ~80 char by caller) — for
+            self-contained audit ("what was the target")
         merged_from: canonical_mechanism (or short summary) of the
             new candidate that was merged
         sim: cosine similarity at merge time
@@ -69,11 +73,13 @@ def write_merge_audit(
     """
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
         log_path = log_dir / f"lexicon_merge_{date_str}.jsonl"
         record = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now.isoformat(),
             "merged_into": merged_into,
+            "merged_into_canonical": merged_into_canonical,
             "merged_from": merged_from,
             "sim": float(sim),
             "evidence_ids": evidence_ids,

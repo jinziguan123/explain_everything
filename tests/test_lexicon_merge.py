@@ -90,6 +90,7 @@ class TestMergeAuditLog:
         write_merge_audit(
             log_dir=log_dir,
             merged_into="v_aaaa1111",
+            merged_into_canonical="target canonical mechanism short",
             merged_from="经济不安全感的同义表达",
             sim=0.91,
             evidence_ids=["e_001", "e_002"],
@@ -100,6 +101,7 @@ class TestMergeAuditLog:
         import json
         rec = json.loads(content.strip())
         assert rec["merged_into"] == "v_aaaa1111"
+        assert rec["merged_into_canonical"] == "target canonical mechanism short"
         assert rec["merged_from"] == "经济不安全感的同义表达"
         assert rec["sim"] == pytest.approx(0.91)
         assert rec["evidence_ids"] == ["e_001", "e_002"]
@@ -112,6 +114,7 @@ class TestMergeAuditLog:
             write_merge_audit(
                 log_dir=log_dir,
                 merged_into=f"v_aaaa{i:04d}",
+                merged_into_canonical="target canonical mechanism short",
                 merged_from="some_canonical",
                 sim=0.9,
                 evidence_ids=[],
@@ -127,6 +130,7 @@ class TestMergeAuditLog:
         write_merge_audit(
             log_dir=log_dir,
             merged_into="x",
+            merged_into_canonical="target canonical mechanism short",
             merged_from="y",
             sim=0.9,
             evidence_ids=[],

@@ -136,13 +136,17 @@ def _upsert_var(
     已有 + 新 sid: ++ reuse_count, append sid. Embedding preserved (not overwritten).
     已有 + 同 sid: 仅 update last_seen_at (不 ++ count). Embedding preserved.
 
+    Phase 13: cosine-merge 时 candidate 的 name/description/canonical_mechanism
+    被丢弃 (existing entry 的 metadata wins). 仅 source_sessions / fitness 累加.
+    audit log merged_from 保留 candidate canonical 前 80 char + merged_into_canonical
+    保留 target canonical 前 80 char, 双向 forensic.
+
     Args:
         embedding: BGE-M3 1024-dim dense vector (Phase 13). None for legacy entries
             or when embedding generation skipped (EXPLAIN_EMBEDDING_DISABLED=1).
             Validated: must be exactly 1024 elements if provided.
-        log_dir: directory for cosine-merge audit log (lexicon_merge_<date>.jsonl).
-            None → skip audit log. Only written when match is via cosine
-            (not via hash, not on creation).
+        log_dir: Phase 13 audit log directory. If provided AND merge happens via
+            embedding (not hash), append JSONL record via write_merge_audit.
     """
     if embedding is not None and len(embedding) != EMBEDDING_DIM:
         raise ValueError(
@@ -231,6 +235,7 @@ def _upsert_var(
         write_merge_audit(
             log_dir=log_dir,
             merged_into=matched_var["global_id"],
+            merged_into_canonical=matched_var["canonical_mechanism"][:80],
             merged_from=canonical_mechanism[:80],
             sim=sim_value,
             evidence_ids=[sid],

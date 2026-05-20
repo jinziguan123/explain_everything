@@ -789,12 +789,12 @@ class TestSlashCompress:
 
     @pytest.mark.asyncio
     async def test_compress_output_shows_dedup_stats(self, monkeypatch):
-        """Phase 13 W3.4: /compress output content includes 'reused' and 'new' dedup stats line.
+        """Phase 13 W3.4: /compress output content includes 'near-dup' and 'new' dedup stats line.
 
         After propose_candidates 加 L1 候选, /compress 应 call
         compute_compress_dedup_stats(display_threshold=0.75) 计 embedding-based
         reuse stats, 在 slash_compress event content 末尾加一行
-        'compress dedup: X candidates → Y reused / Z new (embedding pre-check)'.
+        'compress dedup: X candidates → Y near-dup (cos≥0.75) / Z new ...'.
         """
         from explain_engine.chat.session import ChatSession
         from explain_engine.schema.nodes import VariableNode
@@ -837,14 +837,14 @@ class TestSlashCompress:
         compress_events = [e for e in events if e.type == "slash_compress"]
         assert len(compress_events) == 1
         content = compress_events[0].content
-        # Should contain dedup stats line with reused/new counts
-        assert "reused" in content.lower()
+        # Should contain dedup stats line with near-dup/new counts
+        assert "near-dup" in content.lower()
         assert "new" in content.lower()
         assert "dedup" in content.lower()
-        # Should show 'X candidates → Y reused / Z new' format
+        # Should show 'X candidates → Y near-dup / Z new' format
         # (EXPLAIN_EMBEDDING_DISABLED=1 default → all candidates marked new)
         assert "candidates" in content
-        assert "0 reused" in content
+        assert "0 near-dup" in content
         assert "embedding pre-check" in content
 
 
