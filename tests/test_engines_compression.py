@@ -241,9 +241,13 @@ class TestRenderLexiconTopKSection:
             ("v_bbbb2222", "老龄化人口结构演变", 3),
         ]
         section = _render_lexicon_topk_section(top_k)
-        # Header present
-        assert "已知 lexicon Top-K" in section
-        assert "复用 ID 而非新生" in section
+        # Header present (hotfix 2026-05-20: 改 "复用 ID 而非新生" → "提不同角度"
+        # 因前者与 candidate JSON schema 冲突触发 SchemaValidationError)
+        assert "已知 lexicon abstractions" in section
+        assert "不同角度" in section
+        assert "避免" in section
+        # Should NOT have old conflicting wording
+        assert "复用 ID" not in section
         # Both entries listed with id + reused N x + canonical text
         assert "v_aaaa1111" in section
         assert "经济不安全感" in section
@@ -284,10 +288,13 @@ class TestProposeCandidatesPromptIncludesLexicon:
         call_args = llm.chat.await_args
         messages = call_args[0][0] if call_args[0] else call_args[1]["messages"]
         user_msg = messages[1].content
-        assert "已知 lexicon Top-K" in user_msg
+        assert "已知 lexicon abstractions" in user_msg
+        assert "不同角度" in user_msg
         assert "v_aaaa1111" in user_msg
         assert "v_bbbb2222" in user_msg
         assert "reused 5x" in user_msg
+        # Hotfix 2026-05-20: NOT have "复用 ID" (conflicts with JSON schema)
+        assert "复用 ID" not in user_msg
 
     async def test_prompt_omits_section_when_lexicon_none(self) -> None:
         state = _setup_state()
@@ -299,4 +306,4 @@ class TestProposeCandidatesPromptIncludesLexicon:
         call_args = llm.chat.await_args
         messages = call_args[0][0] if call_args[0] else call_args[1]["messages"]
         user_msg = messages[1].content
-        assert "已知 lexicon Top-K" not in user_msg
+        assert "已知 lexicon abstractions" not in user_msg

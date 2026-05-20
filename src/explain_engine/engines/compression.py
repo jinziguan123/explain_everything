@@ -49,8 +49,11 @@ def _render_lexicon_topk_section(
 ) -> str:
     """Phase 13 Wave 3 Task 1: 渲染 Top-K lexicon prior section。
 
-    用于 compression prompt 提示 LLM "若新 candidate 语义重复其中之一，
-    复用 ID 而非新生"。
+    Hotfix (2026-05-20): 原措辞 "复用 ID 而非新生" 与 candidate JSON schema
+    (仅有 name/description/coverage, 无 reuse_id 字段) 语义冲突, deepseek-v4-pro
+    会输出 natural language 解释 reuse 决策而非 JSON, 触发 SchemaValidationError.
+    现改为信息性提示, 引导 LLM 提**不同角度**的新候选, 实际 dedup 留 flush_to_lexicon
+    时 cosine merge (Phase 13 W2.3) 自动做.
 
     Args:
         existing_lexicon: list of (global_id, canonical_mechanism, reuse_count).
@@ -62,7 +65,11 @@ def _render_lexicon_topk_section(
     """
     if not existing_lexicon:
         return ""
-    lines = ["[已知 lexicon Top-K — 若新候选语义重复其中之一, 复用 ID 而非新生]"]
+    lines = [
+        "[已知 lexicon abstractions (参考) — "
+        "请提出**不同角度**的新候选, 避免与下列概念重复 "
+        "(实际 dedup 由系统在 flush 时自动用 embedding cosine 处理)]"
+    ]
     for global_id, canonical, reuse_count in existing_lexicon:
         canonical_short = canonical[:80]
         if len(canonical) > 80:
