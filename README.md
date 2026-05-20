@@ -22,8 +22,11 @@
 
 ## Status
 
+**Phase 13 milestone (2026-05-20)** — Variable Embedding (Candidate E, Medium scope)。lexicon 用 BGE-M3 dense embedding (Apple MPS + fp16) 解 LLM 措辞漂移导致的同概念 split, /compress 加 Top-K pre-filter + 后处理 dedup 统计。
+912 tests pass，ruff 0。Phase 0-13 全部实施完。下一步: Phase 14 Theory Formation (cross-session motif detection) 或 Multi-Perspective Runtime。
+
 **Phase 12 milestone (2026-05-19)** — /show + /graph Detail (`/show` 全展开 graph 4 section + 新加 `/graph` graphviz inline 渲染)。
-866 tests pass，ruff 0。Phase 0-12 全部实施完。下一步: Phase 13 Theory Formation + Candidate E Variable Embedding。
+866 tests pass，ruff 0。
 
 **Phase 11 milestone (2026-05-18)** — REPL Unification (default `explain` 进 ephemeral REPL + 18 slash 化)。
 806 tests pass，ruff 0。
@@ -35,6 +38,54 @@
 chat /new + /resume slash 命令 + prompt_toolkit REPL UX 升级。Phase 11 直接 motivation：
 cross-session motif detection on lexicon graph / real Anthropic tool_use adapter
 （详见 [Phase 9 acceptance evidence](docs/plans/2026-05-17-conversational-cognitive-engine-acceptance.md)）。
+
+## Phase 13 (2026-05-20) — Variable Embedding (Candidate E)
+
+lexicon `canonical_mechanism` 从 string match 升级为 **BGE-M3 dense embedding (1024-dim, fp16 on Apple Silicon MPS)** + cosine threshold 0.85 merge, 解 LLM 措辞漂移导致的同概念 split (Session 1 写「经济不安全感」, Session 2 写「保守消费倾向」, 同义但 string 不同 → 之前算 2 个 entry, 现自动合并)。
+
+**Scope** (brainstorming Q&A 锁):
+- Medium scope: lexicon dedup + /compress pre+post filter (不动 reflection lifecycle)
+- Embedding model: BGE-M3 via FlagEmbedding 1.4+
+- Storage: 持久到 lexicon JSON (embedding field per var, 1024 × 4 byte = 4 KB/entry float32)
+- Merge threshold: 0.85 hard-coded MVP + audit log JSONL
+- Migration: lazy on first flush_to_lexicon, batch embed 缺字段 entry, atomic write-back
+
+**Pipeline 落地**:
+- `BGE_M3_Embedder` singleton (lazy load ~30s 一次, MPS + fp16, ~3-5x CPU speedup)
+- `_upsert_var(lexicon, node, canonical, sid, embedding, log_dir)` cosine-first → hash-fallback
+- `_migrate_lexicon_embeddings` Rich console.status spinner 进度
+- `find_duplicate(emb, matrix, threshold)` batch cosine via numpy
+- `write_merge_audit` JSONL append to `logs/lexicon_merge_<YYYY-MM-DD>.jsonl`
+- `_render_lexicon_topk_section(top_k)` 渲染 prompt pre-filter section
+- `get_lexicon_top_k_for_compress(storage, k=20)` 给 propose_candidates caller 用
+- `compute_compress_dedup_stats(state, storage, ids, display_threshold=0.75)` 观察性后处理统计 (UI 用)
+
+**/compress UI 新增**:
+```
+compress dedup: X candidates → Y reused / Z new (embedding pre-check)
+```
+
+**新依赖**:
+- `FlagEmbedding>=1.3` (BGE-M3 wrapper)
+- `torch>=2.1` (MPS backend, Apple Silicon)
+- 系统: BGE-M3 model 4.3 GB 缓存 (HuggingFace), 首次 download 一次性
+- venv 涨 ~3 GB (含 torch + transformers transitive deps)
+
+**Fallback 机制**:
+- `EXPLAIN_EMBEDDING_DISABLED=1` env var → 整个 embedding pipeline 短路, lexicon 走 Phase 10 string-match path 完全兼容
+- Embedder load / encode 失败 → log warning + 走 string-match path, 不 crash
+- CI / 无 GPU 环境: pytest conftest autouse fixture 默 EXPLAIN_EMBEDDING_DISABLED=1, 仅 @pytest.mark.embedding 显式 opt-in
+- Lazy migration 失败 → entry 保 embedding=None, 走 string-match path
+
+**Audit log**:
+- `<project>/logs/lexicon_merge_<YYYY-MM-DD>.jsonl` 1 line/merge
+- Schema: `{timestamp, merged_into, merged_from, sim, evidence_ids}`
+- 仅 cosine-based merge 写 audit, hash-based exact merge 不写 (Phase 10 行为)
+
+**文档**:
+- design: [docs/plans/2026-05-20-variable-embedding-design.md](docs/plans/2026-05-20-variable-embedding-design.md)
+- plan: [docs/plans/2026-05-20-variable-embedding-plan.md](docs/plans/2026-05-20-variable-embedding-plan.md)
+- acceptance: [docs/plans/2026-05-20-variable-embedding-acceptance.md](docs/plans/2026-05-20-variable-embedding-acceptance.md)
 
 ## Phase 12 (2026-05-19) — /show + /graph Detail
 
