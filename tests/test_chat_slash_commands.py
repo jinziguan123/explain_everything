@@ -787,6 +787,66 @@ class TestSlashCompress:
         # review 没被调
         assert called["review"] == 0
 
+    @pytest.mark.asyncio
+    async def test_compress_output_shows_dedup_stats(self, monkeypatch):
+        """Phase 13 W3.4: /compress output content includes 'reused' and 'new' dedup stats line.
+
+        After propose_candidates 加 L1 候选, /compress 应 call
+        compute_compress_dedup_stats(display_threshold=0.75) 计 embedding-based
+        reuse stats, 在 slash_compress event content 末尾加一行
+        'compress dedup: X candidates → Y reused / Z new (embedding pre-check)'.
+        """
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.schema.nodes import VariableNode
+        _make_done_session("s_aa00b001")
+        chat = ChatSession("s_aa00b001", llm=object())  # type: ignore[arg-type]
+
+        async def fake_propose(state, llm, min_count=3, max_count=5, **kwargs):
+            # Add 2 fake L1 candidates
+            for i in range(2):
+                nid = f"c_{100 + i:03d}"
+                state.graph.add_node(VariableNode(
+                    id=nid, name=f"n{i}", description=f"d{i}",
+                    abstraction_level=1, confidence=0.7, epistemic="insight",
+                ))
+                state.insight_candidates.append(nid)
+
+        async def fake_score(state, llm):
+            pass
+
+        async def fake_review(state, input_provider, console=None):
+            pass
+
+        async def fake_flush(session, storage, llm=None):
+            return 0
+
+        monkeypatch.setattr(
+            "explain_engine.engines.compression.propose_candidates", fake_propose
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.evaluation.score_all", fake_score
+        )
+        monkeypatch.setattr(
+            "explain_engine.hitl.cli_interactive.review_insights_async", fake_review
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.lexicon.flush_to_lexicon", fake_flush
+        )
+
+        events = await dispatch_slash(chat, "/compress")
+        compress_events = [e for e in events if e.type == "slash_compress"]
+        assert len(compress_events) == 1
+        content = compress_events[0].content
+        # Should contain dedup stats line with reused/new counts
+        assert "reused" in content.lower()
+        assert "new" in content.lower()
+        assert "dedup" in content.lower()
+        # Should show 'X candidates → Y reused / Z new' format
+        # (EXPLAIN_EMBEDDING_DISABLED=1 default → all candidates marked new)
+        assert "candidates" in content
+        assert "0 reused" in content
+        assert "embedding pre-check" in content
+
 
 class TestSlashRun:
     """Phase 11 Wave 3: /run reasoning loop."""

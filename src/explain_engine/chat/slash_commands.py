@@ -948,6 +948,20 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
             content=f"/compress propose_candidates 失败: {type(exc).__name__}: {exc}",
         )]
 
+    # Phase 13 Wave 3 Task 4: compute dedup stats for UI display (observational,
+    # doesn't mutate state). Display threshold 0.75 (lower than 0.85 merge
+    # threshold) accounts for proxy-text format mismatch with lexicon canonical.
+    from explain_engine.engines.compress_dedup import compute_compress_dedup_stats
+    try:
+        dedup_stats = compute_compress_dedup_stats(
+            chat.state,
+            chat.storage,
+            list(chat.state.insight_candidates),
+            display_threshold=0.75,
+        )
+    except Exception:
+        dedup_stats = {"reused": 0, "new": len(chat.state.insight_candidates)}
+
     # Fix 1 (2026-05-19 smoke bug): 加 score_all 让 state.last_gains 非空
     # (跟 cli `_run_compress` 一致). Phase 11 Wave 3 漏 score_all 导致 HITL
     # 看 gain 全 0.00 — review_insights_async 实际从 state.last_gains 读.
@@ -977,11 +991,14 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
     except Exception:
         n = 0
 
+    total = dedup_stats["reused"] + dedup_stats["new"]
     return [ChatEvent(
         type="slash_compress",
         content=(
             f"compress 完成. {len(chat.state.insight_candidates)} 候选保留. "
-            f"{n} var 写入 lexicon."
+            f"{n} var 写入 lexicon.\n"
+            f"compress dedup: {total} candidates → {dedup_stats['reused']} reused / "
+            f"{dedup_stats['new']} new (embedding pre-check)"
         ),
     )]
 
