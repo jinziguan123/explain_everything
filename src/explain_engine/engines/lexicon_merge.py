@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 
 LEXICON_MERGE_THRESHOLD = 0.85
@@ -39,3 +44,41 @@ def find_duplicate(
     sims = (existing_matrix @ new_emb) / denoms
     max_idx = int(np.argmax(sims))
     return max_idx if sims[max_idx] > threshold else None
+
+
+def write_merge_audit(
+    log_dir: Path,
+    merged_into: str,
+    merged_from: str,
+    sim: float,
+    evidence_ids: list[str],
+) -> None:
+    """Append JSONL record to logs/lexicon_merge_<YYYY-MM-DD>.jsonl.
+
+    Each merge writes 1 line for post-hoc audit. Failures swallowed
+    (warning) — audit log shouldn't block lexicon writes.
+
+    Args:
+        log_dir: directory containing the date-stamped JSONL file
+            (auto-created if missing)
+        merged_into: lexicon entry global_id that absorbed evidence
+        merged_from: canonical_mechanism (or short summary) of the
+            new candidate that was merged
+        sim: cosine similarity at merge time
+        evidence_ids: list of evidence ids newly appended
+    """
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        log_path = log_dir / f"lexicon_merge_{date_str}.jsonl"
+        record = {
+            "timestamp": datetime.now().isoformat(),
+            "merged_into": merged_into,
+            "merged_from": merged_from,
+            "sim": float(sim),
+            "evidence_ids": evidence_ids,
+        }
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        logging.warning(f"audit log write failed: {exc}")

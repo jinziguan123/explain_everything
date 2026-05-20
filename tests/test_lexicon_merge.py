@@ -1,6 +1,7 @@
 """Phase 13 Wave 2 Task 1: lexicon_merge.find_duplicate cosine logic."""
 
 import numpy as np
+import pytest
 
 
 class TestFindDuplicate:
@@ -78,3 +79,56 @@ class TestFindDuplicate:
         )
         # Default 0.85: returns 0; custom 0.95: returns None
         assert find_duplicate(new, existing, threshold=0.95) is None
+
+
+class TestMergeAuditLog:
+    """Phase 13 Wave 2 Task 2: audit log on merge events."""
+
+    def test_write_audit_record(self, tmp_path):
+        from explain_engine.engines.lexicon_merge import write_merge_audit
+        log_dir = tmp_path / "logs"
+        write_merge_audit(
+            log_dir=log_dir,
+            merged_into="v_aaaa1111",
+            merged_from="经济不安全感的同义表达",
+            sim=0.91,
+            evidence_ids=["e_001", "e_002"],
+        )
+        log_files = list(log_dir.glob("lexicon_merge_*.jsonl"))
+        assert len(log_files) == 1
+        content = log_files[0].read_text(encoding="utf-8")
+        import json
+        rec = json.loads(content.strip())
+        assert rec["merged_into"] == "v_aaaa1111"
+        assert rec["merged_from"] == "经济不安全感的同义表达"
+        assert rec["sim"] == pytest.approx(0.91)
+        assert rec["evidence_ids"] == ["e_001", "e_002"]
+        assert "timestamp" in rec
+
+    def test_append_multiple_same_day(self, tmp_path):
+        from explain_engine.engines.lexicon_merge import write_merge_audit
+        log_dir = tmp_path / "logs"
+        for i in range(3):
+            write_merge_audit(
+                log_dir=log_dir,
+                merged_into=f"v_aaaa{i:04d}",
+                merged_from="some_canonical",
+                sim=0.9,
+                evidence_ids=[],
+            )
+        log_files = list(log_dir.glob("lexicon_merge_*.jsonl"))
+        assert len(log_files) == 1
+        lines = log_files[0].read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 3
+
+    def test_log_dir_creates_if_missing(self, tmp_path):
+        from explain_engine.engines.lexicon_merge import write_merge_audit
+        log_dir = tmp_path / "nonexistent" / "logs"
+        write_merge_audit(
+            log_dir=log_dir,
+            merged_into="x",
+            merged_from="y",
+            sim=0.9,
+            evidence_ids=[],
+        )
+        assert log_dir.is_dir()
