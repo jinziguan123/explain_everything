@@ -142,3 +142,28 @@ class TestComputeCompressDedupStats:
         # Same concept (房价/购房) → cosine > 0.85 → reused
         assert stats["reused"] >= 1
         assert stats["new"] + stats["reused"] == 1
+
+    def test_all_missing_nodes_returns_all_new(self, tmp_path):
+        """All node IDs missing from graph → counted as new (not {0, 0})."""
+        from explain_engine.engines.compress_dedup import compute_compress_dedup_stats
+        state = self._make_state_with_nodes()  # empty graph
+        storage = self._make_storage_with_lexicon(tmp_path)
+        stats = compute_compress_dedup_stats(
+            state, storage, ["nonexistent_c_001", "nonexistent_c_002"]
+        )
+        assert stats == {"reused": 0, "new": 2}
+
+    def test_custom_display_threshold_param(self, tmp_path, monkeypatch):
+        """display_threshold param overrides find_duplicate cutoff."""
+        # Even with disabled env (skip embedder), test the param plumbs through
+        # to find_duplicate when embedder fires. Use disabled to confirm signature
+        # accepts the kwarg without crash.
+        monkeypatch.setenv("EXPLAIN_EMBEDDING_DISABLED", "1")
+        from explain_engine.engines.compress_dedup import compute_compress_dedup_stats
+        state = self._make_state_with_nodes(("c_001", "n", "d"))
+        storage = self._make_storage_with_lexicon(tmp_path)
+        # Disabled env always returns all-new regardless of threshold
+        stats = compute_compress_dedup_stats(
+            state, storage, ["c_001"], display_threshold=0.75
+        )
+        assert stats == {"reused": 0, "new": 1}
