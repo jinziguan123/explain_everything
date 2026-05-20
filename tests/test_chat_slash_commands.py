@@ -669,7 +669,7 @@ class TestSlashCompress:
 
         called = {"propose": 0, "review": 0, "flush": 0}
 
-        async def fake_propose(state, llm, min_count=3, max_count=5):
+        async def fake_propose(state, llm, min_count=3, max_count=5, **kwargs):
             called["propose"] += 1
             state.insight_candidates = ["c_001"]  # 留 1 个
 
@@ -718,7 +718,7 @@ class TestSlashCompress:
 
         called = {"propose": 0, "score": 0, "review": 0, "flush": 0}
 
-        async def fake_propose(state, llm, min_count=3, max_count=5):
+        async def fake_propose(state, llm, min_count=3, max_count=5, **kwargs):
             called["propose"] += 1
             state.insight_candidates = ["c_001"]
 
@@ -768,7 +768,7 @@ class TestSlashCompress:
 
         called = {"review": 0}
 
-        async def fake_propose_fails(state, llm, min_count=3, max_count=5):
+        async def fake_propose_fails(state, llm, min_count=3, max_count=5, **kwargs):
             raise RuntimeError("mock LLM down")
 
         async def fake_review(state, input_provider, console=None):

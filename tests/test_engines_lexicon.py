@@ -1148,3 +1148,143 @@ class TestUpsertVarEmbeddingMerge:
         # reuse_count UNCHANGED
         assert lexicon["variables"][0]["fitness"]["reuse_count"] == 1
         assert lexicon["variables"][0]["source_sessions"] == ["s_aaaa0001"]
+
+
+class TestGetLexiconTopKForCompress:
+    """Phase 13 Wave 3 Task 2: helper that loads lexicon + returns Top-K tuples."""
+
+    def test_empty_lexicon_returns_empty_list(self, tmp_path, monkeypatch):
+        """No lexicon file → empty list (no error)."""
+        from unittest.mock import MagicMock
+
+        from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
+
+        knowledge_dir = tmp_path / "knowledge"
+        knowledge_dir.mkdir(parents=True)
+        storage = MagicMock()
+        storage.knowledge_dir.return_value = knowledge_dir
+
+        result = get_lexicon_top_k_for_compress(storage, k=10)
+        assert result == []
+
+    def test_returns_top_k_tuples_sorted(self, tmp_path):
+        """Lexicon with 3 entries → Top-K returns (gid, canonical, reuse_count) tuples ordered by fitness."""
+        import json
+        from unittest.mock import MagicMock
+
+        from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
+
+        knowledge_dir = tmp_path / "knowledge"
+        knowledge_dir.mkdir(parents=True)
+        data = {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": [
+                {
+                    "global_id": "v_low",
+                    "name": "low",
+                    "description": "d",
+                    "abstraction_level": 1,
+                    "epistemic": "insight",
+                    "fitness": {
+                        "reuse_count": 1,
+                        "avg_essentialness": 0.5,
+                        "avg_consistency": 0.5,
+                        "first_seen_at": "2026-05-20T00:00:00Z",
+                        "last_seen_at": "2026-05-20T00:00:00Z",
+                    },
+                    "canonical_mechanism": "低 fitness 概念",
+                    "source_sessions": ["s_aaaa0001"],
+                },
+                {
+                    "global_id": "v_high",
+                    "name": "high",
+                    "description": "d",
+                    "abstraction_level": 1,
+                    "epistemic": "insight",
+                    "fitness": {
+                        "reuse_count": 10,
+                        "avg_essentialness": 0.8,
+                        "avg_consistency": 0.8,
+                        "first_seen_at": "2026-05-20T00:00:00Z",
+                        "last_seen_at": "2026-05-20T00:00:00Z",
+                    },
+                    "canonical_mechanism": "高 fitness 概念",
+                    "source_sessions": ["s_aaaa0001", "s_aaaa0002"],
+                },
+            ],
+        }
+        (knowledge_dir / "variables.json").write_text(json.dumps(data), encoding="utf-8")
+
+        storage = MagicMock()
+        storage.knowledge_dir.return_value = knowledge_dir
+
+        result = get_lexicon_top_k_for_compress(storage, k=10)
+        assert len(result) == 2
+        # Top-K sorted by composite fitness (reuse_count * (avg_essentialness + 0.1))
+        # high: 10 * (0.8 + 0.1) = 9.0
+        # low:  1 * (0.5 + 0.1) = 0.6
+        # So high first
+        assert result[0][0] == "v_high"
+        assert result[0][1] == "高 fitness 概念"
+        assert result[0][2] == 10
+        assert result[1][0] == "v_low"
+        assert result[1][1] == "低 fitness 概念"
+        assert result[1][2] == 1
+
+    def test_respects_k_limit(self, tmp_path):
+        """k=1 returns only 1 entry from 2."""
+        import json
+        from unittest.mock import MagicMock
+
+        from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
+
+        knowledge_dir = tmp_path / "knowledge"
+        knowledge_dir.mkdir(parents=True)
+        data = {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": [
+                {
+                    "global_id": "v_a",
+                    "name": "a", "description": "d",
+                    "abstraction_level": 1, "epistemic": "insight",
+                    "fitness": {
+                        "reuse_count": 5, "avg_essentialness": 0.5, "avg_consistency": 0.5,
+                        "first_seen_at": "2026-05-20T00:00:00Z", "last_seen_at": "2026-05-20T00:00:00Z",
+                    },
+                    "canonical_mechanism": "a", "source_sessions": ["s1"],
+                },
+                {
+                    "global_id": "v_b",
+                    "name": "b", "description": "d",
+                    "abstraction_level": 1, "epistemic": "insight",
+                    "fitness": {
+                        "reuse_count": 3, "avg_essentialness": 0.5, "avg_consistency": 0.5,
+                        "first_seen_at": "2026-05-20T00:00:00Z", "last_seen_at": "2026-05-20T00:00:00Z",
+                    },
+                    "canonical_mechanism": "b", "source_sessions": ["s1"],
+                },
+            ],
+        }
+        (knowledge_dir / "variables.json").write_text(json.dumps(data), encoding="utf-8")
+
+        storage = MagicMock()
+        storage.knowledge_dir.return_value = knowledge_dir
+
+        result = get_lexicon_top_k_for_compress(storage, k=1)
+        assert len(result) == 1
+        assert result[0][0] == "v_a"  # higher reuse_count
+
+    def test_k_zero_returns_empty(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
+
+        knowledge_dir = tmp_path / "knowledge"
+        knowledge_dir.mkdir(parents=True)
+        storage = MagicMock()
+        storage.knowledge_dir.return_value = knowledge_dir
+
+        result = get_lexicon_top_k_for_compress(storage, k=0)
+        assert result == []

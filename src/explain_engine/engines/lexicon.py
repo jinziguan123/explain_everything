@@ -417,6 +417,27 @@ def _select_top_k_vars(
     return sorted(variables, key=_score, reverse=True)[:k]
 
 
+def get_lexicon_top_k_for_compress(
+    storage: StorageV2,
+    k: int = 20,
+) -> list[tuple[str, str, int]]:
+    """Phase 13 Wave 3: load lexicon + return Top-K tuples for compression prompt.
+
+    Top-K ranked by composite fitness (delegates to _select_top_k_vars).
+    Returns empty list if lexicon file missing / k <= 0.
+
+    Each tuple: (global_id, canonical_mechanism, reuse_count) — matches
+    the existing_lexicon param of compression.propose_candidates.
+    """
+    path = storage.knowledge_dir() / "variables.json"
+    lexicon = _load_lexicon(path)
+    top_k_vars = _select_top_k_vars(lexicon, k=k)
+    return [
+        (v["global_id"], v["canonical_mechanism"], v["fitness"]["reuse_count"])
+        for v in top_k_vars
+    ]
+
+
 def _build_embeddings_matrix(
     lexicon: dict[str, Any],
 ) -> tuple[np.ndarray, dict[str, int]]:

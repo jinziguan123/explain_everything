@@ -190,7 +190,10 @@ async def _compress_call(input: BaseModel, ctx: ToolContext) -> str:
     assert isinstance(input, _CompressInput)
     if ctx.llm is None:
         return "compress failed: no LLM client in context"
-    await compression.propose_candidates(ctx.state, ctx.llm)
+    from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
+    from explain_engine.persistence.storage_v2 import StorageV2
+    top_k = get_lexicon_top_k_for_compress(StorageV2(), k=20)
+    await compression.propose_candidates(ctx.state, ctx.llm, existing_lexicon=top_k)
     candidates = ctx.state.insight_candidates
     return f"compressed, {len(candidates)} L1 candidates: {candidates}"
 

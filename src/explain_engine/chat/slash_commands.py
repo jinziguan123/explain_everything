@@ -938,8 +938,10 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
 
     # 2026-05-19 polish: Rich Status spinner — propose_candidates LLM 调用
     try:
+        from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
+        top_k = get_lexicon_top_k_for_compress(chat.storage, k=20)
         with _console.status("[bold green]调 LLM 提候选 (compress)...[/bold green]"):
-            await propose_candidates(chat.state, chat.llm)
+            await propose_candidates(chat.state, chat.llm, existing_lexicon=top_k)
     except Exception as exc:
         return [ChatEvent(
             type="slash_error",

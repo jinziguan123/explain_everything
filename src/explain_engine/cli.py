@@ -252,7 +252,12 @@ async def _run_compress(session_id: str) -> None:
     if stage == "bootstrap_pending":
         console.print("[INFO] 调 LLM 生成 abstract 候选...")
         try:
-            await propose_candidates(session.state, llm)
+            from explain_engine.engines.lexicon import (
+                get_lexicon_top_k_for_compress,
+            )
+            from explain_engine.persistence.storage_v2 import StorageV2
+            top_k = get_lexicon_top_k_for_compress(StorageV2(), k=20)
+            await propose_candidates(session.state, llm, existing_lexicon=top_k)
         except SchemaValidationError as exc:
             console.print(f"[red]LLM 输出不合规: {exc}[/red]")
             raise typer.Exit(2) from exc
