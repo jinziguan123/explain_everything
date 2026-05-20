@@ -271,7 +271,11 @@ async def flush_to_lexicon(
     """
     path = storage.knowledge_dir() / "variables.json"
     lexicon = _load_lexicon(path)
-    _migrate_lexicon_embeddings(lexicon, path)  # Phase 13: lazy backfill
+    # Phase 13: lazy embedding backfill. Wired here (not _load_lexicon) so
+    # read-only paths (/lexicon display, _select_top_k_vars for prompt prior)
+    # don't trigger BGE-M3 model load. flush_to_lexicon is the natural write
+    # path — migration runs at most once per session here.
+    _migrate_lexicon_embeddings(lexicon, path)
 
     # 收集 promoted candidates + sort by activation desc
     candidates = [

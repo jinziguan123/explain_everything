@@ -39,6 +39,21 @@ def tmp_sessions_dir(tmp_path, monkeypatch):
     return sessions_dir
 
 
+@pytest.fixture(autouse=True)
+def _disable_embedding_unless_marked(request, monkeypatch):
+    """Phase 13 default: EXPLAIN_EMBEDDING_DISABLED=1 unless @pytest.mark.embedding.
+
+    Prevents tests that touch lexicon flush from accidentally loading the
+    4.3 GB BGE-M3 model. Tests that need real embedding must declare
+    @pytest.mark.embedding marker, which opts them out of this disable.
+    """
+    if request.node.get_closest_marker("embedding") is None:
+        monkeypatch.setenv("EXPLAIN_EMBEDDING_DISABLED", "1")
+    else:
+        # Explicit unset — tests marked @embedding should NOT inherit env from outer shell
+        monkeypatch.delenv("EXPLAIN_EMBEDDING_DISABLED", raising=False)
+
+
 @pytest.fixture
 def mock_llm_response():
     """返回一个工具函数：给定 JSON dict，生成 mock LLM response。"""
