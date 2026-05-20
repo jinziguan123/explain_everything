@@ -120,7 +120,7 @@ class AnthropicProtocolClient:
 
         call_kwargs: dict[str, Any] = {
             "model": model or self._default_model,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "messages": chat_messages,
         }
         if system_text:
@@ -196,7 +196,7 @@ class AnthropicProtocolClient:
         try:
             call_kwargs: dict[str, Any] = {
                 "model": model or self._default_model,
-                "max_tokens": 4096,
+                "max_tokens": 8192,
                 "system": system,
                 "messages": messages,
             }

@@ -151,7 +151,7 @@ class OpenAIProtocolClient:
             call_kwargs: dict[str, Any] = {
                 "model": model or self._default_model,
                 "messages": openai_messages,
-                "max_tokens": 4096,
+                "max_tokens": 8192,
             }
             if openai_tools:
                 call_kwargs["tools"] = openai_tools
