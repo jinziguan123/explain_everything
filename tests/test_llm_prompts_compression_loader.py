@@ -14,7 +14,13 @@ class TestCompressionPrompt:
     def test_user_template_placeholders(self) -> None:
         p = load_prompt("compression")
         found = set(re.findall(r"\{(\w+)\}", p["user_template"]))
-        expected = {"question", "phenomena_table", "min_count", "max_count"}
+        expected = {
+            "question",
+            "phenomena_table",
+            "existing_lexicon_section",
+            "min_count",
+            "max_count",
+        }
         assert found == expected, f"placeholder mismatch: missing={expected - found}, extra={found - expected}"
 
     def test_system_mentions_compression(self) -> None:

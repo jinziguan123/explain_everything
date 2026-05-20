@@ -44,17 +44,54 @@ class CompressionOutput(BaseModel):
     candidates: list[_CompressionCandidate]
 
 
+def _render_lexicon_topk_section(
+    existing_lexicon: list[tuple[str, str, int]] | None,
+) -> str:
+    """Phase 13 Wave 3 Task 1: 渲染 Top-K lexicon prior section。
+
+    用于 compression prompt 提示 LLM "若新 candidate 语义重复其中之一，
+    复用 ID 而非新生"。
+
+    Args:
+        existing_lexicon: list of (global_id, canonical_mechanism, reuse_count).
+            None 或空 list → 返 ""（caller 视为无 section）。
+
+    Returns:
+        多行 block: header + 一行 bullet per entry，
+        canonical_mechanism 截 80 char + "..." 若超长。
+    """
+    if not existing_lexicon:
+        return ""
+    lines = ["[已知 lexicon Top-K — 若新候选语义重复其中之一, 复用 ID 而非新生]"]
+    for global_id, canonical, reuse_count in existing_lexicon:
+        canonical_short = canonical[:80]
+        if len(canonical) > 80:
+            canonical_short += "..."
+        lines.append(f"- {global_id} (reused {reuse_count}x): {canonical_short}")
+    return "\n".join(lines)
+
+
 async def propose_candidates(
     state: CognitiveState,
     llm: LLMClient,
     min_count: int = 3,
     max_count: int = 5,
+    existing_lexicon: list[tuple[str, str, int]] | None = None,
 ) -> None:
     """LLM 出 3-5 个 abstract 候选，灌进 state.graph，落 state.insight_candidates。
 
     Side effects:
         - state.graph: 新增 N 个 level=1 VariableNode (c_001..c_00N) + 若干 edges
         - state.insight_candidates: 设为 [c_001, ..., c_00N]（未排序）
+
+    Args:
+        state: 当前 cognitive state（含 graph + root_question）。
+        llm: LLMClient。
+        min_count: 最少候选数。
+        max_count: 最多候选数。
+        existing_lexicon: Phase 13 Wave 3 — 可选 Top-K lexicon 列表
+            (global_id, canonical_mechanism, reuse_count)。非空时
+            注入 prompt，提示 LLM 复用而非新生重复语义的 candidate。
 
     Raises:
         LLMError: 底层调用失败（provider 抛出，本函数不捕）
@@ -71,6 +108,7 @@ async def propose_candidates(
             content=prompt["user_template"].format(
                 question=state.root_question,
                 phenomena_table=phenomena_table,
+                existing_lexicon_section=_render_lexicon_topk_section(existing_lexicon),
                 min_count=min_count,
                 max_count=max_count,
             ),

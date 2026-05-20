@@ -221,3 +221,82 @@ class TestPropose:
         assert len(x_edges) == 2
         assert all(e.relation_type == "manifests_as" for e in x_edges)
         assert all(e.mechanism_description for e in x_edges)
+
+
+class TestRenderLexiconTopKSection:
+    """Phase 13 Wave 3 Task 1: _render_lexicon_topk_section helper."""
+
+    def test_none_returns_empty(self) -> None:
+        from explain_engine.engines.compression import _render_lexicon_topk_section
+        assert _render_lexicon_topk_section(None) == ""
+
+    def test_empty_list_returns_empty(self) -> None:
+        from explain_engine.engines.compression import _render_lexicon_topk_section
+        assert _render_lexicon_topk_section([]) == ""
+
+    def test_non_empty_renders_section(self) -> None:
+        from explain_engine.engines.compression import _render_lexicon_topk_section
+        top_k = [
+            ("v_aaaa1111", "经济不安全感导致防御性储蓄上升", 5),
+            ("v_bbbb2222", "老龄化人口结构演变", 3),
+        ]
+        section = _render_lexicon_topk_section(top_k)
+        # Header present
+        assert "已知 lexicon Top-K" in section
+        assert "复用 ID 而非新生" in section
+        # Both entries listed with id + reused N x + canonical text
+        assert "v_aaaa1111" in section
+        assert "经济不安全感" in section
+        assert "reused 5x" in section
+        assert "v_bbbb2222" in section
+        assert "老龄化" in section
+        assert "reused 3x" in section
+
+    def test_long_canonical_truncated(self) -> None:
+        """canonical 截 80 char + ..."""
+        from explain_engine.engines.compression import _render_lexicon_topk_section
+        long_canonical = "y" * 100
+        top_k = [("v_aaaa1111", long_canonical, 1)]
+        section = _render_lexicon_topk_section(top_k)
+        assert "y" * 80 + "..." in section
+
+
+@pytest.mark.asyncio
+class TestProposeCandidatesPromptIncludesLexicon:
+    """Phase 13 Wave 3 Task 1: propose_candidates 传 Top-K section 进 prompt."""
+
+    async def test_prompt_contains_top_k_when_lexicon_provided(self) -> None:
+        state = _setup_state()
+        llm = AsyncMock()
+        llm.chat.return_value = _mock_llm_response([
+            _candidate("X", ["p_001", "p_002"]),
+        ])
+        existing_lexicon = [
+            ("v_aaaa1111", "经济不安全感", 5),
+            ("v_bbbb2222", "老龄化结构", 3),
+        ]
+        await propose_candidates(
+            state=state,
+            llm=llm,
+            existing_lexicon=existing_lexicon,
+        )
+        # 取 LLM 收到的 user message
+        call_args = llm.chat.await_args
+        messages = call_args[0][0] if call_args[0] else call_args[1]["messages"]
+        user_msg = messages[1].content
+        assert "已知 lexicon Top-K" in user_msg
+        assert "v_aaaa1111" in user_msg
+        assert "v_bbbb2222" in user_msg
+        assert "reused 5x" in user_msg
+
+    async def test_prompt_omits_section_when_lexicon_none(self) -> None:
+        state = _setup_state()
+        llm = AsyncMock()
+        llm.chat.return_value = _mock_llm_response([
+            _candidate("X", ["p_001", "p_002"]),
+        ])
+        await propose_candidates(state=state, llm=llm)
+        call_args = llm.chat.await_args
+        messages = call_args[0][0] if call_args[0] else call_args[1]["messages"]
+        user_msg = messages[1].content
+        assert "已知 lexicon Top-K" not in user_msg
