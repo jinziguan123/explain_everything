@@ -585,3 +585,68 @@ class TestRenderLexicon:
         out = _render_lexicon_for_prompt([var])
         # disclaimer 含 "不强制" 或 "仅供参考" — let LLM 知道 lexicon 是 hint 不是 rule
         assert "不强制" in out or "仅供参考" in out
+
+
+# ── Phase 13 Wave 1 Task 3: variable dict 加 embedding 字段 ──────────────────
+
+
+class TestUpsertVarEmbedding:
+    """Phase 13 Wave 1 Task 3: variable dict supports embedding field."""
+
+    def _make_node(self):
+        from explain_engine.schema.nodes import VariableNode
+        return VariableNode(
+            id="c_001",
+            name="经济不安全感",
+            description="对未来收入预期下降",
+            abstraction_level=1,
+            confidence=0.8,
+            epistemic="insight",
+        )
+
+    def test_upsert_default_embedding_is_none(self):
+        """新 entry 默认 embedding=None (向后兼容 Phase 10/11 老 entry)."""
+        from explain_engine.engines.lexicon import _upsert_var
+        lexicon = {"version": 1, "updated_at": "2026-05-20T00:00:00Z", "variables": []}
+        node = self._make_node()
+        _upsert_var(lexicon, node, "测试 canonical", sid="s_aaaa0001")
+        assert len(lexicon["variables"]) == 1
+        assert lexicon["variables"][0].get("embedding") is None
+
+    def test_upsert_accepts_embedding_kwarg(self):
+        """传 embedding kwarg 时进 var dict."""
+        from explain_engine.engines.lexicon import _upsert_var
+        lexicon = {"version": 1, "updated_at": "2026-05-20T00:00:00Z", "variables": []}
+        node = self._make_node()
+        emb = [0.1] * 1024
+        _upsert_var(lexicon, node, "测试 canonical", sid="s_aaaa0001", embedding=emb)
+        assert lexicon["variables"][0]["embedding"] == emb
+
+    def test_upsert_rejects_wrong_dim(self):
+        """非 1024 维 embedding → ValueError."""
+        from explain_engine.engines.lexicon import _upsert_var
+        lexicon = {"version": 1, "updated_at": "2026-05-20T00:00:00Z", "variables": []}
+        node = self._make_node()
+        with pytest.raises(ValueError, match="embedding must be 1024-dim"):
+            _upsert_var(
+                lexicon, node, "测试", sid="s_aaaa0001",
+                embedding=[0.1] * 512,
+            )
+
+    def test_upsert_existing_entry_preserves_embedding(self):
+        """同 global_id 已存在 + 新 sid: embedding 不被新 None 覆盖."""
+        from explain_engine.engines.lexicon import _upsert_var
+        lexicon = {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": [],
+        }
+        node = self._make_node()
+        emb = [0.5] * 1024
+        # First insert with embedding
+        _upsert_var(lexicon, node, "fixed canonical", sid="s_aaaa0001", embedding=emb)
+        assert lexicon["variables"][0]["embedding"] == emb
+        # Second upsert from new sid, no embedding kwarg
+        _upsert_var(lexicon, node, "fixed canonical", sid="s_aaaa0002")
+        assert lexicon["variables"][0]["embedding"] == emb  # preserved
+        assert lexicon["variables"][0]["fitness"]["reuse_count"] == 2

@@ -19,7 +19,8 @@ knowledge/variables.json schema:
         "last_seen_at": str (ISO8601),
       },
       "canonical_mechanism": str (1-line summary),
-      "source_sessions": list[str]
+      "source_sessions": list[str],
+      "embedding": list[float] | null   # Phase 13: BGE-M3 1024-dim dense vector (None for legacy entries)
     }
   ]
 }
@@ -113,13 +114,23 @@ def _upsert_var(
     node: VariableNode,
     canonical_mechanism: str,
     sid: str,
+    embedding: list[float] | None = None,
 ) -> None:
     """Insert or update var entry. Idempotent w.r.t. (global_id, sid).
 
-    新 var: append with reuse_count=1, source_sessions=[sid].
-    已有 + 新 sid: ++ reuse_count, append sid.
-    已有 + 同 sid: 仅 update last_seen_at (不 ++ count).
+    新 var: append with reuse_count=1, source_sessions=[sid], embedding=<vec or None>.
+    已有 + 新 sid: ++ reuse_count, append sid. Embedding preserved (not overwritten).
+    已有 + 同 sid: 仅 update last_seen_at (不 ++ count). Embedding preserved.
+
+    Args:
+        embedding: BGE-M3 1024-dim dense vector (Phase 13). None for legacy entries
+            or when embedding generation skipped (EXPLAIN_EMBEDDING_DISABLED=1).
+            Validated: must be exactly 1024 elements if provided.
     """
+    if embedding is not None and len(embedding) != 1024:
+        raise ValueError(
+            f"embedding must be 1024-dim (BGE-M3), got {len(embedding)}"
+        )
     global_id = _compute_global_id(node.name, canonical_mechanism)
     entries = lexicon["variables"]
     existing = next((v for v in entries if v["global_id"] == global_id), None)
@@ -142,6 +153,7 @@ def _upsert_var(
             },
             "canonical_mechanism": canonical_mechanism,
             "source_sessions": [sid],
+            "embedding": embedding,  # Phase 13: None for legacy / disabled-env
         })
         return
 
