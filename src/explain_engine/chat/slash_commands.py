@@ -951,6 +951,8 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
     # Phase 13 Wave 3 Task 4: compute dedup stats for UI display (observational,
     # doesn't mutate state). Display threshold 0.75 (lower than 0.85 merge
     # threshold) accounts for proxy-text format mismatch with lexicon canonical.
+    import logging
+
     from explain_engine.engines.compress_dedup import compute_compress_dedup_stats
     try:
         dedup_stats = compute_compress_dedup_stats(
@@ -959,7 +961,11 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
             list(chat.state.insight_candidates),
             display_threshold=0.75,
         )
-    except Exception:
+    except Exception as exc:
+        logging.warning(
+            f"compute_compress_dedup_stats failed in /compress: "
+            f"{type(exc).__name__}: {exc}. Showing all-new fallback."
+        )
         dedup_stats = {"reused": 0, "new": len(chat.state.insight_candidates)}
 
     # Fix 1 (2026-05-19 smoke bug): 加 score_all 让 state.last_gains 非空
