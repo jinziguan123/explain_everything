@@ -37,6 +37,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from explain_engine.llm.client import LLMClient, Message
 from explain_engine.llm.errors import LLMError
 from explain_engine.schema.nodes import VariableNode
@@ -46,6 +48,10 @@ if TYPE_CHECKING:
     from explain_engine.persistence.storage_v2 import StorageV2
 
 SCHEMA_VERSION = 1
+
+EMBEDDING_DIM = 1024
+"""Phase 13: BGE-M3 dense embedding dimension. Used by _upsert_var
+validation and _build_embeddings_matrix shape."""
 
 
 def _now_iso() -> str:
@@ -127,9 +133,9 @@ def _upsert_var(
             or when embedding generation skipped (EXPLAIN_EMBEDDING_DISABLED=1).
             Validated: must be exactly 1024 elements if provided.
     """
-    if embedding is not None and len(embedding) != 1024:
+    if embedding is not None and len(embedding) != EMBEDDING_DIM:
         raise ValueError(
-            f"embedding must be 1024-dim (BGE-M3), got {len(embedding)}"
+            f"embedding must be {EMBEDDING_DIM}-dim (BGE-M3), got {len(embedding)}"
         )
     global_id = _compute_global_id(node.name, canonical_mechanism)
     entries = lexicon["variables"]
@@ -316,6 +322,36 @@ def _select_top_k_vars(
         return reuse * (ess + 0.1)
 
     return sorted(variables, key=_score, reverse=True)[:k]
+
+
+def _build_embeddings_matrix(
+    lexicon: dict[str, Any],
+) -> tuple[np.ndarray, dict[str, int]]:
+    """Stack embedding vectors of all variables that have one.
+
+    Phase 13 Wave 1 Task 4: caller (lexicon flush, /compress dedup) uses
+    this matrix for batch cosine vs incoming candidate embeddings.
+
+    Returns:
+        matrix: shape (M, EMBEDDING_DIM) float32, M = # vars with embedding
+            (skips None values AND missing 'embedding' key from Phase 10/11
+            legacy entries). Empty lexicon → (0, EMBEDDING_DIM) empty array.
+        global_id_to_matrix_idx: maps `global_id` → row index in matrix.
+            Only includes vars present in matrix (legacy / None excluded).
+    """
+    rows: list[list[float]] = []
+    idx_map: dict[str, int] = {}
+    for var in lexicon.get("variables", []):
+        emb = var.get("embedding")
+        if emb is None:
+            continue
+        idx_map[var["global_id"]] = len(rows)
+        rows.append(emb)
+    if rows:
+        matrix = np.asarray(rows, dtype=np.float32)
+    else:
+        matrix = np.zeros((0, EMBEDDING_DIM), dtype=np.float32)
+    return matrix, idx_map
 
 
 def _render_lexicon_for_prompt(vars_list: list[dict[str, Any]]) -> str:

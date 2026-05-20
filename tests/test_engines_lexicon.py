@@ -650,3 +650,144 @@ class TestUpsertVarEmbedding:
         _upsert_var(lexicon, node, "fixed canonical", sid="s_aaaa0002")
         assert lexicon["variables"][0]["embedding"] == emb  # preserved
         assert lexicon["variables"][0]["fitness"]["reuse_count"] == 2
+
+
+class TestBuildEmbeddingsMatrix:
+    """Phase 13 Wave 1 Task 4: _build_embeddings_matrix helper."""
+
+    def test_empty_lexicon_returns_empty_matrix(self):
+        from explain_engine.engines.lexicon import _build_embeddings_matrix
+        lexicon = {"version": 1, "updated_at": "2026-05-20T00:00:00Z", "variables": []}
+        matrix, idx_map = _build_embeddings_matrix(lexicon)
+        assert matrix.shape == (0, 1024)
+        assert matrix.dtype.name == "float32"
+        assert idx_map == {}
+
+    def test_two_entries_with_embeddings(self):
+        from explain_engine.engines.lexicon import _build_embeddings_matrix
+        lexicon = {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": [
+                {
+                    "global_id": "v_aaaa1111",
+                    "name": "n1",
+                    "description": "d1",
+                    "abstraction_level": 1,
+                    "epistemic": "insight",
+                    "fitness": {
+                        "reuse_count": 1,
+                        "avg_essentialness": 0.5,
+                        "avg_consistency": 0.5,
+                        "first_seen_at": "2026-05-20T00:00:00Z",
+                        "last_seen_at": "2026-05-20T00:00:00Z",
+                    },
+                    "canonical_mechanism": "m1",
+                    "source_sessions": ["s_aaaa0001"],
+                    "embedding": [0.1] * 1024,
+                },
+                {
+                    "global_id": "v_bbbb2222",
+                    "name": "n2",
+                    "description": "d2",
+                    "abstraction_level": 1,
+                    "epistemic": "insight",
+                    "fitness": {
+                        "reuse_count": 1,
+                        "avg_essentialness": 0.5,
+                        "avg_consistency": 0.5,
+                        "first_seen_at": "2026-05-20T00:00:00Z",
+                        "last_seen_at": "2026-05-20T00:00:00Z",
+                    },
+                    "canonical_mechanism": "m2",
+                    "source_sessions": ["s_aaaa0002"],
+                    "embedding": [0.2] * 1024,
+                },
+            ],
+        }
+        matrix, idx_map = _build_embeddings_matrix(lexicon)
+        assert matrix.shape == (2, 1024)
+        assert matrix.dtype.name == "float32"
+        assert idx_map == {"v_aaaa1111": 0, "v_bbbb2222": 1}
+        # Spot check values
+        assert matrix[0, 0] == pytest.approx(0.1)
+        assert matrix[1, 0] == pytest.approx(0.2)
+
+    def test_none_embedding_excluded(self):
+        """embedding=None entries 不入 matrix."""
+        from explain_engine.engines.lexicon import _build_embeddings_matrix
+        lexicon = {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": [
+                {
+                    "global_id": "v_aaaa1111",
+                    "name": "n1",
+                    "description": "d1",
+                    "abstraction_level": 1,
+                    "epistemic": "insight",
+                    "fitness": {
+                        "reuse_count": 1,
+                        "avg_essentialness": 0.5,
+                        "avg_consistency": 0.5,
+                        "first_seen_at": "2026-05-20T00:00:00Z",
+                        "last_seen_at": "2026-05-20T00:00:00Z",
+                    },
+                    "canonical_mechanism": "m1",
+                    "source_sessions": ["s_aaaa0001"],
+                    "embedding": None,
+                },
+                {
+                    "global_id": "v_bbbb2222",
+                    "name": "n2",
+                    "description": "d2",
+                    "abstraction_level": 1,
+                    "epistemic": "insight",
+                    "fitness": {
+                        "reuse_count": 1,
+                        "avg_essentialness": 0.5,
+                        "avg_consistency": 0.5,
+                        "first_seen_at": "2026-05-20T00:00:00Z",
+                        "last_seen_at": "2026-05-20T00:00:00Z",
+                    },
+                    "canonical_mechanism": "m2",
+                    "source_sessions": ["s_aaaa0002"],
+                    "embedding": [0.1] * 1024,
+                },
+            ],
+        }
+        matrix, idx_map = _build_embeddings_matrix(lexicon)
+        assert matrix.shape == (1, 1024)
+        assert "v_aaaa1111" not in idx_map
+        assert "v_bbbb2222" in idx_map
+        assert idx_map["v_bbbb2222"] == 0
+
+    def test_missing_embedding_key_excluded(self):
+        """老 Phase 10/11 entry 完全没 embedding key — 也不入 matrix."""
+        from explain_engine.engines.lexicon import _build_embeddings_matrix
+        lexicon = {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": [
+                {
+                    "global_id": "v_aaaa1111",
+                    "name": "legacy",
+                    "description": "no embedding key",
+                    "abstraction_level": 1,
+                    "epistemic": "insight",
+                    "fitness": {
+                        "reuse_count": 1,
+                        "avg_essentialness": 0.5,
+                        "avg_consistency": 0.5,
+                        "first_seen_at": "2026-05-20T00:00:00Z",
+                        "last_seen_at": "2026-05-20T00:00:00Z",
+                    },
+                    "canonical_mechanism": "m1",
+                    "source_sessions": ["s_aaaa0001"],
+                    # No "embedding" key at all (Phase 10 legacy)
+                },
+            ],
+        }
+        matrix, idx_map = _build_embeddings_matrix(lexicon)
+        assert matrix.shape == (0, 1024)
+        assert idx_map == {}
