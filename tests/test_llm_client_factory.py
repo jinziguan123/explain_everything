@@ -91,3 +91,83 @@ def test_factory_missing_env_var_rejected(monkeypatch) -> None:
     monkeypatch.delenv("LLM_MODEL", raising=False)
     with pytest.raises(KeyError, match="LLM_PROTOCOL"):
         make_llm_client()
+
+
+def test_factory_default_max_tokens(monkeypatch) -> None:
+    """Phase 13 hotfix #3: 默认 LLM_MAX_TOKENS = 16384 (DEFAULT_MAX_TOKENS)."""
+    from explain_engine.config import make_llm_client
+    from explain_engine.llm.anthropic_protocol import AnthropicProtocolClient
+
+    monkeypatch.delenv("LLM_MAX_TOKENS", raising=False)
+    _set_full_env(
+        monkeypatch,
+        protocol="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key="sk-ant-fake",
+        model="claude-opus-4-7",
+    )
+    client = make_llm_client()
+    assert client._max_tokens == AnthropicProtocolClient.DEFAULT_MAX_TOKENS == 16384
+
+
+def test_factory_env_overrides_max_tokens_anthropic(monkeypatch) -> None:
+    """LLM_MAX_TOKENS=32768 → anthropic client picks it up."""
+    from explain_engine.config import make_llm_client
+
+    monkeypatch.setenv("LLM_MAX_TOKENS", "32768")
+    _set_full_env(
+        monkeypatch,
+        protocol="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key="sk-ant-fake",
+        model="claude-opus-4-7",
+    )
+    client = make_llm_client()
+    assert client._max_tokens == 32768
+
+
+def test_factory_env_overrides_max_tokens_openai(monkeypatch) -> None:
+    """LLM_MAX_TOKENS env applies to openai protocol too."""
+    from explain_engine.config import make_llm_client
+
+    monkeypatch.setenv("LLM_MAX_TOKENS", "65536")
+    _set_full_env(
+        monkeypatch,
+        protocol="openai",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-fake",
+        model="gpt-4o",
+    )
+    monkeypatch.delenv("LLM_STRUCTURED_OUTPUT_MODE", raising=False)
+    client = make_llm_client()
+    assert client._max_tokens == 65536
+
+
+def test_factory_invalid_max_tokens_non_int(monkeypatch) -> None:
+    from explain_engine.config import make_llm_client
+
+    monkeypatch.setenv("LLM_MAX_TOKENS", "not-a-number")
+    _set_full_env(
+        monkeypatch,
+        protocol="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key="sk-ant-fake",
+        model="claude-opus-4-7",
+    )
+    with pytest.raises(ValueError, match="LLM_MAX_TOKENS"):
+        make_llm_client()
+
+
+def test_factory_invalid_max_tokens_zero(monkeypatch) -> None:
+    from explain_engine.config import make_llm_client
+
+    monkeypatch.setenv("LLM_MAX_TOKENS", "0")
+    _set_full_env(
+        monkeypatch,
+        protocol="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key="sk-ant-fake",
+        model="claude-opus-4-7",
+    )
+    with pytest.raises(ValueError, match="LLM_MAX_TOKENS"):
+        make_llm_client()

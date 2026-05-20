@@ -36,12 +36,16 @@ def _schema_instructions(schema: type[BaseModel]) -> str:
 
 
 class OpenAIProtocolClient:
+    DEFAULT_MAX_TOKENS = 16384
+    """Phase 13 hotfix #3 (2026-05-20): 默认 16384, LLM_MAX_TOKENS env 可覆盖."""
+
     def __init__(
         self,
         api_key: str,
         default_model: str,
         base_url: str | None = None,
         mode: Mode = "json_schema",
+        max_tokens: int | None = None,
     ) -> None:
         kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
@@ -49,6 +53,7 @@ class OpenAIProtocolClient:
         self._client = AsyncOpenAI(**kwargs)
         self._default_model = default_model
         self._mode = mode
+        self._max_tokens = max_tokens if max_tokens is not None else self.DEFAULT_MAX_TOKENS
 
     async def chat(
         self,
@@ -151,7 +156,7 @@ class OpenAIProtocolClient:
             call_kwargs: dict[str, Any] = {
                 "model": model or self._default_model,
                 "messages": openai_messages,
-                "max_tokens": 8192,
+                "max_tokens": self._max_tokens,
             }
             if openai_tools:
                 call_kwargs["tools"] = openai_tools

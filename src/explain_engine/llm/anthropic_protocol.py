@@ -39,17 +39,25 @@ _REMINDER_MSG = (
 
 
 class AnthropicProtocolClient:
+    DEFAULT_MAX_TOKENS = 16384
+    """Phase 13 hotfix #3 (2026-05-20): 默认 16384 (deepseek-v4-pro 支持
+    1M context + 384K output, 16K 安全且能容详细中文 JSON ~10K char).
+    可通过 LLM_MAX_TOKENS env / 构造 max_tokens kwarg 覆盖.
+    """
+
     def __init__(
         self,
         api_key: str,
         default_model: str,
         base_url: str | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
         self._client = AsyncAnthropic(**kwargs)
         self._default_model = default_model
+        self._max_tokens = max_tokens if max_tokens is not None else self.DEFAULT_MAX_TOKENS
 
     async def chat(
         self,
@@ -120,7 +128,7 @@ class AnthropicProtocolClient:
 
         call_kwargs: dict[str, Any] = {
             "model": model or self._default_model,
-            "max_tokens": 8192,
+            "max_tokens": self._max_tokens,
             "messages": chat_messages,
         }
         if system_text:
@@ -196,7 +204,7 @@ class AnthropicProtocolClient:
         try:
             call_kwargs: dict[str, Any] = {
                 "model": model or self._default_model,
-                "max_tokens": 8192,
+                "max_tokens": self._max_tokens,
                 "system": system,
                 "messages": messages,
             }

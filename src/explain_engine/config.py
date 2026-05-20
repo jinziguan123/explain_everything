@@ -48,9 +48,13 @@ def make_llm_client() -> LLMClient:
       - LLM_API_KEY:  API key
       - LLM_MODEL:    模型名 (e.g. claude-opus-4-7 / gpt-4o / deepseek-chat)
 
-    可选 env (仅 openai 协议):
-      - LLM_STRUCTURED_OUTPUT_MODE: 'json_schema' (默认) 或 'json_object'
-        (DeepSeek 等不支持 json_schema strict 的 vendor 用 json_object)
+    可选 env:
+      - LLM_MAX_TOKENS: 整数, 每次 LLM call 的 max_tokens (default 16384).
+        deepseek-v4-pro 支持到 384K, Claude 4.x 默认 cap 8192-16384.
+        中文 dense JSON 输出场景 (bootstrap_phenomena / propose_candidates)
+        建议 ≥16384, 避免 mid-stream truncation 导致 SchemaValidationError.
+      - LLM_STRUCTURED_OUTPUT_MODE: 仅 openai 协议. 'json_schema' (默认)
+        或 'json_object' (DeepSeek 等不支持 json_schema strict 的 vendor 用).
     """
     load_dotenv(override=False)
     try:
@@ -64,11 +68,25 @@ def make_llm_client() -> LLMClient:
             f"(required: LLM_PROTOCOL / LLM_BASE_URL / LLM_API_KEY / LLM_MODEL)"
         ) from exc
 
+    # LLM_MAX_TOKENS: optional, validate int + positive
+    max_tokens_env = os.environ.get("LLM_MAX_TOKENS")
+    max_tokens: int | None = None
+    if max_tokens_env is not None:
+        try:
+            max_tokens = int(max_tokens_env)
+            if max_tokens < 1:
+                raise ValueError(f"LLM_MAX_TOKENS must be >= 1, got {max_tokens}")
+        except ValueError as exc:
+            raise ValueError(
+                f"LLM_MAX_TOKENS must be a positive integer, got {max_tokens_env!r}: {exc}"
+            ) from exc
+
     if proto == "anthropic":
         return AnthropicProtocolClient(
             api_key=api_key,
             default_model=model,
             base_url=base_url,
+            max_tokens=max_tokens,
         )
     if proto == "openai":
         mode_str = os.environ.get("LLM_STRUCTURED_OUTPUT_MODE", "json_schema")
@@ -83,6 +101,7 @@ def make_llm_client() -> LLMClient:
             default_model=model,
             base_url=base_url,
             mode=mode,
+            max_tokens=max_tokens,
         )
     raise ValueError(
         f"Unknown LLM_PROTOCOL: {proto!r}, must be 'anthropic' or 'openai'"
