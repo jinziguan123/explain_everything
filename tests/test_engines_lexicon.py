@@ -791,3 +791,132 @@ class TestBuildEmbeddingsMatrix:
         matrix, idx_map = _build_embeddings_matrix(lexicon)
         assert matrix.shape == (0, 1024)
         assert idx_map == {}
+
+
+class TestLexiconLazyMigration:
+    """Phase 13 Wave 1 Task 5: _migrate_lexicon_embeddings lazy fill."""
+
+    def _make_var_no_embedding(self, global_id: str, canonical: str):
+        """Helper: build a legacy var dict (no embedding key)."""
+        return {
+            "global_id": global_id,
+            "name": "经济压力",
+            "description": "对未来收入预期下降",
+            "abstraction_level": 1,
+            "epistemic": "insight",
+            "fitness": {
+                "reuse_count": 1,
+                "avg_essentialness": 0.5,
+                "avg_consistency": 0.5,
+                "first_seen_at": "2026-05-20T00:00:00Z",
+                "last_seen_at": "2026-05-20T00:00:00Z",
+            },
+            "canonical_mechanism": canonical,
+            "source_sessions": ["s_aaaa0001"],
+            # No embedding key (Phase 10/11 legacy)
+        }
+
+    def test_disabled_env_skips_migration(self, monkeypatch, tmp_path):
+        """EXPLAIN_EMBEDDING_DISABLED=1 → no-op."""
+        monkeypatch.setenv("EXPLAIN_EMBEDDING_DISABLED", "1")
+        from explain_engine.engines.lexicon import _migrate_lexicon_embeddings
+        lexicon = {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": [self._make_var_no_embedding("v_aaaa1111", "经济不安全感")],
+        }
+        path = tmp_path / "variables.json"
+        count = _migrate_lexicon_embeddings(lexicon, path)
+        assert count == 0
+        # Lexicon dict unchanged
+        assert "embedding" not in lexicon["variables"][0]
+        # File not written
+        assert not path.exists()
+
+    def test_all_embeddings_present_skips(self, tmp_path):
+        """所有 var 已有 embedding → noop, 不重新 embed."""
+        from explain_engine.engines.lexicon import _migrate_lexicon_embeddings
+        var = self._make_var_no_embedding("v_bbbb2222", "test_canonical")
+        var["embedding"] = [0.5] * 1024  # already has embedding
+        lexicon = {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": [var],
+        }
+        path = tmp_path / "variables.json"
+        count = _migrate_lexicon_embeddings(lexicon, path)
+        assert count == 0
+        # Unchanged embedding (not overwritten)
+        assert lexicon["variables"][0]["embedding"] == [0.5] * 1024
+        # File not written (no changes)
+        assert not path.exists()
+
+    @pytest.mark.embedding
+    def test_legacy_entries_batch_embed_and_writeback(self, tmp_path):
+        """2 legacy var (no embedding key) → batch embed + write back JSON."""
+        from explain_engine.engines.lexicon import (
+            _migrate_lexicon_embeddings,
+            _save_lexicon,
+        )
+
+        lexicon = {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": [
+                self._make_var_no_embedding("v_cccc3333", "经济不安全感导致防御性储蓄"),
+                self._make_var_no_embedding("v_dddd4444", "老龄化人口结构演变"),
+            ],
+        }
+        path = tmp_path / "variables.json"
+        # Initial save (to verify write-back actually changes file)
+        _save_lexicon(path, lexicon)
+
+        count = _migrate_lexicon_embeddings(lexicon, path)
+        assert count == 2
+        # In-memory: both vars now have embedding 1024-dim
+        for var in lexicon["variables"]:
+            assert "embedding" in var
+            assert len(var["embedding"]) == 1024
+        # On-disk: same
+        reloaded = json.loads(path.read_text(encoding="utf-8"))
+        for var in reloaded["variables"]:
+            assert "embedding" in var
+            assert len(var["embedding"]) == 1024
+        # The 2 embeddings should differ (different canonical strings)
+        emb1 = lexicon["variables"][0]["embedding"]
+        emb2 = lexicon["variables"][1]["embedding"]
+        assert emb1 != emb2
+
+    @pytest.mark.embedding
+    def test_partial_migration(self, tmp_path):
+        """混合: 1 var 已有 embedding + 1 var 缺. 只 migrate 缺的, 已有不变."""
+        from explain_engine.engines.lexicon import _migrate_lexicon_embeddings
+        existing_emb = [0.5] * 1024
+        var_with_emb = self._make_var_no_embedding("v_eeee5555", "已有 embedding")
+        var_with_emb["embedding"] = existing_emb
+        var_without = self._make_var_no_embedding("v_ffff6666", "缺 embedding 需 migrate")
+
+        lexicon = {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": [var_with_emb, var_without],
+        }
+        path = tmp_path / "variables.json"
+        count = _migrate_lexicon_embeddings(lexicon, path)
+        assert count == 1
+        # Var 0 unchanged
+        assert lexicon["variables"][0]["embedding"] == existing_emb
+        # Var 1 now has fresh embedding (not the placeholder)
+        new_emb = lexicon["variables"][1]["embedding"]
+        assert len(new_emb) == 1024
+        assert new_emb != existing_emb
+
+    def test_none_path_does_not_write(self, monkeypatch, tmp_path):
+        """path=None → migrate in-memory only, no write."""
+        monkeypatch.setenv("EXPLAIN_EMBEDDING_DISABLED", "1")  # avoid real embedder
+        from explain_engine.engines.lexicon import _migrate_lexicon_embeddings
+        lexicon = {"version": 1, "updated_at": "x", "variables": []}
+        count = _migrate_lexicon_embeddings(lexicon, None)
+        assert count == 0
+        # No file created
+        assert not any(tmp_path.iterdir())

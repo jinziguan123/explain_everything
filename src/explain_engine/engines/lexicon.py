@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -270,6 +271,7 @@ async def flush_to_lexicon(
     """
     path = storage.knowledge_dir() / "variables.json"
     lexicon = _load_lexicon(path)
+    _migrate_lexicon_embeddings(lexicon, path)  # Phase 13: lazy backfill
 
     # 收集 promoted candidates + sort by activation desc
     candidates = [
@@ -352,6 +354,65 @@ def _build_embeddings_matrix(
     else:
         matrix = np.zeros((0, EMBEDDING_DIM), dtype=np.float32)
     return matrix, idx_map
+
+
+def _migrate_lexicon_embeddings(
+    lexicon: dict[str, Any],
+    path: Path | None,
+) -> int:
+    """Phase 13 Wave 1 Task 5: batch embed any var lacking embedding field.
+
+    Lazy migration: caller invokes (typically `flush_to_lexicon` at start).
+    Mutates lexicon dict in-place, writes back to `path` if provided
+    AND at least 1 var migrated.
+
+    Env `EXPLAIN_EMBEDDING_DISABLED=1` short-circuits to 0 (no embedder load).
+    Embedder load / encode failure → log warning, leave var dict unchanged
+    (caller continues with whatever vars are migrated; partial state OK).
+
+    Args:
+        lexicon: dict with shape per top-of-file schema docstring.
+        path: where to atomic write-back; None → in-memory only (no I/O).
+
+    Returns:
+        Number of vars that gained an embedding field.
+    """
+    if os.environ.get("EXPLAIN_EMBEDDING_DISABLED") == "1":
+        return 0
+
+    needs_migration: list[dict[str, Any]] = [
+        var for var in lexicon.get("variables", [])
+        if var.get("embedding") is None
+    ]
+    if not needs_migration:
+        return 0
+
+    try:
+        from rich.console import Console
+
+        from explain_engine.embedding.bge_m3 import get_embedder
+        console = Console()
+        with console.status(
+            f"首次升级 lexicon embedding: {len(needs_migration)} entries...",
+            spinner="dots",
+        ):
+            embedder = get_embedder()
+            texts = [var["canonical_mechanism"] for var in needs_migration]
+            vecs = embedder.embed(texts)
+        for var, vec in zip(needs_migration, vecs, strict=True):
+            var["embedding"] = vec.tolist()
+    except Exception as exc:
+        logging.warning(
+            f"Lexicon embedding migration failed: {type(exc).__name__}: {exc}. "
+            "Falling back to string-match path for entries lacking embedding."
+        )
+        return 0
+
+    migrated = len(needs_migration)
+    if migrated > 0 and path is not None:
+        lexicon["updated_at"] = _now_iso()
+        _save_lexicon(path, lexicon)
+    return migrated
 
 
 def _render_lexicon_for_prompt(vars_list: list[dict[str, Any]]) -> str:
