@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from explain_engine.engines.lexicon_merge import find_duplicate, write_merge_audit
 from explain_engine.llm.client import LLMClient, Message
 from explain_engine.llm.errors import LLMError
 from explain_engine.schema.nodes import VariableNode
@@ -122,8 +123,14 @@ def _upsert_var(
     canonical_mechanism: str,
     sid: str,
     embedding: list[float] | None = None,
+    log_dir: Path | None = None,
 ) -> None:
     """Insert or update var entry. Idempotent w.r.t. (global_id, sid).
+
+    Phase 13 Wave 2 Task 3: cosine-first lookup. 当 embedding 给定时,
+    先 build embeddings matrix + find_duplicate (cos > 0.85) → 命中
+    则 merge into 该 entry (覆盖 hash match), 写 audit log. 不命中 /
+    embedding=None → 回退到 Phase 10 hash lookup (_compute_global_id).
 
     新 var: append with reuse_count=1, source_sessions=[sid], embedding=<vec or None>.
     已有 + 新 sid: ++ reuse_count, append sid. Embedding preserved (not overwritten).
@@ -133,20 +140,56 @@ def _upsert_var(
         embedding: BGE-M3 1024-dim dense vector (Phase 13). None for legacy entries
             or when embedding generation skipped (EXPLAIN_EMBEDDING_DISABLED=1).
             Validated: must be exactly 1024 elements if provided.
+        log_dir: directory for cosine-merge audit log (lexicon_merge_<date>.jsonl).
+            None → skip audit log. Only written when match is via cosine
+            (not via hash, not on creation).
     """
     if embedding is not None and len(embedding) != EMBEDDING_DIM:
         raise ValueError(
             f"embedding must be {EMBEDDING_DIM}-dim (BGE-M3), got {len(embedding)}"
         )
-    global_id = _compute_global_id(node.name, canonical_mechanism)
+
     entries = lexicon["variables"]
-    existing = next((v for v in entries if v["global_id"] == global_id), None)
+    matched_var: dict[str, Any] | None = None
+    sim_value: float | None = None  # set only if matched via cosine
+
+    # Phase 13 Wave 2: Try embedding-based cosine match FIRST (if embedding given)
+    if embedding is not None:
+        matrix, id_to_idx = _build_embeddings_matrix(lexicon)
+        if matrix.shape[0] > 0:
+            emb_arr = np.asarray(embedding, dtype=np.float32)
+            idx = find_duplicate(emb_arr, matrix)
+            if idx is not None:
+                matched_global_id = next(
+                    gid for gid, i in id_to_idx.items() if i == idx
+                )
+                matched_var = next(
+                    v for v in entries if v["global_id"] == matched_global_id
+                )
+                # Compute exact sim for audit log
+                row = matrix[idx]
+                row_norm = float(np.linalg.norm(row))
+                emb_norm = float(np.linalg.norm(emb_arr))
+                if row_norm * emb_norm > 1e-9:
+                    sim_value = float(
+                        np.dot(row, emb_arr) / (row_norm * emb_norm)
+                    )
+                else:
+                    sim_value = 0.0
+
+    # Fall back to Phase 10 hash-based lookup
+    if matched_var is None:
+        global_id = _compute_global_id(node.name, canonical_mechanism)
+        matched_var = next(
+            (v for v in entries if v["global_id"] == global_id), None
+        )
 
     now = _now_iso()
 
-    if existing is None:
+    if matched_var is None:
+        # Brand new entry (no match via cosine or hash)
         entries.append({
-            "global_id": global_id,
+            "global_id": _compute_global_id(node.name, canonical_mechanism),
             "name": node.name,
             "description": node.description,
             "abstraction_level": node.abstraction_level,
@@ -164,14 +207,14 @@ def _upsert_var(
         })
         return
 
-    if sid in existing["source_sessions"]:
+    if sid in matched_var["source_sessions"]:
         # 同 session 重复 flush — 仅 update last_seen
-        existing["fitness"]["last_seen_at"] = now
+        matched_var["fitness"]["last_seen_at"] = now
         return
 
     # 新 sid → ++ reuse_count
-    existing["source_sessions"].append(sid)
-    fitness = existing["fitness"]
+    matched_var["source_sessions"].append(sid)
+    fitness = matched_var["fitness"]
     new_count = fitness["reuse_count"] + 1
     # Running avg: new_avg = (old_avg * old_count + new_value) / new_count
     fitness["avg_essentialness"] = (
@@ -182,6 +225,16 @@ def _upsert_var(
     ) / new_count
     fitness["reuse_count"] = new_count
     fitness["last_seen_at"] = now
+
+    # Phase 13 Wave 2: audit log when matched VIA EMBEDDING (not hash, not creation)
+    if sim_value is not None and log_dir is not None:
+        write_merge_audit(
+            log_dir=log_dir,
+            merged_into=matched_var["global_id"],
+            merged_from=canonical_mechanism[:80],
+            sim=sim_value,
+            evidence_ids=[sid],
+        )
 
 
 async def _build_canonical_mechanism(
@@ -285,14 +338,48 @@ async def flush_to_lexicon(
     ]
     candidates.sort(key=lambda n: -n.activation)
 
-    promoted = 0
+    # Phase 13 Wave 2 Task 3: 先 build canonicals 全部, 再 batch embed,
+    # 然后 upsert 时 cosine-first merge.
+    canonicals: list[str] = []
     for i, node in enumerate(candidates):
         # Top-K 用 真 llm; 其余传 None 走 edge fallback
         effective_llm = llm if i < llm_canonical_top_k else None
         canonical_mech = await _build_canonical_mechanism(
             node, session, effective_llm,
         )
-        _upsert_var(lexicon, node, canonical_mech, session.meta.session_id)
+        canonicals.append(canonical_mech)
+
+    # Phase 13 Wave 2: batch embed canonicals (best-effort, optional).
+    # Embedder load / encode failure → log warning, fall back to None for all.
+    embeddings: list[list[float] | None] = [None] * len(canonicals)
+    if (
+        canonicals
+        and os.environ.get("EXPLAIN_EMBEDDING_DISABLED") != "1"
+    ):
+        try:
+            from explain_engine.embedding.bge_m3 import get_embedder
+            embedder = get_embedder()
+            vecs = embedder.embed(canonicals)
+            embeddings = [vec.tolist() for vec in vecs]
+        except Exception as exc:
+            logging.warning(
+                f"flush_to_lexicon batch embed failed: "
+                f"{type(exc).__name__}: {exc}. "
+                "Falling back to embedding=None for all candidates."
+            )
+
+    # Phase 13 Wave 2: audit log directory (sibling of knowledge/).
+    log_dir = storage.knowledge_dir().parent / "logs"
+
+    promoted = 0
+    for node, canonical_mech, embedding in zip(
+        candidates, canonicals, embeddings, strict=True,
+    ):
+        _upsert_var(
+            lexicon, node, canonical_mech, session.meta.session_id,
+            embedding=embedding,
+            log_dir=log_dir,
+        )
         promoted += 1
 
     if promoted > 0:

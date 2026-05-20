@@ -920,3 +920,231 @@ class TestLexiconLazyMigration:
         assert count == 0
         # No file created
         assert not any(tmp_path.iterdir())
+
+
+class TestUpsertVarEmbeddingMerge:
+    """Phase 13 Wave 2 Task 3: _upsert_var embedding-based merge logic."""
+
+    def _make_node(self, name="经济不安全感", desc="对未来收入预期下降"):
+        from explain_engine.schema.nodes import VariableNode
+        return VariableNode(
+            id="c_001",
+            name=name,
+            description=desc,
+            abstraction_level=1,
+            confidence=0.8,
+            epistemic="insight",
+        )
+
+    def _make_lexicon(self, var_dicts=None):
+        return {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": list(var_dicts or []),
+        }
+
+    def test_high_cosine_merges_into_existing(self, tmp_path):
+        """已有 entry (with embedding) + 新 node (different name/canonical but
+        similar embedding) → merge into existing via cosine, NOT create new."""
+        from explain_engine.engines.lexicon import _upsert_var
+
+        # Existing entry with synthetic embedding [1, 0, ...]
+        existing_emb = [1.0] + [0.0] * 1023
+        lexicon = self._make_lexicon([{
+            "global_id": "v_aaaa1111",
+            "name": "different_name",
+            "description": "d",
+            "abstraction_level": 1,
+            "epistemic": "insight",
+            "fitness": {
+                "reuse_count": 1,
+                "avg_essentialness": 0.5,
+                "avg_consistency": 0.5,
+                "first_seen_at": "2026-05-20T00:00:00Z",
+                "last_seen_at": "2026-05-20T00:00:00Z",
+            },
+            "canonical_mechanism": "different canonical",
+            "source_sessions": ["s_aaaa0001"],
+            "embedding": existing_emb,
+        }])
+
+        # New node with same embedding (cos sim = 1.0, well above 0.85)
+        node = self._make_node()
+        _upsert_var(
+            lexicon, node, "totally different canonical",
+            sid="s_bbbb0002",
+            embedding=existing_emb,
+            log_dir=tmp_path / "logs",
+        )
+
+        # Should still be 1 entry (merged, not created)
+        assert len(lexicon["variables"]) == 1
+        # source_sessions extended
+        assert lexicon["variables"][0]["source_sessions"] == ["s_aaaa0001", "s_bbbb0002"]
+        # reuse_count++
+        assert lexicon["variables"][0]["fitness"]["reuse_count"] == 2
+
+    def test_no_cosine_match_falls_back_to_hash(self, tmp_path):
+        """已有 entry (with embedding) + 新 node (same name+canonical → hash match
+        BUT distant embedding) → still merge via hash path."""
+        from explain_engine.engines.lexicon import _compute_global_id, _upsert_var
+
+        node = self._make_node(name="same_name", desc="d")
+        canonical = "same canonical"
+        global_id = _compute_global_id(node.name, canonical)
+
+        existing_emb = [1.0] + [0.0] * 1023  # orthogonal to new
+        lexicon = self._make_lexicon([{
+            "global_id": global_id,
+            "name": node.name,
+            "description": "d",
+            "abstraction_level": 1,
+            "epistemic": "insight",
+            "fitness": {
+                "reuse_count": 1,
+                "avg_essentialness": 0.5,
+                "avg_consistency": 0.5,
+                "first_seen_at": "2026-05-20T00:00:00Z",
+                "last_seen_at": "2026-05-20T00:00:00Z",
+            },
+            "canonical_mechanism": canonical,
+            "source_sessions": ["s_aaaa0001"],
+            "embedding": existing_emb,
+        }])
+
+        # New embedding orthogonal (cos = 0, below 0.85)
+        new_emb = [0.0, 1.0] + [0.0] * 1022
+        _upsert_var(
+            lexicon, node, canonical, sid="s_bbbb0002",
+            embedding=new_emb,
+            log_dir=tmp_path / "logs",
+        )
+        # Still 1 entry (merged via hash since name+canonical match)
+        assert len(lexicon["variables"]) == 1
+        assert lexicon["variables"][0]["source_sessions"] == ["s_aaaa0001", "s_bbbb0002"]
+        # No audit log (merge was via hash, not embedding)
+        audit_logs = list((tmp_path / "logs").glob("lexicon_merge_*.jsonl"))
+        assert len(audit_logs) == 0
+
+    def test_embedding_none_uses_hash_lookup(self, tmp_path):
+        """embedding=None → 直接走 hash lookup (Phase 10 行为完全保留)."""
+        from explain_engine.engines.lexicon import _compute_global_id, _upsert_var
+
+        node = self._make_node(name="hash_test", desc="d")
+        canonical = "hash canonical"
+        gid = _compute_global_id(node.name, canonical)
+
+        lexicon = self._make_lexicon([{
+            "global_id": gid,
+            "name": node.name,
+            "description": "d",
+            "abstraction_level": 1,
+            "epistemic": "insight",
+            "fitness": {
+                "reuse_count": 1,
+                "avg_essentialness": 0.5,
+                "avg_consistency": 0.5,
+                "first_seen_at": "2026-05-20T00:00:00Z",
+                "last_seen_at": "2026-05-20T00:00:00Z",
+            },
+            "canonical_mechanism": canonical,
+            "source_sessions": ["s_aaaa0001"],
+            "embedding": None,
+        }])
+
+        _upsert_var(lexicon, node, canonical, sid="s_bbbb0002", embedding=None, log_dir=None)
+        assert len(lexicon["variables"]) == 1
+        assert lexicon["variables"][0]["source_sessions"] == ["s_aaaa0001", "s_bbbb0002"]
+
+    def test_audit_log_written_on_cosine_merge(self, tmp_path):
+        """Cosine match → audit log JSONL line containing global_id + sim + 中文."""
+        import json
+
+        from explain_engine.engines.lexicon import _upsert_var
+
+        existing_emb = [1.0] + [0.0] * 1023
+        lexicon = self._make_lexicon([{
+            "global_id": "v_aaaa1111",
+            "name": "n",
+            "description": "d",
+            "abstraction_level": 1,
+            "epistemic": "insight",
+            "fitness": {
+                "reuse_count": 1,
+                "avg_essentialness": 0.5,
+                "avg_consistency": 0.5,
+                "first_seen_at": "2026-05-20T00:00:00Z",
+                "last_seen_at": "2026-05-20T00:00:00Z",
+            },
+            "canonical_mechanism": "existing_canonical",
+            "source_sessions": ["s_aaaa0001"],
+            "embedding": existing_emb,
+        }])
+
+        log_dir = tmp_path / "logs"
+        node = self._make_node()
+        _upsert_var(
+            lexicon, node, "新候选 中文 canonical",
+            sid="s_bbbb0002",
+            embedding=existing_emb,  # identical → cos = 1
+            log_dir=log_dir,
+        )
+
+        audit_logs = list(log_dir.glob("lexicon_merge_*.jsonl"))
+        assert len(audit_logs) == 1
+        rec = json.loads(audit_logs[0].read_text(encoding="utf-8").strip())
+        assert rec["merged_into"] == "v_aaaa1111"
+        assert "新候选" in rec["merged_from"]
+        assert rec["sim"] == pytest.approx(1.0, abs=0.01)
+        assert rec["evidence_ids"] == ["s_bbbb0002"]
+
+    def test_no_existing_creates_new_with_embedding(self, tmp_path):
+        """Empty lexicon → new entry with embedding field set."""
+        from explain_engine.engines.lexicon import _upsert_var
+        lexicon = self._make_lexicon([])
+        emb = [0.5] * 1024
+        node = self._make_node()
+        _upsert_var(
+            lexicon, node, "fresh canonical",
+            sid="s_aaaa0001",
+            embedding=emb,
+            log_dir=tmp_path / "logs",
+        )
+        assert len(lexicon["variables"]) == 1
+        assert lexicon["variables"][0]["embedding"] == emb
+        # No audit log (creation, not merge)
+        audit_logs = list((tmp_path / "logs").glob("lexicon_merge_*.jsonl"))
+        assert len(audit_logs) == 0
+
+    def test_same_sid_repeat_no_double_count(self, tmp_path):
+        """Phase 10 idempotency preserved: same sid hits existing entry → no ++."""
+        from explain_engine.engines.lexicon import _upsert_var
+        existing_emb = [1.0] + [0.0] * 1023
+        lexicon = self._make_lexicon([{
+            "global_id": "v_aaaa1111",
+            "name": "n",
+            "description": "d",
+            "abstraction_level": 1,
+            "epistemic": "insight",
+            "fitness": {
+                "reuse_count": 1,
+                "avg_essentialness": 0.5,
+                "avg_consistency": 0.5,
+                "first_seen_at": "2026-05-20T00:00:00Z",
+                "last_seen_at": "2026-05-20T00:00:00Z",
+            },
+            "canonical_mechanism": "c",
+            "source_sessions": ["s_aaaa0001"],
+            "embedding": existing_emb,
+        }])
+        node = self._make_node()
+        # Same sid → idempotent (no double count even if cosine matches)
+        _upsert_var(
+            lexicon, node, "new canonical",
+            sid="s_aaaa0001",  # same sid as existing
+            embedding=existing_emb,
+            log_dir=tmp_path / "logs",
+        )
+        # reuse_count UNCHANGED
+        assert lexicon["variables"][0]["fitness"]["reuse_count"] == 1
+        assert lexicon["variables"][0]["source_sessions"] == ["s_aaaa0001"]
