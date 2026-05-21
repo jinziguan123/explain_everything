@@ -170,6 +170,18 @@ def err_stage_not_allowed(cmd: str, current_stage: str, allowed: list[str]) -> s
     )
 
 
+STATUS_COMPRESS_PROPOSE = "[bold green]正在归纳模式...[/bold green]"
+STATUS_COMPRESS_SCORE   = "[bold green]正在评分候选模式...[/bold green]"
+STATUS_LEXICON_FLUSH    = "[bold green]正在存盘到概念库...[/bold green]"
+STATUS_RUN              = "[bold green]正在自动推理 (扩展 / 反思 / 衰减)...[/bold green]"
+STATUS_PREDICT          = "[bold green]正在预测干预影响...[/bold green]"
+STATUS_COUNTERFACTUAL   = "[bold green]正在做反事实分析...[/bold green]"
+STATUS_RESCORE          = "[bold green]正在重评因果关系...[/bold green]"
+
+INFO_INSIGHT_PENDING_RESUME = "[dim](检测到中途取消, 跳过 LLM 直接进入审查)[/dim]"
+INFO_MID_STAGE_SAVED        = "[dim](中间状态已保存, 取消审查可下次重入跳过 LLM)[/dim]"
+
+
 HINTS_BY_KEY: dict[str, str] = {
     "need_promote_first": (
         "session 还没启动 — 输入一个问题让 chat 建 session, 然后再 /compress."

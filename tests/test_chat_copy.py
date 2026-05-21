@@ -163,3 +163,27 @@ class TestHintsByKey:
         assert "/compress" in c
         assert "归纳" in c or "模式" in c
         assert "abstraction" not in c
+
+
+class TestStatusAndInfoConstants:
+    def test_status_constants_have_rich_markup(self):
+        from explain_engine.chat.chat_copy import (
+            STATUS_COMPRESS_PROPOSE,
+            STATUS_RUN,
+            STATUS_LEXICON_FLUSH,
+        )
+        for s in (STATUS_COMPRESS_PROPOSE, STATUS_RUN, STATUS_LEXICON_FLUSH):
+            assert "[bold green]" in s
+            assert "[/bold green]" in s
+            # 含中文
+            import re
+            assert re.search(r'[一-鿿]', s)
+
+    def test_info_constants_dim_style(self):
+        from explain_engine.chat.chat_copy import (
+            INFO_INSIGHT_PENDING_RESUME,
+            INFO_MID_STAGE_SAVED,
+        )
+        for s in (INFO_INSIGHT_PENDING_RESUME, INFO_MID_STAGE_SAVED):
+            assert "[dim]" in s
+            assert "[/dim]" in s
