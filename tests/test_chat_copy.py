@@ -104,3 +104,33 @@ class TestSuccessMessageTemplates:
         assert "0.78" in msg
         assert "重评" in msg
         assert "可信度" in msg
+
+
+class TestErrorTemplates:
+    def test_err_failed_includes_exc_info(self):
+        from explain_engine.chat.chat_copy import err_failed
+        msg = err_failed("compress", ValueError("bad input"))
+        assert "compress" in msg
+        assert "失败" in msg
+        assert "ValueError" in msg
+        assert "bad input" in msg
+
+    def test_err_no_llm_chinese(self):
+        from explain_engine.chat.chat_copy import err_no_llm
+        msg = err_no_llm("predict")
+        assert "predict" in msg
+        assert "LLM" in msg
+        assert "没配置" in msg or "启动" in msg
+
+    def test_err_ephemeral_reject_actionable(self):
+        from explain_engine.chat.chat_copy import err_ephemeral_reject
+        msg = err_ephemeral_reject("compress")
+        assert "/resume" in msg or "新建" in msg or "建 session" in msg
+
+    def test_err_stage_not_allowed_translates_stages(self):
+        from explain_engine.chat.chat_copy import err_stage_not_allowed
+        msg = err_stage_not_allowed("run", "bootstrap_pending", ["done"])
+        assert "等待启动" in msg
+        assert "已归纳" in msg
+        assert "bootstrap_pending" not in msg
+        assert "['done']" not in msg

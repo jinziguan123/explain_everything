@@ -144,3 +144,27 @@ def msg_resume_already(sid: str) -> str:
 
 def msg_resume_switching(sid: str) -> str:
     return f"切换到 session {sid}..."
+
+
+def err_failed(cmd: str, exc: Exception) -> str:
+    return f"/{cmd} 失败: {type(exc).__name__}: {exc}"
+
+
+def err_no_llm(cmd: str) -> str:
+    return f"/{cmd} 需要 LLM (启动时没配置)."
+
+
+def err_ephemeral_reject(cmd: str) -> str:
+    return (
+        f"/{cmd} 需要先建 session — 输入一个问题让 chat 建 session, "
+        f"或 /resume 选历史 session."
+    )
+
+
+def err_stage_not_allowed(cmd: str, current_stage: str, allowed: list[str]) -> str:
+    current_zh = zh(current_stage)
+    allowed_zh = " / ".join(zh(s) for s in allowed)
+    return (
+        f"/{cmd} 在当前阶段 ({current_zh}) 不能跑 — "
+        f"需要阶段为: {allowed_zh}."
+    )
