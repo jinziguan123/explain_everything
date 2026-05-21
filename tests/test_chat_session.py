@@ -10,8 +10,11 @@ from explain_engine.schema.nodes import VariableNode
 from explain_engine.schema.state import CognitiveState
 
 
-def _make_done_session(sid: str = "s_001abcde") -> Session:
-    """Create a done-stage session via SessionStore.save()."""
+def _make_done_session(sid: str = "s_001abcde", stage: str = "done") -> Session:
+    """Create a session via SessionStore.save().
+
+    Phase 14 (2026-05-21): 加 stage 参数. Default "done" 向后兼容.
+    """
     g = ExplanationGraph(root_question="why?")
     g.add_node(VariableNode(
         id="c_001", name="abs", description="d",
@@ -29,7 +32,7 @@ def _make_done_session(sid: str = "s_001abcde") -> Session:
     state.insight_candidates = ["c_001"]
     meta = SessionMeta.new(question="why?")
     meta.session_id = sid  # override generated id
-    meta.stage = "done"
+    meta.stage = stage
     sess = Session(meta=meta, state=state)
     store = SessionStore()
     store.save(sess)
@@ -236,3 +239,23 @@ class TestChatSessionLLM:
         sentinel = object()  # 任意 stub, 此 test 不调它
         chat = ChatSession("s_22222222", llm=sentinel)  # type: ignore[arg-type]
         assert chat.llm is sentinel
+
+
+class TestMakeDoneSessionFixture:
+    """Phase 14: Helper fixture 支持自定义 stage (stage gate test 用)."""
+
+    def test_default_stage_is_done(self):
+        _make_done_session("s_fff00001")
+        assert SessionStore().load("s_fff00001").meta.stage == "done"
+
+    def test_stage_param_creates_bootstrap_pending(self):
+        _make_done_session("s_fff00002", stage="bootstrap_pending")
+        assert SessionStore().load("s_fff00002").meta.stage == "bootstrap_pending"
+
+    def test_stage_param_creates_insight_pending(self):
+        _make_done_session("s_fff00003", stage="insight_pending")
+        assert SessionStore().load("s_fff00003").meta.stage == "insight_pending"
+
+    def test_stage_param_creates_converged(self):
+        _make_done_session("s_fff00004", stage="converged")
+        assert SessionStore().load("s_fff00004").meta.stage == "converged"
