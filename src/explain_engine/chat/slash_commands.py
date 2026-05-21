@@ -898,60 +898,70 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
 
     _console = Console()
 
-    # 2026-05-19 polish: Rich Status spinner — propose_candidates LLM 调用
-    try:
-        from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
-        top_k = get_lexicon_top_k_for_compress(chat.storage, k=20)
-        with _console.status("[bold green]调 LLM 提候选 (compress)...[/bold green]"):
-            await propose_candidates(chat.state, chat.llm, existing_lexicon=top_k)
-    except Exception as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/compress propose_candidates 失败: {type(exc).__name__}: {exc}",
-        )]
-
-    # Phase 13 Wave 3 Task 4: compute dedup stats for UI display (observational,
-    # doesn't mutate state). Display threshold 0.75 (lower than 0.85 merge
-    # threshold) accounts for proxy-text format mismatch with lexicon canonical.
-    import logging
-
-    from explain_engine.engines.compress_dedup import compute_compress_dedup_stats
-    try:
-        dedup_stats = compute_compress_dedup_stats(
-            chat.state,
-            chat.storage,
-            list(chat.state.insight_candidates),
-            display_threshold=0.75,
+    # Phase 14 Task 15: ip 入口短路 — 上次 propose+score 完 (mid-stage Task 14),
+    # 但 review 被取消 → 重入跳过 LLM 直接进 review.
+    if chat._session.meta.stage == "insight_pending":
+        _console.print(
+            "[dim](检测到 stage=insight_pending, 跳过 LLM 直接进入审查)[/dim]"
         )
-    except Exception as exc:
-        logging.warning(
-            f"compute_compress_dedup_stats failed in /compress: "
-            f"{type(exc).__name__}: {exc}. Showing all-new fallback."
-        )
+        # ip 入口: 直接 fallback dedup_stats — 上次 propose 已落 candidates,
+        # 但 embedding stats 缺. Display "0 near-dup / N new" 占位.
         dedup_stats = {"reused": 0, "new": len(chat.state.insight_candidates)}
+    else:
+        # bp 入口 (default): propose + score + mid-stage persist
+        try:
+            from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
+            top_k = get_lexicon_top_k_for_compress(chat.storage, k=20)
+            with _console.status("[bold green]调 LLM 提候选 (compress)...[/bold green]"):
+                await propose_candidates(chat.state, chat.llm, existing_lexicon=top_k)
+        except Exception as exc:
+            return [ChatEvent(
+                type="slash_error",
+                content=f"/compress propose_candidates 失败: {type(exc).__name__}: {exc}",
+            )]
 
-    # Fix 1 (2026-05-19 smoke bug): 加 score_all 让 state.last_gains 非空
-    # (跟 cli `_run_compress` 一致). Phase 11 Wave 3 漏 score_all 导致 HITL
-    # 看 gain 全 0.00 — review_insights_async 实际从 state.last_gains 读.
-    try:
-        with _console.status(
-            "[bold green]调 LLM 评每 L1 候选 (score_all)...[/bold green]"
-        ):
-            await score_all(chat.state, chat.llm)
-    except Exception as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/compress score_all 失败: {type(exc).__name__}: {exc}",
-        )]
+        # Phase 13 Wave 3 Task 4: compute dedup stats for UI display (observational,
+        # doesn't mutate state). Display threshold 0.75 (lower than 0.85 merge
+        # threshold) accounts for proxy-text format mismatch with lexicon canonical.
+        import logging
 
-    # Phase 14 Task 14: mid-stage persist (中断恢复). propose+score 完后,
-    # review 之前, 推 stage → insight_pending + 立刻落盘. 即便 review 取消
-    # (KeyboardInterrupt) 也能下次重入跳过 LLM (Task 15 短路).
-    chat._session.meta.stage = "insight_pending"
-    chat.persist()
-    _console.print(
-        "[dim](中间状态已保存, 即便 review 取消也能下次重入跳过 LLM)[/dim]"
-    )
+        from explain_engine.engines.compress_dedup import compute_compress_dedup_stats
+        try:
+            dedup_stats = compute_compress_dedup_stats(
+                chat.state,
+                chat.storage,
+                list(chat.state.insight_candidates),
+                display_threshold=0.75,
+            )
+        except Exception as exc:
+            logging.warning(
+                f"compute_compress_dedup_stats failed in /compress: "
+                f"{type(exc).__name__}: {exc}. Showing all-new fallback."
+            )
+            dedup_stats = {"reused": 0, "new": len(chat.state.insight_candidates)}
+
+        # Fix 1 (2026-05-19 smoke bug): 加 score_all 让 state.last_gains 非空
+        # (跟 cli `_run_compress` 一致). Phase 11 Wave 3 漏 score_all 导致 HITL
+        # 看 gain 全 0.00 — review_insights_async 实际从 state.last_gains 读.
+        try:
+            with _console.status(
+                "[bold green]调 LLM 评每 L1 候选 (score_all)...[/bold green]"
+            ):
+                await score_all(chat.state, chat.llm)
+        except Exception as exc:
+            return [ChatEvent(
+                type="slash_error",
+                content=f"/compress score_all 失败: {type(exc).__name__}: {exc}",
+            )]
+
+        # Phase 14 Task 14: mid-stage persist (中断恢复). propose+score 完后,
+        # review 之前, 推 stage → insight_pending + 立刻落盘. 即便 review 取消
+        # (KeyboardInterrupt) 也能下次重入跳过 LLM (Task 15 短路).
+        chat._session.meta.stage = "insight_pending"
+        chat.persist()
+        _console.print(
+            "[dim](中间状态已保存, 即便 review 取消也能下次重入跳过 LLM)[/dim]"
+        )
 
     # HITL async review (走 chat.input_provider, None 时 accept-all). 不包 spinner
     # — HITL 期间 prompt 显式 wait user, spinner 会撞.

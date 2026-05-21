@@ -1815,3 +1815,90 @@ class TestCompressMidStageResilience:
 
         meta = SessionStore().load("s_e000000f").meta
         assert meta.stage == "insight_pending"
+
+
+class TestCompressInsightPendingShortCircuit:
+    """Phase 14: stage=ip 入口 /compress → 跳 LLM (propose+score), 直接进 review."""
+
+    @pytest.mark.asyncio
+    async def test_ip_entry_skips_propose_and_score(self, monkeypatch):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000010", stage="insight_pending")
+        chat = ChatSession("s_e0000010", llm=object())  # type: ignore[arg-type]
+
+        calls = {"propose": 0, "score": 0, "review": 0, "flush": 0}
+
+        async def track_propose(state, llm, min_count=3, max_count=5, **kwargs):
+            calls["propose"] += 1
+
+        async def track_score(state, llm):
+            calls["score"] += 1
+
+        async def fake_review(state, input_provider, console=None):
+            calls["review"] += 1
+
+        async def fake_flush(session, storage, llm=None):
+            calls["flush"] += 1
+            return 0
+
+        monkeypatch.setattr(
+            "explain_engine.engines.compression.propose_candidates", track_propose,
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.evaluation.score_all", track_score,
+        )
+        monkeypatch.setattr(
+            "explain_engine.hitl.cli_interactive.review_insights_async", fake_review,
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.lexicon.flush_to_lexicon", fake_flush,
+        )
+
+        events = await dispatch_slash(chat, "/compress")
+        # ip 入口: propose / score 不调
+        assert calls["propose"] == 0, "ip 入口不该重跑 propose"
+        assert calls["score"] == 0, "ip 入口不该重跑 score"
+        # review / flush 仍走
+        assert calls["review"] == 1
+        assert calls["flush"] == 1
+        # 跑完 stage 推到 done (decorator)
+        assert any(e.type == "slash_compress" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_bp_entry_still_runs_propose_and_score(self, monkeypatch):
+        """对照: bp 入口仍跑 propose + score (Task 15 不破 Task 13/14)."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000011", stage="bootstrap_pending")
+        chat = ChatSession("s_e0000011", llm=object())  # type: ignore[arg-type]
+
+        calls = {"propose": 0, "score": 0}
+
+        async def track_propose(state, llm, min_count=3, max_count=5, **kwargs):
+            calls["propose"] += 1
+            state.insight_candidates = ["c_001"]
+
+        async def track_score(state, llm):
+            calls["score"] += 1
+
+        async def fake_review(state, input_provider, console=None):
+            pass
+
+        async def fake_flush(session, storage, llm=None):
+            return 0
+
+        monkeypatch.setattr(
+            "explain_engine.engines.compression.propose_candidates", track_propose,
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.evaluation.score_all", track_score,
+        )
+        monkeypatch.setattr(
+            "explain_engine.hitl.cli_interactive.review_insights_async", fake_review,
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.lexicon.flush_to_lexicon", fake_flush,
+        )
+
+        await dispatch_slash(chat, "/compress")
+        assert calls["propose"] == 1
+        assert calls["score"] == 1
