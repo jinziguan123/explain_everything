@@ -38,7 +38,7 @@ def review_phenomena(
         console.print(f"\n[bold cyan][{i}/{len(phenomena)}][/bold cyan] {p.name}")
         console.print(f"       {p.description}", style="dim")
         choice = Prompt.ask(
-            r"       \[k]eep / \[e]dit / \[d]rop",
+            r"       \[k] 保留 / \[e] 编辑 / \[d] 删除",
             choices=["k", "e", "d"],
             default="k",
         )
@@ -112,7 +112,7 @@ def review_insights(
 
         while True:
             choice = Prompt.ask(
-                r"       \[k]eep / \[e]dit / \[d]rop / \[v]iew-full",
+                r"       \[k] 保留 / \[e] 编辑 / \[d] 删除 / \[v] 查看完整覆盖",
                 choices=["k", "e", "d", "v"],
                 default="k",
             )
@@ -144,23 +144,23 @@ def review_insights(
     n_kept = sum(1 for n in state.graph.nodes.values() if n.abstraction_level == 1)
     if n_kept == 0:
         console.print(
-            "\n[yellow][WARN] 未保留任何 insight，session 标为 done。"
-            "可 explain new 重跑同问题。[/yellow]"
+            "\n[yellow][注意] 未保留任何归纳模式, session 标为 已归纳. "
+            "可 explain new 重跑同问题.[/yellow]"
         )
     else:
-        console.print(f"\n[green]已保留 {n_kept} 个 insight。[/green]")
+        console.print(f"\n[green]已保留 {n_kept} 个归纳模式.[/green]")
 
 
 def _render_insights_table(
     state: CognitiveState,
     console: Console,
 ) -> None:
-    table = Table(title="候选 (按 compression_gain 降序)")
+    table = Table(title="候选模式 (按归纳收益降序)")
     table.add_column("ID", style="cyan")
     table.add_column("名称", style="bold")
     table.add_column("描述", style="dim", max_width=40)
-    table.add_column("Coverage", justify="right")
-    table.add_column("Gain", justify="right", style="green")
+    table.add_column("覆盖现象数", justify="right")
+    table.add_column("归纳收益", justify="right", style="green")
     total = sum(1 for n in state.graph.nodes.values() if n.abstraction_level == 0)
     for cid in state.insight_candidates:
         n = state.graph.nodes[cid]
@@ -205,22 +205,22 @@ def review_predicted_l0(
             f"\n[bold]{pid}[/bold] {node.name} — {node.description}"
         )
         choice = Prompt.ask(
-            r"       \[a]ccept / \[r]eject / \[e]dit",
+            r"       \[a] 接受 / \[r] 拒绝 / \[e] 编辑",
             choices=["a", "r", "e"],
             default="a",
         )
         if choice == "r":
             state.graph.remove_node(pid)
-            cons.print(f"[yellow]rejected {pid}[/yellow]")
+            cons.print(f"[yellow]已拒绝 {pid}[/yellow]")
         elif choice == "e":
-            new_name = Prompt.ask("       新 name", default=node.name)
-            new_desc = Prompt.ask("       新 description", default=node.description)
+            new_name = Prompt.ask("       新名称", default=node.name)
+            new_desc = Prompt.ask("       新描述", default=node.description)
             updated = node.model_copy(
                 update={"name": new_name, "description": new_desc, "source": "user"}
             )
             state.graph.replace_node(pid, updated)
             kept.append(pid)
-            cons.print(f"[green]edited {pid}[/green]")
+            cons.print(f"[green]已修改 {pid}[/green]")
         else:
             kept.append(pid)
     return kept
@@ -261,22 +261,22 @@ async def review_phenomena_async(
         console.print(f"       {p.description}", style="dim")
         try:
             raw = await input_provider(
-                "       [k]eep / [e]dit description / [d]rop / [q]uit (默认 k): "
+                "       [k] 保留 / [e] 编辑描述 / [d] 删除 / [q] 退出 (默认 k): "
             )
         except (EOFError, KeyboardInterrupt):
-            console.print("[yellow]取消 HITL review (保留已选 phenomena).[/yellow]")
+            console.print("[yellow]取消审查 (保留已选的现象).[/yellow]")
             break
         action = raw.strip().lower()
 
         if action in ("q", "quit"):
-            console.print("[yellow]取消 HITL review.[/yellow]")
+            console.print("[yellow]取消审查.[/yellow]")
             break
         if action == "d":
             continue
         if action == "e":
             try:
                 new_desc_raw = await input_provider(
-                    "       新 description (回车保持原值): "
+                    "       新描述 (回车保持原值): "
                 )
             except (EOFError, KeyboardInterrupt):
                 kept.append(p)
@@ -344,16 +344,16 @@ async def review_insights_async(
 
         try:
             raw = await input_provider(
-                "       [k]eep / [e]dit description / [d]rop / [q]uit (默认 k): "
+                "       [k] 保留 / [e] 编辑描述 / [d] 删除 / [q] 退出 (默认 k): "
             )
         except (EOFError, KeyboardInterrupt):
-            console.print("[yellow]取消 HITL review.[/yellow]")
+            console.print("[yellow]取消审查.[/yellow]")
             cancelled = True
             break
         action = raw.strip().lower()
 
         if action in ("q", "quit"):
-            console.print("[yellow]取消 HITL review.[/yellow]")
+            console.print("[yellow]取消审查.[/yellow]")
             cancelled = True
             break
         if action == "d":
@@ -363,7 +363,7 @@ async def review_insights_async(
         if action == "e":
             try:
                 new_desc_raw = await input_provider(
-                    "       新 description (回车保持原值): "
+                    "       新描述 (回车保持原值): "
                 )
             except (EOFError, KeyboardInterrupt):
                 continue
@@ -383,8 +383,8 @@ async def review_insights_async(
         )
         if n_kept == 0:
             console.print(
-                "\n[yellow][WARN] 未保留任何 insight, session 标为 done. "
+                "\n[yellow][注意] 未保留任何归纳模式, session 标为 已归纳. "
                 "可 explain new 重跑同问题.[/yellow]"
             )
         else:
-            console.print(f"\n[green]已保留 {n_kept} 个 insight.[/green]")
+            console.print(f"\n[green]已保留 {n_kept} 个归纳模式.[/green]")

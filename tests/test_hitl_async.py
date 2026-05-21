@@ -143,7 +143,8 @@ class TestReviewPhenomenaAsync:
         phenomena = [_node("p_001"), _node("p_002")]
 
         async def provider(prompt: str) -> str:
-            if "k]eep" in prompt:
+            # Phase 15: prompt 中文化 (从 "[k]eep" → "[k] 保留")
+            if "[k] 保留" in prompt or "[k]eep" in prompt:
                 # 第二次 (p_002) 抛 EOF
                 provider.calls += 1  # type: ignore[attr-defined]
                 if provider.calls == 2:  # type: ignore[attr-defined]
