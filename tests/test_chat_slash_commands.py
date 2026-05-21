@@ -1625,3 +1625,44 @@ class TestSlashStageGatePredict:
         events = await dispatch_slash(chat, "/predict")
         types = [e.type for e in events]
         assert "slash_predict" in types
+
+
+class TestSlashStageGateCounterfactual:
+    """Phase 14: /counterfactual + /cf alias stage gate."""
+
+    @pytest.mark.asyncio
+    async def test_counterfactual_blocked_at_bootstrap_pending(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000007", stage="bootstrap_pending")
+        chat = ChatSession("s_e0000007", llm=object())  # type: ignore[arg-type]
+        events = await dispatch_slash(chat, "/counterfactual 测试")
+        assert any(e.type == "slash_error" for e in events)
+        assert any(e.type == "slash_next_step_hint" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_cf_alias_blocked_at_bootstrap_pending(self):
+        """/cf alias 跟 /counterfactual 一样走 gate (handler ref 同一个)."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000008", stage="bootstrap_pending")
+        chat = ChatSession("s_e0000008", llm=object())  # type: ignore[arg-type]
+        events = await dispatch_slash(chat, "/cf 测试")
+        assert any(e.type == "slash_error" for e in events)
+        assert any(e.type == "slash_next_step_hint" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_counterfactual_allowed_at_done(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000009", stage="done")
+        chat = ChatSession("s_e0000009", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "q"
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/counterfactual")
+        types = [e.type for e in events]
+        assert "slash_counterfactual" in types
+        assert not any(
+            "不允许" in (e.content if isinstance(e.content, str) else "")
+            for e in events
+        )
