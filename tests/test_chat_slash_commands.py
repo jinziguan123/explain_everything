@@ -1544,3 +1544,28 @@ class TestPhase12Registry:
         events = asyncio.run(dispatch_slash(chat, "/help"))
         content = events[0].content
         assert "/graph" in content, "/help missing /graph"
+
+
+class TestSlashStageGateRun:
+    """Phase 14: /run stage gate (allowed=[done], success_stage=converged)."""
+
+    @pytest.mark.asyncio
+    async def test_run_blocked_at_bootstrap_pending(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000001", stage="bootstrap_pending")
+        chat = ChatSession("s_e0000001", llm=object())  # type: ignore[arg-type]
+        events = await dispatch_slash(chat, "/run")
+        types = [e.type for e in events]
+        assert "slash_error" in types
+        assert "slash_next_step_hint" in types
+        hint = next(e for e in events if e.type == "slash_next_step_hint")
+        assert "/compress" in hint.content
+
+    @pytest.mark.asyncio
+    async def test_run_blocked_at_converged(self):
+        """已经 converged 重跑 /run 也拒 (需 stage=done 精确)."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000002", stage="converged")
+        chat = ChatSession("s_e0000002", llm=object())  # type: ignore[arg-type]
+        events = await dispatch_slash(chat, "/run")
+        assert any(e.type == "slash_error" for e in events)

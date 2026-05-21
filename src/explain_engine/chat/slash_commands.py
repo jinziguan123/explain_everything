@@ -29,6 +29,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from explain_engine.chat.slash_stage_rules import with_stage_gate
+
 if TYPE_CHECKING:
     from explain_engine.chat.session import ChatEvent, ChatSession
 
@@ -964,6 +966,12 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
     )]
 
 
+@with_stage_gate(
+    allowed=["done"],
+    success_stage="converged",
+    fail_hint_key="need_compress_first",
+    success_hint_key="after_run",
+)
 async def _handle_run(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     """Phase 11 Wave 3: 当前 session reasoning loop (Phase 5/7 runtime).
 

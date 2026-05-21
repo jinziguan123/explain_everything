@@ -60,6 +60,12 @@ def with_stage_gate(
         @wraps(fn)
         async def wrapped(chat, args):
             from explain_engine.chat.session import ChatEvent
+
+            # Ephemeral: 装饰器短路, 把控让给 handler 内部 _ephemeral_reject.
+            # EphemeralChatSession 无 _session 属性 + stage 概念不适用.
+            if getattr(chat, "is_ephemeral", False):
+                return await fn(chat, args)
+
             stage = chat._session.meta.stage
 
             # ① gate check

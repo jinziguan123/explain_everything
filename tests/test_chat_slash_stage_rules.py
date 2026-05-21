@@ -26,6 +26,25 @@ class TestPassThrough:
         assert events[0].content == "done"
 
 
+class TestEphemeralShortCircuit:
+    @pytest.mark.asyncio
+    async def test_ephemeral_chat_bypasses_gate_lets_handler_reject(self):
+        """is_ephemeral=True → 装饰器跳 stage check, 让 handler 自己处 (e.g. _ephemeral_reject)."""
+
+        @with_stage_gate(allowed=["done"], fail_hint_key="need_compress_first")
+        async def handler(chat, args):
+            return [ChatEvent(type="slash_error", content="ephemeral rejected")]
+
+        class _EphChat:
+            is_ephemeral = True  # 无 _session 属性, 模拟 EphemeralChatSession
+
+        events = await handler(_EphChat(), [])
+        # 装饰器没 short-circuit gate fail → handler 自己返 error
+        assert events[0].content == "ephemeral rejected"
+        # 也不该 append fail hint (走的不是 gate fail 路径)
+        assert all(e.type != "slash_next_step_hint" for e in events)
+
+
 class TestGateCheck:
     @pytest.mark.asyncio
     async def test_blocks_disallowed_stage(self):
