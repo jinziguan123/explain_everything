@@ -616,7 +616,8 @@ class TestSlashCompress:
         events = await dispatch_slash(eph, "/compress")
         assert events[0].type == "slash_error"
         assert "compress" in events[0].content
-        assert "ephemeral" in events[0].content.lower() or "已" in events[0].content or "尚未" in events[0].content
+        # Phase 15: 新文案统一引 err_ephemeral_reject — 含"建 session"/"resume"
+        assert "建 session" in events[0].content or "/resume" in events[0].content
 
     @pytest.mark.asyncio
     async def test_no_llm_rejects(self):
@@ -669,7 +670,9 @@ class TestSlashCompress:
         events = await dispatch_slash(chat, "/compress")
         assert events[0].type == "slash_compress"
         assert "完成" in events[0].content
-        assert "2 var" in events[0].content
+        # Phase 15: msg_compress_done — "归纳完成: 加了 N 个模式, 其中 2 个写入概念库"
+        assert "2" in events[0].content
+        assert "概念库" in events[0].content
         assert called == {"propose": 1, "review": 1, "flush": 1}
 
     @pytest.mark.asyncio
@@ -805,15 +808,16 @@ class TestSlashCompress:
         compress_events = [e for e in events if e.type == "slash_compress"]
         assert len(compress_events) == 1
         content = compress_events[0].content
-        # Should contain dedup stats line with near-dup/new counts
-        assert "near-dup" in content.lower()
-        assert "new" in content.lower()
-        assert "dedup" in content.lower()
-        # Should show 'X candidates → Y near-dup / Z new' format
-        # (EXPLAIN_EMBEDDING_DISABLED=1 default → all candidates marked new)
-        assert "candidates" in content
-        assert "0 near-dup" in content
-        assert "embedding pre-check" in content
+        # Phase 15: msg_compress_done(..., dedup_reused, dedup_new) 输 dedup 行:
+        # "其中 0 个与已有模式相似 (跨 session 复用), 2 个全新."
+        assert "相似" in content or "复用" in content
+        assert "全新" in content
+        # 显示 reused / new 数字 (EXPLAIN_EMBEDDING_DISABLED=1 default → 全 new)
+        assert "0 个" in content  # reused=0
+        # new 数字 == 当前 candidates 总数 (包含 fake_propose 加的 2 个 + 既有)
+        # _make_done_session graph 已含 1 c_001, fake_propose 加 c_100/c_101 →
+        # insight_candidates 总 3
+        assert "3 个全新" in content
 
 
 class TestSlashRun:
@@ -853,8 +857,12 @@ class TestSlashRun:
 
         events = await dispatch_slash(chat, "/run")
         assert events[0].type == "slash_run"
-        assert "no_gain_for_3_ticks" in events[0].content
-        assert "tick=5" in events[0].content
+        # Phase 15: msg_run_done 把 stop_reason 翻成中文; tick 表 "在第 N 步停止"
+        assert "推理完成" in events[0].content
+        assert "5" in events[0].content
+        # no_gain_for_3_ticks → "已停 3 步无新发现 (已收敛)"
+        assert "无新发现" in events[0].content or "收敛" in events[0].content
+        assert "no_gain_for_3_ticks" not in events[0].content
 
 
 class TestSlashCheck:
@@ -1210,8 +1218,11 @@ class TestSlashRescore:
         events = await dispatch_slash(chat, "/rescore")
         assert events[0].type == "slash_rescore"
         c = events[0].content
-        assert "2 edges" in c
+        # Phase 15: msg_rescore_done — "重评完成: 2 条因果关系, 平均可信度 0.70."
+        assert "2" in c
         assert "0.70" in c  # avg of 0.8, 0.6
+        assert "因果关系" in c
+        assert "可信度" in c
 
     @pytest.mark.asyncio
     async def test_empty_result_message(self, monkeypatch):
@@ -1229,7 +1240,9 @@ class TestSlashRescore:
 
         events = await dispatch_slash(chat, "/rescore")
         assert events[0].type == "slash_rescore"
-        assert "无 manifests_as" in events[0].content
+        # Phase 15: "重评完成: 无可 rescore 的因果关系 (体现为 / 导致 类型)."
+        assert "无可" in events[0].content or "重评完成" in events[0].content
+        assert "因果关系" in events[0].content
 
 
 class TestWave3Registry:

@@ -29,7 +29,23 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from explain_engine.chat.chat_copy import COMMAND_DESCRIPTIONS, HELP_GROUPS_ZH
+from explain_engine.chat.chat_copy import (
+    COMMAND_DESCRIPTIONS,
+    HELP_GROUPS_ZH,
+    INFO_INSIGHT_PENDING_RESUME,
+    INFO_MID_STAGE_SAVED,
+    STATUS_COMPRESS_PROPOSE,
+    STATUS_COMPRESS_SCORE,
+    STATUS_LEXICON_FLUSH,
+    STATUS_RESCORE,
+    STATUS_RUN,
+    err_ephemeral_reject,
+    err_failed,
+    err_no_llm,
+    msg_compress_done,
+    msg_rescore_done,
+    msg_run_done,
+)
 from explain_engine.chat.slash_stage_rules import with_stage_gate
 
 if TYPE_CHECKING:
@@ -860,16 +876,10 @@ def _ephemeral_reject(name: str) -> list[ChatEvent]:
     """Phase 11 Wave 3: ephemeral 时统一 reject 模板.
 
     单 session slash 都要求真 session — graph 是空的, 跑没意义.
-    友好提示用户先 promote_to_persistent.
+    Phase 15: 引 err_ephemeral_reject (chat_copy single source).
     """
     from explain_engine.chat.session import ChatEvent
-    return [ChatEvent(
-        type="slash_error",
-        content=(
-            f"/{name} 需要真 session, 当前 ephemeral (尚未 /new). "
-            f"输自然语言新建 session 或 /resume 选历史 session."
-        ),
-    )]
+    return [ChatEvent(type="slash_error", content=err_ephemeral_reject(name))]
 
 
 @with_stage_gate(
@@ -899,10 +909,7 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
         return _ephemeral_reject("compress")
 
     if chat.llm is None:
-        return [ChatEvent(
-            type="slash_error",
-            content="/compress 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
-        )]
+        return [ChatEvent(type="slash_error", content=err_no_llm("compress"))]
 
     from rich.console import Console
 
@@ -916,9 +923,7 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
     # Phase 14 Task 15: ip 入口短路 — 上次 propose+score 完 (mid-stage Task 14),
     # 但 review 被取消 → 重入跳过 LLM 直接进 review.
     if chat._session.meta.stage == "insight_pending":
-        _console.print(
-            "[dim](检测到 stage=insight_pending, 跳过 LLM 直接进入审查)[/dim]"
-        )
+        _console.print(INFO_INSIGHT_PENDING_RESUME)
         # ip 入口: 直接 fallback dedup_stats — 上次 propose 已落 candidates,
         # 但 embedding stats 缺. Display "0 near-dup / N new" 占位.
         dedup_stats = {"reused": 0, "new": len(chat.state.insight_candidates)}
@@ -927,13 +932,10 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
         try:
             from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
             top_k = get_lexicon_top_k_for_compress(chat.storage, k=20)
-            with _console.status("[bold green]调 LLM 提候选 (compress)...[/bold green]"):
+            with _console.status(STATUS_COMPRESS_PROPOSE):
                 await propose_candidates(chat.state, chat.llm, existing_lexicon=top_k)
         except Exception as exc:
-            return [ChatEvent(
-                type="slash_error",
-                content=f"/compress propose_candidates 失败: {type(exc).__name__}: {exc}",
-            )]
+            return [ChatEvent(type="slash_error", content=err_failed("compress", exc))]
 
         # Phase 13 Wave 3 Task 4: compute dedup stats for UI display (observational,
         # doesn't mutate state). Display threshold 0.75 (lower than 0.85 merge
@@ -959,24 +961,17 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
         # (跟 cli `_run_compress` 一致). Phase 11 Wave 3 漏 score_all 导致 HITL
         # 看 gain 全 0.00 — review_insights_async 实际从 state.last_gains 读.
         try:
-            with _console.status(
-                "[bold green]调 LLM 评每 L1 候选 (score_all)...[/bold green]"
-            ):
+            with _console.status(STATUS_COMPRESS_SCORE):
                 await score_all(chat.state, chat.llm)
         except Exception as exc:
-            return [ChatEvent(
-                type="slash_error",
-                content=f"/compress score_all 失败: {type(exc).__name__}: {exc}",
-            )]
+            return [ChatEvent(type="slash_error", content=err_failed("compress", exc))]
 
         # Phase 14 Task 14: mid-stage persist (中断恢复). propose+score 完后,
         # review 之前, 推 stage → insight_pending + 立刻落盘. 即便 review 取消
         # (KeyboardInterrupt) 也能下次重入跳过 LLM (Task 15 短路).
         chat._session.meta.stage = "insight_pending"
         chat.persist()
-        _console.print(
-            "[dim](中间状态已保存, 即便 review 取消也能下次重入跳过 LLM)[/dim]"
-        )
+        _console.print(INFO_MID_STAGE_SAVED)
 
     # HITL async review (走 chat.input_provider, None 时 accept-all). 不包 spinner
     # — HITL 期间 prompt 显式 wait user, spinner 会撞.
@@ -986,22 +981,19 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
     chat.persist()
     n = 0
     try:
-        with _console.status(
-            "[bold green]写入 lexicon (LLM 生 canonical mechanism)...[/bold green]"
-        ):
+        with _console.status(STATUS_LEXICON_FLUSH):
             n = await flush_to_lexicon(chat._session, chat.storage, llm=chat.llm)
     except Exception:
         n = 0
 
-    total = dedup_stats["reused"] + dedup_stats["new"]
+    n_candidates = len(chat.state.insight_candidates)
     return [ChatEvent(
         type="slash_compress",
-        content=(
-            f"compress 完成. {len(chat.state.insight_candidates)} 候选保留. "
-            f"{n} var 写入 lexicon.\n"
-            f"compress dedup: {total} candidates → {dedup_stats['reused']} near-dup "
-            f"(cos≥0.75) / {dedup_stats['new']} new (embedding pre-check; "
-            f"actual merge happens at flush_to_lexicon with cos≥0.85)"
+        content=msg_compress_done(
+            n_candidates=n_candidates,
+            n_to_lexicon=n,
+            dedup_reused=dedup_stats["reused"],
+            dedup_new=dedup_stats["new"],
         ),
     )]
 
@@ -1030,10 +1022,7 @@ async def _handle_run(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
         return _ephemeral_reject("run")
 
     if chat.llm is None:
-        return [ChatEvent(
-            type="slash_error",
-            content="/run 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
-        )]
+        return [ChatEvent(type="slash_error", content=err_no_llm("run"))]
 
     from rich.console import Console
 
@@ -1041,22 +1030,17 @@ async def _handle_run(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 
     budget = max(chat.state.budget_remaining, 1)
     try:
-        # 2026-05-19 polish: Rich Status spinner — runtime.run 跑 reasoning loop
+        # 2026-05-19 polish: Rich Status spinner — runtime.run 跑推理循环
         # (多次 LLM 调用, 总耗时几十秒到几分钟取决于 budget)
-        with Console().status(
-            "[bold green]调 LLM 跑 reasoning loop (含 expand/reflect/decay)...[/bold green]"
-        ):
+        with Console().status(STATUS_RUN):
             reason = await runtime_run(chat.state, chat.llm, budget=budget)
     except Exception as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/run 失败: {type(exc).__name__}: {exc}",
-        )]
+        return [ChatEvent(type="slash_error", content=err_failed("run", exc))]
 
     chat.persist()
     return [ChatEvent(
         type="slash_run",
-        content=f"reasoning loop 完成: stop_reason={reason}, tick={chat.state.tick}",
+        content=msg_run_done(stop_reason=reason, tick=chat.state.tick),
     )]
 
 
@@ -1295,10 +1279,7 @@ async def _handle_rescore(chat: ChatSession, args: list[str]) -> list[ChatEvent]
         return _ephemeral_reject("rescore")
 
     if chat.llm is None:
-        return [ChatEvent(
-            type="slash_error",
-            content="/rescore 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
-        )]
+        return [ChatEvent(type="slash_error", content=err_no_llm("rescore"))]
 
     from rich.console import Console
 
@@ -1306,27 +1287,22 @@ async def _handle_rescore(chat: ChatSession, args: list[str]) -> list[ChatEvent]
 
     try:
         # 2026-05-19 polish: Rich Status spinner — rescore LLM 多调用 (~25 LLM call)
-        with Console().status(
-            "[bold green]调 LLM 重评 edge confidence (典型 ~25 LLM call)...[/bold green]"
-        ):
+        with Console().status(STATUS_RESCORE):
             new_confs = await rescore_session(chat.state, chat.llm)
     except Exception as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/rescore 失败: {type(exc).__name__}: {exc}",
-        )]
+        return [ChatEvent(type="slash_error", content=err_failed("rescore", exc))]
 
     chat.persist()
     if not new_confs:
         return [ChatEvent(
             type="slash_rescore",
-            content="rescore 完成: 无 manifests_as/causes edges 可 rescore.",
+            content="重评完成: 无可 rescore 的因果关系 (体现为 / 导致 类型).",
         )]
 
     avg = sum(new_confs.values()) / len(new_confs)
     return [ChatEvent(
         type="slash_rescore",
-        content=f"rescore 完成: {len(new_confs)} edges, avg conf={avg:.2f}. 已 persist.",
+        content=msg_rescore_done(n_edges=len(new_confs), avg_conf=avg),
     )]
 
 

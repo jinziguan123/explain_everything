@@ -121,8 +121,20 @@ STOP_REASON_MAP: dict[str, str] = {
 }
 
 
-def msg_compress_done(n_candidates: int, n_to_lexicon: int) -> str:
-    return f"归纳完成: 加了 {n_candidates} 个模式, 其中 {n_to_lexicon} 个写入概念库."
+def msg_compress_done(
+    n_candidates: int,
+    n_to_lexicon: int,
+    dedup_reused: int | None = None,
+    dedup_new: int | None = None,
+) -> str:
+    """归纳完成消息. dedup_* 同时给时附"复用/全新"统计一行."""
+    base = f"归纳完成: 加了 {n_candidates} 个模式, 其中 {n_to_lexicon} 个写入概念库."
+    if dedup_reused is not None and dedup_new is not None:
+        base += (
+            f"\n  · 其中 {dedup_reused} 个与已有模式相似 (跨 session 复用), "
+            f"{dedup_new} 个全新."
+        )
+    return base
 
 
 def msg_run_done(stop_reason: str, tick: int) -> str:
