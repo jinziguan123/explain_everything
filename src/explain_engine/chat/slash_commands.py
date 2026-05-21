@@ -29,6 +29,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from explain_engine.chat.chat_copy import COMMAND_DESCRIPTIONS
 from explain_engine.chat.slash_stage_rules import with_stage_gate
 
 if TYPE_CHECKING:
@@ -1515,27 +1516,27 @@ async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]
 # Registry — 17 default slash commands + 1 alias (/cf → counterfactual).
 # 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作 → engines → cross-session"分组.
 DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
-    SlashCommand("quit", "Exit chat session (saves first).", _handle_quit),
-    SlashCommand("help", "List slash commands and available tools.", _handle_help),
-    SlashCommand("show", "Show graph snapshot + multi-signal.", _handle_show),
-    SlashCommand("graph", "渲染 graph 可视化 (graphviz inline via iTerm/Kitty/chafa).", _handle_graph),
-    SlashCommand("budget", "Show budget + interactive config per-turn / per-session limit.", _handle_budget),
-    SlashCommand("compact", "Force trigger sessionMemory compaction.", _handle_compact),
-    SlashCommand("save", "Explicit flush of all sidecar files.", _handle_save),
-    SlashCommand("new", "重置 chat: 清屏 + 关当前 session + 回 ephemeral REPL.", _handle_new),
-    SlashCommand("resume", "列历史 session, 选号后切.", _handle_resume),
+    SlashCommand("quit",           COMMAND_DESCRIPTIONS["quit"],           _handle_quit),
+    SlashCommand("help",           COMMAND_DESCRIPTIONS["help"],           _handle_help),
+    SlashCommand("show",           COMMAND_DESCRIPTIONS["show"],           _handle_show),
+    SlashCommand("graph",          COMMAND_DESCRIPTIONS["graph"],          _handle_graph),
+    SlashCommand("budget",         COMMAND_DESCRIPTIONS["budget"],         _handle_budget),
+    SlashCommand("compact",        COMMAND_DESCRIPTIONS["compact"],        _handle_compact),
+    SlashCommand("save",           COMMAND_DESCRIPTIONS["save"],           _handle_save),
+    SlashCommand("new",            COMMAND_DESCRIPTIONS["new"],            _handle_new),
+    SlashCommand("resume",         COMMAND_DESCRIPTIONS["resume"],         _handle_resume),
     # Phase 11 Wave 3: 6 single-session engines slash + /cf alias.
-    SlashCommand("compress", "Compress 当前 session (propose_candidates + HITL + lexicon).", _handle_compress),
-    SlashCommand("run", "跑 reasoning loop (expansion + reflection).", _handle_run),
-    SlashCommand("check", "Multi-signal acceptance report (read-only).", _handle_check),
-    SlashCommand("predict", "Forward prediction: 收 intervention text 后跑.", _handle_predict),
-    SlashCommand("counterfactual", "Counterfactual: 收 intervention text 后跑 (副作用 0).", _handle_counterfactual),
-    SlashCommand("cf", "(alias of /counterfactual)", _handle_counterfactual),
-    SlashCommand("rescore", "重评 edge.confidence (manifests_as + causes).", _handle_rescore),
+    SlashCommand("compress",       COMMAND_DESCRIPTIONS["compress"],       _handle_compress),
+    SlashCommand("run",            COMMAND_DESCRIPTIONS["run"],            _handle_run),
+    SlashCommand("check",          COMMAND_DESCRIPTIONS["check"],          _handle_check),
+    SlashCommand("predict",        COMMAND_DESCRIPTIONS["predict"],        _handle_predict),
+    SlashCommand("counterfactual", COMMAND_DESCRIPTIONS["counterfactual"], _handle_counterfactual),
+    SlashCommand("cf",             COMMAND_DESCRIPTIONS["cf"],             _handle_counterfactual),
+    SlashCommand("rescore",        COMMAND_DESCRIPTIONS["rescore"],        _handle_rescore),
     # Phase 11 Wave 4: 3 cross-session slash (不依赖 single session, ephemeral 也 work).
-    SlashCommand("list", "列当前 project 所有 session (cross-session).", _handle_list),
-    SlashCommand("lexicon", "列 cross-session lexicon variables.", _handle_lexicon),
-    SlashCommand("migrate", "一次性迁老 sessions/*.json → storage_v2 layout.", _handle_migrate),
+    SlashCommand("list",           COMMAND_DESCRIPTIONS["list"],           _handle_list),
+    SlashCommand("lexicon",        COMMAND_DESCRIPTIONS["lexicon"],        _handle_lexicon),
+    SlashCommand("migrate",        COMMAND_DESCRIPTIONS["migrate"],        _handle_migrate),
 )
 
 

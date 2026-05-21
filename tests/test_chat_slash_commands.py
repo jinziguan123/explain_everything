@@ -1948,3 +1948,29 @@ class TestHelpGrouping:
         content = events[0].content
         assert "/cf" in content
         assert "alias" in content.lower() or "counterfactual" in content
+
+
+class TestSlashRegistryUsesChineseDescriptions:
+    """Phase 15 Task 10: DEFAULT_COMMANDS desc 全中文 + 无 jargon."""
+
+    def test_all_commands_have_chinese_description(self):
+        import re
+        from explain_engine.chat.slash_commands import DEFAULT_COMMANDS
+        chinese_pattern = re.compile(r'[一-鿿]')
+        for c in DEFAULT_COMMANDS:
+            assert chinese_pattern.search(c.description), (
+                f"/{c.name} 无中文 description: {c.description!r}"
+            )
+
+    def test_no_english_jargon_in_descriptions(self):
+        from explain_engine.chat.slash_commands import DEFAULT_COMMANDS
+        forbidden = [
+            "propose_candidates", "HITL", "reasoning loop",
+            "multi-signal", "manifests_as", "storage_v2",
+            "Multi-signal", "abstraction",
+        ]
+        for c in DEFAULT_COMMANDS:
+            for f in forbidden:
+                assert f not in c.description, (
+                    f"/{c.name} desc 仍含 jargon: '{f}' in '{c.description}'"
+                )
