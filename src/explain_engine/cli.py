@@ -17,7 +17,6 @@ import logging
 # `import readline` 启用 GNU readline (Linux) / libedit (macOS) 让 input()
 # 走 line-editing 模式, 大部分 multi-byte 删除问题立刻好.
 # 注: macOS libedit Unicode 不完美, 如果还有问题, 后续可考虑 prompt_toolkit.
-import readline  # noqa: F401 — imported for side effect (enable line editing)
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -1074,6 +1073,7 @@ async def _run_chat_repl_async(
 
             quit_requested = False
             switch_to_sid: str | None = None
+            reset_to_ephemeral = False
             try:
                 async for event in chat_session.handle_user_input(
                     user_input, llm=llm
@@ -1084,12 +1084,26 @@ async def _run_chat_repl_async(
                     if event.type == "slash_switch_session":
                         switch_to_sid = event.content["sid"]
                         continue
+                    if event.type == "slash_reset_to_ephemeral":
+                        # /new 在 explain chat <sid> 这条 session-bound REPL 里
+                        # 无法直接转 ephemeral (chat_session 类型固定 ChatSession).
+                        # 退出 REPL + 提示用户跑 `explain` 重启进 ephemeral.
+                        reset_to_ephemeral = True
+                        continue
                     _render_event(console, event)
                     if event.type == "slash_quit":
                         quit_requested = True
             except Exception as exc:
                 console.print(f"[red]Error: {type(exc).__name__}: {exc}[/red]")
                 continue
+
+            if reset_to_ephemeral:
+                console.print(
+                    "[yellow]/new: 当前 chat 已保存. "
+                    "在 `explain chat <sid>` 路径中无法直接转 ephemeral; "
+                    "输 `explain` 重启进 ephemeral REPL.[/yellow]"
+                )
+                break
 
             # 单 turn 结束后再切, 避免 iter 中 mutate
             if switch_to_sid and switch_to_sid != chat_session.sid:

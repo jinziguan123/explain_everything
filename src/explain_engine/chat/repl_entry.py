@@ -68,11 +68,16 @@ async def enter_repl_async() -> None:
             input_provider=_input_provider,
         )
 
-        console.print(
-            "[bold green]Explain REPL[/bold green] — ephemeral session. "
-            "输入问题创建持久 session, /help 看 slash, /quit 退出, "
-            "ctrl+o 看 log buffer."
-        )
+        def _print_banner() -> None:
+            """启动 banner — /new (slash_reset_to_ephemeral) 也用同一字符串
+            保证视觉一致性. 改这里同时影响启动 + reset 两处."""
+            console.print(
+                "[bold green]Explain REPL[/bold green] — ephemeral session. "
+                "输入问题创建持久 session, /help 看 slash, /quit 退出, "
+                "ctrl+o 看 log buffer."
+            )
+
+        _print_banner()
 
         while True:
             try:
@@ -111,6 +116,24 @@ async def enter_repl_async() -> None:
                             console.print(
                                 f"[red]切换失败: {type(exc).__name__}: {exc}[/red]"
                             )
+                        continue
+                    if ev.type == "slash_reset_to_ephemeral":
+                        # /new: 清屏 + aclose 当前 + 回 ephemeral. 视觉+逻辑都
+                        # 跟 uv run explain 刚跑完一致.
+                        if isinstance(chat, ChatSession):
+                            try:
+                                await chat.aclose()
+                            except Exception as exc:
+                                console.print(
+                                    f"[yellow]aclose 当前 session 失败 "
+                                    f"(continuing reset): {exc}[/yellow]"
+                                )
+                        console.clear()
+                        chat = EphemeralChatSession(
+                            storage=storage,
+                            input_provider=_input_provider,
+                        )
+                        _print_banner()
                         continue
                     _render_event(console, ev)
                     if ev.type == "slash_quit":

@@ -82,10 +82,12 @@ class TestSlashCompleter:
         assert "quit" not in cmd_names
 
     def test_second_token_no_completions(self):
-        """text == '/new 为什么 X' (有空格 + args) → 不联想 cmd.
+        """text == '/foo bar baz' (slash + space + 任意 args) → 不联想 cmd.
 
-        防 user 在 /new 之后输 question 被错联想 (commands name 之间
-        子串匹配会很 noisy).
+        slash 命令名只在第一 token 联想. 第二 token 起 (空格之后) 用户
+        输的是命令参数, 不该被错匹到 command name (子串匹配会很 noisy).
+        历史上为 `/new <question>` 设计, 2026-05-20 /new 不再接 args 后
+        仍保留, 因为 /resume 等其他命令可能扩 args.
         """
         c = self._make_completer()
         completions = list(c.get_completions(self._make_doc("/new 为什么 X"), None))

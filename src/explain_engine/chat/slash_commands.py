@@ -29,13 +29,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-# module-top import: monkeypatch path `slash_commands.{bootstrap_phenomena,review_phenomena}`
-# 需要这两 name 真存在于 slash_commands module namespace (函数内 from-import 不行,
-# 因为 monkeypatch 改的是 *module* attribute, 而函数 from-import 每次都从 source
-# module 重新查; 提到顶后 source = slash_commands 本身, monkeypatch 才生效).
-from explain_engine.engines.bootstrap import bootstrap_phenomena
-from explain_engine.hitl.cli_interactive import review_phenomena
-
 if TYPE_CHECKING:
     from explain_engine.chat.session import ChatEvent, ChatSession
 
@@ -476,84 +469,29 @@ async def _handle_save(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 
 
 async def _handle_new(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
-    """/new <question> — 建新 session (bootstrap + HITL) + 切到它.
+    """/new — 重置 chat 到 ephemeral REPL 启动态.
 
-    完整复用 cli `new` 命令路径 (bootstrap_phenomena → review_phenomena →
-    SessionStore.save). 之后 yield 两个 event:
-    - slash_new: info text 给用户 (str content)
-    - slash_switch_session: signal REPL 切到新 sid (REPL 单 turn iter 结束后做)
-      content 契约: {"sid": str} — 见 ChatEvent docstring.
+    2026-05-20 重构 (跟 Phase 13 hotfix 同期): /new 不再 bootstrap 新 session.
+    之前 contract `/new <question>` 跟 ephemeral REPL 启动后自然语言输入 promote
+    走的是相同 bootstrap+HITL 路径, 等于双入口. 简化为: /new 重置回 ephemeral,
+    用户接着输自然语言 → 走 promote 建新 session.
 
-    失败时只 yield slash_error, 不 yield switch → REPL 留原 session.
+    Event yield: 单 ChatEvent(type='slash_reset_to_ephemeral'). Args ignored
+    (向前兼容老用户输 `/new <question>` 不抛错, 仅静默忽略). Content 留 None —
+    REPL consumer 看到 type 即触发 clear+ephemeral, 不需 payload.
+
+    Consumer:
+    - explain_engine.chat.repl_entry.enter_repl_async (主 REPL): aclose 当前
+      持久 chat (if any) → console.clear() → chat = EphemeralChatSession →
+      reprint banner. 视觉+逻辑等同 uv run explain 刚跑完.
+    - explain_engine.cli._run_chat_repl_async (explain chat <sid> 路径):
+      session-bound 模式, 不支持 ephemeral. /new 在此模式仅退出 chat REPL +
+      提示用户输 `explain` 重启 (见 cli.py).
     """
-    import asyncio
-
     from explain_engine.chat.session import ChatEvent
-    from explain_engine.config import Settings
-    from explain_engine.llm.errors import LLMError, SchemaValidationError
-    from explain_engine.persistence.session import (
-        Session,
-        SessionMeta,
-        SessionStore,
-    )
-    from explain_engine.schema.state import CognitiveState
 
-    question = " ".join(args).strip()
-    if not question:
-        return [ChatEvent(
-            type="slash_error",
-            content="Usage: /new <你的问题>  (例: /new 为什么 X 现象)",
-        )]
-
-    if chat.llm is None:
-        return [ChatEvent(
-            type="slash_error",
-            content="/new 需要 LLM client; 当前 chat session 启动时未绑定 llm。",
-        )]
-
-    # Bootstrap (调 LLM). monkeypatch 友好: 函数体里 *使用* 模块顶 import 的
-    # bootstrap_phenomena, 不在函数内 re-import.
-    try:
-        phenomena = await bootstrap_phenomena(question, chat.llm)
-    except (SchemaValidationError, LLMError) as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/new bootstrap 失败: {type(exc).__name__}: {exc}",
-        )]
-
-    # HITL review (sync stdin via Rich Prompt — 包 to_thread 不 block event loop).
-    # console=None: review_phenomena 会自建一个临时 Console, 避免 cli.py 反向依赖.
-    final_phenomena = await asyncio.to_thread(
-        review_phenomena, phenomena, None
-    )
-
-    # 建 session + 存
-    settings = Settings()
-    state = CognitiveState.bootstrap(question, budget=settings.default_budget)
-    for p in final_phenomena:
-        state.graph.add_node(p)
-    meta = SessionMeta.new(question=question)
-    sess = Session(meta=meta, state=state)
-
-    store = SessionStore()
-    try:
-        store.save(sess)
-    except OSError as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/new 存盘失败: {exc}",
-        )]
-
-    return [
-        ChatEvent(
-            type="slash_new",
-            content=f"Session {meta.session_id} 已创建 ({len(final_phenomena)} 现象).",
-        ),
-        ChatEvent(
-            type="slash_switch_session",
-            content={"sid": meta.session_id},
-        ),
-    ]
+    del chat, args  # 静默忽略; 历史 `/new <question>` 不抛错.
+    return [ChatEvent(type="slash_reset_to_ephemeral", content=None)]
 
 
 async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
@@ -1493,7 +1431,7 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("budget", "Show budget + interactive config per-turn / per-session limit.", _handle_budget),
     SlashCommand("compact", "Force trigger sessionMemory compaction.", _handle_compact),
     SlashCommand("save", "Explicit flush of all sidecar files.", _handle_save),
-    SlashCommand("new", "新建 session (bootstrap + HITL) 后自动切.", _handle_new),
+    SlashCommand("new", "重置 chat: 清屏 + 关当前 session + 回 ephemeral REPL.", _handle_new),
     SlashCommand("resume", "列历史 session, 选号后切.", _handle_resume),
     # Phase 11 Wave 3: 6 single-session engines slash + /cf alias.
     SlashCommand("compress", "Compress 当前 session (propose_candidates + HITL + lexicon).", _handle_compress),

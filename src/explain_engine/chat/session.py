@@ -92,14 +92,19 @@ class ChatEvent:
 
     `content` payload contract per event type:
     - assistant_text / slash_help / slash_show / slash_save / slash_compact /
-      slash_new / slash_resume: str (user-visible info)
+      slash_resume: str (user-visible info)
     - slash_quit: str (farewell text)
     - slash_error / slash_unknown: str (error text)
     - tool_use: dict (Wave C.2 ToolUseEvent 子类替代)
     - tool_result: dict (Wave C.2 ToolResultEvent 子类替代)
     - slash_switch_session: dict {"sid": str} — REPL 据此 in-process 切到新 sid.
-      Producer: _handle_new (Wave 3), _handle_resume (Wave 4).
-      Consumer: cli._run_chat_repl_async (Wave 2).
+      Producer: _handle_resume (Wave 4).
+      Consumer: cli._run_chat_repl_async (Wave 2) / repl_entry.enter_repl_async.
+    - slash_reset_to_ephemeral: None — REPL 据此清屏 + aclose 当前 chat +
+      回 EphemeralChatSession 启动态 + reprint banner. 不带 payload.
+      Producer: _handle_new (2026-05-20 重构后).
+      Consumer: repl_entry.enter_repl_async (主路径) /
+                cli._run_chat_repl_async (子命令路径 — 仅 exit, 提示重启).
     """
 
     type: str
