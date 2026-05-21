@@ -152,3 +152,109 @@ class TestAnthropicProtocolRetry:
         )
         assert r.parsed == {"answer": "yes", "confidence": 0.5}
         assert mock_anthropic.messages.stream.call_count == 1
+
+
+class TestFreeTextJSONFallback:
+    """Phase 13 hotfix #5 (2026-05-20): LLM 拒 tool_use 直接返 JSON 在 text
+    block 时, 接受 free text JSON 当 tool_use 等价. Windows + deepseek-v4-pro
+    实际撞过 — 3 次 retry 都返 free text JSON (不 retry 解决, prompt 加强不
+    管用). 改成 free text valid JSON dict → 直接当 parsed, 不 retry."""
+
+    async def test_pure_json_text_accepted_as_parsed(self, mock_anthropic):
+        """LLM 第一次返 text='{"answer":"yes","confidence":0.9}' (无 tool_use)
+        → 不再视为 malformed, parsed=dict, 单次返回 (无 retry)."""
+        import json as _json
+
+        payload = {"answer": "yes", "confidence": 0.9}
+        mock_anthropic.messages.stream = MagicMock(
+            return_value=_stream_manager(_free_text_resp(_json.dumps(payload))),
+        )
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="deepseek-v4-pro"
+        )
+        r = await client.chat(
+            [Message(role="user", content="hi")],
+            schema=_DemoSchema,
+        )
+        assert r.parsed == payload
+        # 仅 1 次 LLM 调用 — fallback 直接 accept, 不 retry.
+        assert mock_anthropic.messages.stream.call_count == 1
+
+    async def test_markdown_fence_stripped(self, mock_anthropic):
+        """LLM 包 ```json ... ``` markdown fence → strip 后 parse 成功."""
+        wrapped = '```json\n{"answer":"x","confidence":0.5}\n```'
+        mock_anthropic.messages.stream = MagicMock(
+            return_value=_stream_manager(_free_text_resp(wrapped)),
+        )
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="deepseek-v4-pro"
+        )
+        r = await client.chat(
+            [Message(role="user", content="hi")],
+            schema=_DemoSchema,
+        )
+        assert r.parsed == {"answer": "x", "confidence": 0.5}
+        assert mock_anthropic.messages.stream.call_count == 1
+
+    async def test_bare_fence_without_lang_stripped(self, mock_anthropic):
+        """LLM 包 ``` ... ``` (无 lang tag) → 也 strip."""
+        wrapped = '```\n{"answer":"y","confidence":0.7}\n```'
+        mock_anthropic.messages.stream = MagicMock(
+            return_value=_stream_manager(_free_text_resp(wrapped)),
+        )
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="deepseek-v4-pro"
+        )
+        r = await client.chat(
+            [Message(role="user", content="hi")],
+            schema=_DemoSchema,
+        )
+        assert r.parsed == {"answer": "y", "confidence": 0.7}
+
+    async def test_non_json_text_still_retries(self, mock_anthropic):
+        """LLM 返非 JSON text (e.g. 'I cannot answer') → fallback None, 走原
+        retry 路径. 3 次都 fail → SchemaValidationError."""
+        mock_anthropic.messages.stream = MagicMock(
+            side_effect=lambda **_kw: _stream_manager(
+                _free_text_resp("Sorry, cannot produce structured output.")
+            ),
+        )
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="deepseek-v4-pro"
+        )
+        with pytest.raises(SchemaValidationError):
+            await client.chat(
+                [Message(role="user", content="hi")],
+                schema=_DemoSchema,
+            )
+        # retry 完整 3 次 (fallback 都没 catch)
+        assert mock_anthropic.messages.stream.call_count == 3
+
+    async def test_json_array_not_dict_still_retries(self, mock_anthropic):
+        """LLM 返 JSON 但是 array 非 dict (e.g. '[1,2,3]') → fallback 拒
+        (我们只接 dict), 走 retry."""
+        mock_anthropic.messages.stream = MagicMock(
+            side_effect=lambda **_kw: _stream_manager(_free_text_resp("[1,2,3]")),
+        )
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="deepseek-v4-pro"
+        )
+        with pytest.raises(SchemaValidationError):
+            await client.chat(
+                [Message(role="user", content="hi")],
+                schema=_DemoSchema,
+            )
+        assert mock_anthropic.messages.stream.call_count == 3
+
+    async def test_fallback_only_when_schema_set(self, mock_anthropic):
+        """schema=None 时不该 attempt fallback parse (那个语义路径不需要 dict)."""
+        mock_anthropic.messages.stream = MagicMock(
+            return_value=_stream_manager(_free_text_resp('{"x":1}')),
+        )
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="deepseek-v4-pro"
+        )
+        r = await client.chat([Message(role="user", content="hi")])
+        # schema=None, parsed 应永 None (不 fallback, 因为没期望 structured output)
+        assert r.parsed is None
+        assert r.text == '{"x":1}'

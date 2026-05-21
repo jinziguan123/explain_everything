@@ -15,6 +15,7 @@ stream API 没有这个 SDK-side cap, 解锁 model 真实输出上限.
 下游解析逻辑不变 — get_final_message() 返回的 Message 对象跟 create() 同形.
 """
 
+import json
 import logging
 from typing import Any
 
@@ -41,12 +42,50 @@ logger = logging.getLogger(__name__)
 #    deepseek 撞到, 之前 yaml prompt 给了 "return empty object" escape hatch 制造)
 # 仍由 caller (engines/_llm_retry) outer 处理 schema-shape mismatch
 # (字段类型错等). 两层 layered defense.
+#
+# Phase 13 hotfix #5 (2026-05-20): 加 free-text JSON fallback (见
+# _try_parse_free_text_json_dict). LLM 拒 tool_use 直接返 JSON 在 text block
+# 时, 接受为 parsed 等价输出. 不再触发上面 retry 链路 (因为 deepseek-v4-pro
+# 实测 reminder 不管用, 它就是想用 text 写 JSON).
 MAX_RETRIES_ON_MALFORMED = 2
 _REMINDER_MSG = (
     "Previous response was not valid JSON matching the requested schema. "
     "Please respond with ONLY valid JSON, no markdown code fences, "
     "no explanation, no preamble."
 )
+
+
+def _try_parse_free_text_json_dict(text: str) -> dict[str, Any] | None:
+    """Phase 13 hotfix #5: free-text JSON fallback.
+
+    部分 model (e.g. deepseek-v4-pro via anthropic-compatible endpoint) 在
+    forced tool_choice 被 vendor reject 后 fallback auto, 选择直接把 JSON
+    写在 text block 而非 tool_use block. reminder retry 无效 — 它就是不用
+    tool_use. 本 helper 把 text 当 free-text JSON parse:
+    - strip 周围空白 / 常见 markdown fence (```json / ``` / 任意 lang)
+    - json.loads → 必须 dict (array / scalar JSON 也不行, 我们语义需要 dict)
+    - 失败 (parse error / 非 dict) → 返 None, caller 走原 retry 路径
+
+    schema 校验留给 chat() 外层 retry check (`parsed is not None and parsed`
+    truthy 即接受, caller 下游 pydantic 做严格 shape 验证). 跟 tool_use
+    block.input 的处理一致, 保持两条路径语义对称.
+    """
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        # 跳第一行 (```json / ```yaml / 裸 ```)
+        first_nl = cleaned.find("\n")
+        if first_nl > 0:
+            cleaned = cleaned[first_nl + 1:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
 
 
 class AnthropicProtocolClient:
@@ -184,6 +223,20 @@ class AnthropicProtocolClient:
                 parsed = dict(block.input)
             elif block.type == "text":
                 text += block.text
+
+        # Phase 13 hotfix #5: free-text JSON fallback. 仅当 schema 期望 structured
+        # output (schema 非 None) 且 LLM 没用 tool_use (parsed=None) 但 text 非空时
+        # 试图把 text 当 free-text JSON parse. 成功 → 当 parsed 等价输出, 避免老
+        # retry 链路在 deepseek-v4-pro 等不听话 model 上空转 3 次后 fail.
+        if parsed is None and schema is not None and text:
+            fallback = _try_parse_free_text_json_dict(text)
+            if fallback is not None:
+                parsed = fallback
+                logger.debug(
+                    "Free-text JSON fallback accepted (%s): LLM returned "
+                    "valid JSON in text block instead of tool_use.",
+                    model or self._default_model,
+                )
 
         return Response(
             text=text,
