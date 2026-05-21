@@ -37,13 +37,19 @@ def with_stage_gate(
 
             # ① gate check
             if allowed is not None and stage not in allowed:
-                return [ChatEvent(
+                events = [ChatEvent(
                     type="slash_error",
                     content=(
                         f"/{_cmd_name(fn)} 在当前 stage={stage!r} 不允许 "
                         f"(需 stage ∈ {allowed})."
                     ),
                 )]
+                if fail_hint_key and fail_hint_key in HINTS_BY_KEY:
+                    events.append(ChatEvent(
+                        type="slash_next_step_hint",
+                        content=HINTS_BY_KEY[fail_hint_key],
+                    ))
+                return events
 
             return await fn(chat, args)
         return wrapped

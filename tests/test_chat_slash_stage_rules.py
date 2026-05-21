@@ -68,6 +68,48 @@ class TestGateCheck:
             assert events[0].type == "slash_ok"
 
 
+class TestFailHint:
+    @pytest.mark.asyncio
+    async def test_fail_hint_appended_when_key_in_table(self):
+        """gate 失败 + fail_hint_key 在 HINTS_BY_KEY → 加 hint event."""
+        from explain_engine.chat.slash_stage_rules import HINTS_BY_KEY
+
+        HINTS_BY_KEY["__test_fail__"] = "test fail message"
+        try:
+            @with_stage_gate(allowed=["done"], fail_hint_key="__test_fail__")
+            async def handler(chat, args):
+                return [ChatEvent(type="slash_ok", content="x")]
+
+            events = await handler(_FakeChat(stage="bootstrap_pending"), [])
+            types = [e.type for e in events]
+            assert "slash_error" in types
+            assert "slash_next_step_hint" in types
+            hint = next(e for e in events if e.type == "slash_next_step_hint")
+            assert hint.content == "test fail message"
+        finally:
+            HINTS_BY_KEY.pop("__test_fail__", None)
+
+    @pytest.mark.asyncio
+    async def test_no_fail_hint_when_key_none(self):
+        @with_stage_gate(allowed=["done"], fail_hint_key=None)
+        async def handler(chat, args):
+            return [ChatEvent(type="slash_ok", content="x")]
+
+        events = await handler(_FakeChat(stage="bootstrap_pending"), [])
+        assert all(e.type != "slash_next_step_hint" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_no_fail_hint_when_key_missing_from_table(self):
+        """fail_hint_key 指向不存在的 key → 静默跳 (不抛)."""
+
+        @with_stage_gate(allowed=["done"], fail_hint_key="nonexistent_key")
+        async def handler(chat, args):
+            return [ChatEvent(type="slash_ok", content="x")]
+
+        events = await handler(_FakeChat(stage="bootstrap_pending"), [])
+        assert all(e.type != "slash_next_step_hint" for e in events)
+
+
 class _FakeChat:
     """Minimal duck-typed chat for decorator unit tests."""
 
