@@ -944,6 +944,15 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
             content=f"/compress score_all 失败: {type(exc).__name__}: {exc}",
         )]
 
+    # Phase 14 Task 14: mid-stage persist (中断恢复). propose+score 完后,
+    # review 之前, 推 stage → insight_pending + 立刻落盘. 即便 review 取消
+    # (KeyboardInterrupt) 也能下次重入跳过 LLM (Task 15 短路).
+    chat._session.meta.stage = "insight_pending"
+    chat.persist()
+    _console.print(
+        "[dim](中间状态已保存, 即便 review 取消也能下次重入跳过 LLM)[/dim]"
+    )
+
     # HITL async review (走 chat.input_provider, None 时 accept-all). 不包 spinner
     # — HITL 期间 prompt 显式 wait user, spinner 会撞.
     await review_insights_async(chat.state, chat.input_provider)

@@ -1773,3 +1773,45 @@ class TestSlashStageGateCompress:
         # decorator 已推 stage 到 done + persist
         meta = SessionStore().load("s_e000000e").meta
         assert meta.stage == "done"
+
+
+class TestCompressMidStageResilience:
+    """Phase 14: /compress 中断恢复 — propose+score 完后 set stage=ip + persist."""
+
+    @pytest.mark.asyncio
+    async def test_mid_stage_set_after_score(self, monkeypatch):
+        """propose+score 完 → review 之前 stage 应已是 insight_pending 落盘.
+
+        模拟: user 在 HITL review 时取消 (KeyboardInterrupt) — 重入 ip 短路 LLM
+        (Task 15 覆盖).
+        """
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.persistence.session import SessionStore
+        _make_done_session("s_e000000f", stage="bootstrap_pending")
+        chat = ChatSession("s_e000000f", llm=object())  # type: ignore[arg-type]
+
+        async def fake_propose(state, llm, min_count=3, max_count=5, **kwargs):
+            state.insight_candidates = ["c_001"]
+
+        async def fake_score(state, llm):
+            pass
+
+        async def fake_review_cancel(state, input_provider, console=None):
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr(
+            "explain_engine.engines.compression.propose_candidates", fake_propose,
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.evaluation.score_all", fake_score,
+        )
+        monkeypatch.setattr(
+            "explain_engine.hitl.cli_interactive.review_insights_async",
+            fake_review_cancel,
+        )
+
+        with pytest.raises(KeyboardInterrupt):
+            await dispatch_slash(chat, "/compress")
+
+        meta = SessionStore().load("s_e000000f").meta
+        assert meta.stage == "insight_pending"
