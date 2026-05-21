@@ -188,7 +188,8 @@ async def query_loop(
         #                         如 "end_turn", "tool_use", "max_tokens")
         #
         # F.2 adapter (in llm/client.py 或新 chat_llm.py) 应:
-        #   1. Call anthropic SDK messages.create(system=..., messages=..., tools=...)
+        #   1. Call anthropic SDK messages.stream(system=..., messages=..., tools=...)
+        #      (Phase 13 hotfix #4: stream 替 create 以解锁 max_tokens 真实上限)
         #   2. Concat 所有 TextBlock.text → .text
         #   3. Filter ContentBlock for type=="tool_use" → .tool_uses (dict 化)
         #   4. Forward .stop_reason 原值

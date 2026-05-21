@@ -50,9 +50,15 @@ def make_llm_client() -> LLMClient:
 
     可选 env:
       - LLM_MAX_TOKENS: 整数, 每次 LLM call 的 max_tokens (default 16384).
-        deepseek-v4-pro 支持到 384K, Claude 4.x 默认 cap 8192-16384.
-        中文 dense JSON 输出场景 (bootstrap_phenomena / propose_candidates)
-        建议 ≥16384, 避免 mid-stream truncation 导致 SchemaValidationError.
+        Phase 13 hotfix #4 (2026-05-20): anthropic 协议已切到 messages.stream(),
+        解锁了 SDK 之前的 non-streaming cap (general formula > 21333 reject,
+        部分 model_cap e.g. claude-opus-4 = 8192). 上限现在取决于 model 本身:
+        deepseek-v4-pro 支持到 384K, Claude 4.x 实际 model 上限 64K (Sonnet)
+        / 32K (Opus). 中文 dense JSON 输出场景 (bootstrap_phenomena /
+        propose_candidates) 建议 ≥16384, 避免 mid-JSON truncation 导致
+        SchemaValidationError. 推荐 32768 以上更稳.
+        Note: openai 协议未走 streaming, 受 server-side max_tokens 限制
+        (vendor 而非 SDK).
       - LLM_STRUCTURED_OUTPUT_MODE: 仅 openai 协议. 'json_schema' (默认)
         或 'json_object' (DeepSeek 等不支持 json_schema strict 的 vendor 用).
     """

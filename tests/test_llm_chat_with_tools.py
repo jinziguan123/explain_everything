@@ -10,6 +10,10 @@
 
 Mock 走 module-level (patch AsyncAnthropic / AsyncOpenAI 整个类), 与既有
 test_llm_anthropic_protocol.py / test_llm_openai_protocol.py 一致.
+
+Phase 13 hotfix #4 (2026-05-20): Anthropic 侧现走 messages.stream() 而非
+create(). 测试 mock 配套迁移 — _stream_manager() helper 把 message_resp
+包成 AsyncMessageStreamManager-shaped mock.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -17,6 +21,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from explain_engine.llm.client import ToolsResponse
+
+
+def _stream_manager(message_resp):
+    """Wrap message_resp as anthropic messages.stream() async-context-manager."""
+    stream = AsyncMock()
+    stream.get_final_message = AsyncMock(return_value=message_resp)
+    mgr = MagicMock()
+    mgr.__aenter__ = AsyncMock(return_value=stream)
+    mgr.__aexit__ = AsyncMock(return_value=None)
+    return mgr
 
 
 @pytest.fixture
@@ -46,7 +60,7 @@ class TestAnthropicChatWithTools:
         mock_resp = MagicMock()
         mock_resp.content = [MagicMock(type="text", text="hello")]
         mock_resp.stop_reason = "end_turn"
-        mock_anthropic.messages.create = AsyncMock(return_value=mock_resp)
+        mock_anthropic.messages.stream = MagicMock(return_value=_stream_manager(mock_resp))
 
         client = AnthropicProtocolClient(api_key="k", default_model="claude-test")
         result = await client.chat_with_tools(
@@ -71,7 +85,7 @@ class TestAnthropicChatWithTools:
         mock_resp = MagicMock()
         mock_resp.content = [text_block, tool_block]
         mock_resp.stop_reason = "tool_use"
-        mock_anthropic.messages.create = AsyncMock(return_value=mock_resp)
+        mock_anthropic.messages.stream = MagicMock(return_value=_stream_manager(mock_resp))
 
         client = AnthropicProtocolClient(api_key="k", default_model="claude-test")
         result = await client.chat_with_tools(
@@ -92,7 +106,7 @@ class TestAnthropicChatWithTools:
         mock_resp = MagicMock()
         mock_resp.content = []
         mock_resp.stop_reason = "end_turn"
-        mock_anthropic.messages.create = AsyncMock(return_value=mock_resp)
+        mock_anthropic.messages.stream = MagicMock(return_value=_stream_manager(mock_resp))
 
         client = AnthropicProtocolClient(api_key="k", default_model="claude-test")
         tools = [{"name": "t1", "description": "d", "input_schema": {"type": "object"}}]
@@ -101,7 +115,7 @@ class TestAnthropicChatWithTools:
             messages=[{"role": "user", "content": "hi"}],
             tools=tools,
         )
-        kwargs = mock_anthropic.messages.create.call_args.kwargs
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
         assert kwargs["system"] == "sys-prompt-here"
         assert kwargs["tools"] == tools
         assert kwargs["tool_choice"] == {"type": "auto"}
@@ -114,7 +128,7 @@ class TestAnthropicChatWithTools:
         from explain_engine.llm.errors import LLMError
 
         mock_request = MagicMock()
-        mock_anthropic.messages.create = AsyncMock(
+        mock_anthropic.messages.stream = MagicMock(
             side_effect=APIConnectionError(request=mock_request),
         )
 
@@ -291,8 +305,8 @@ class TestAnthropicChatWithToolsThinkingBlocks:
         mock_resp.content = [thinking_block, text_block]
         mock_resp.stop_reason = "end_turn"
         mocker.patch.object(
-            client._client.messages, "create",
-            new_callable=AsyncMock, return_value=mock_resp,
+            client._client.messages, "stream",
+            return_value=_stream_manager(mock_resp),
         )
 
         result = await client.chat_with_tools(
@@ -320,8 +334,8 @@ class TestAnthropicChatWithToolsThinkingBlocks:
         mock_resp.content = [thinking_block]
         mock_resp.stop_reason = "end_turn"
         mocker.patch.object(
-            client._client.messages, "create",
-            new_callable=AsyncMock, return_value=mock_resp,
+            client._client.messages, "stream",
+            return_value=_stream_manager(mock_resp),
         )
         result = await client.chat_with_tools(
             system="s", messages=[{"role": "user", "content": "x"}], tools=[],
@@ -370,15 +384,15 @@ class TestAnthropicChatToolChoiceFallback:
         call_count = {"n": 0}
         captured_kwargs: list = []
 
-        async def _create(**kwargs):
+        def _stream(**kwargs):
             captured_kwargs.append(kwargs)
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise api_err
-            return success_resp
+            return _stream_manager(success_resp)
 
         mocker.patch.object(
-            client._client.messages, "create", side_effect=_create,
+            client._client.messages, "stream", side_effect=_stream,
         )
 
         result = await client.chat(
@@ -411,8 +425,8 @@ class TestAnthropicChatToolChoiceFallback:
             "Internal server error", request=mock_request, body=None,
         )
         mocker.patch.object(
-            client._client.messages, "create",
-            new_callable=AsyncMock, side_effect=err,
+            client._client.messages, "stream",
+            side_effect=err,
         )
         with pytest.raises(LLMError):
             await client.chat(

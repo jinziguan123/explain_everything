@@ -2,6 +2,17 @@
 
 Phase 5 起取代 ClaudeClient，通过 base_url 解耦协议与供应商。
 Structured output 走 tools API。
+
+Phase 13 hotfix #4 (2026-05-20): 所有 LLM 调用走 messages.stream() 而非
+messages.create(). 原因: anthropic SDK 在 non-streaming 模式下对 max_tokens
+有硬限制 (general formula expected_time = 3600 * max_tokens / 128000 > 600s
+即 max_tokens > 21333 reject; 部分 model_cap e.g. claude-opus-4 = 8192).
+deepseek-v4-pro via anthropic-compatible endpoint 实际能输出 384K, 但被
+SDK 限到 21333. 即使 SDK 不 reject (16384 < 21333), LLM 输出本身仍被
+max_tokens 截断 (mid-JSON 断在 Phase 13 propose_candidates 实测撞过).
+stream API 没有这个 SDK-side cap, 解锁 model 真实输出上限.
+
+下游解析逻辑不变 — get_final_message() 返回的 Message 对象跟 create() 同形.
 """
 
 import logging
@@ -146,7 +157,8 @@ class AnthropicProtocolClient:
             call_kwargs["tool_choice"] = {"type": "tool", "name": tool_name}
 
         try:
-            api_resp = await self._client.messages.create(**call_kwargs)
+            async with self._client.messages.stream(**call_kwargs) as stream:
+                api_resp = await stream.get_final_message()
         except APIError as exc:
             # Vendor-specific: some reasoning models (deepseek-reasoner, o1, etc.)
             # reject forced tool_choice. Retry with "auto" and let LLM decide.
@@ -160,7 +172,8 @@ class AnthropicProtocolClient:
                     model or self._default_model,
                 )
                 call_kwargs["tool_choice"] = {"type": "auto"}
-                api_resp = await self._client.messages.create(**call_kwargs)
+                async with self._client.messages.stream(**call_kwargs) as stream:
+                    api_resp = await stream.get_final_message()
             else:
                 raise
 
@@ -212,7 +225,8 @@ class AnthropicProtocolClient:
                 call_kwargs["tools"] = tools
                 call_kwargs["tool_choice"] = {"type": "auto"}
 
-            api_resp = await self._client.messages.create(**call_kwargs)
+            async with self._client.messages.stream(**call_kwargs) as stream:
+                api_resp = await stream.get_final_message()
 
             text = ""
             tool_uses: list[dict[str, Any]] = []

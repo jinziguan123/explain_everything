@@ -48,7 +48,8 @@ class TestAnthropicProtocolWrap:
             return_value=mock_client,
         )
 
-        mock_client.messages.create = AsyncMock(
+        # Phase 13 hotfix #4: stream() raises sync if vendor rejects; mock as MagicMock.
+        mock_client.messages.stream = MagicMock(
             side_effect=APIError(
                 message="network down",
                 request=_make_request(),
@@ -71,7 +72,7 @@ class TestAnthropicProtocolWrap:
             return_value=mock_client,
         )
 
-        mock_client.messages.create = AsyncMock(
+        mock_client.messages.stream = MagicMock(
             side_effect=APIConnectionError(request=_make_request())
         )
 
@@ -214,7 +215,7 @@ class TestExceptionChainPreserved:
             request=_make_request(),
             body=None,
         )
-        mock_client.messages.create = AsyncMock(side_effect=original)
+        mock_client.messages.stream = MagicMock(side_effect=original)
 
         client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-test")
         try:

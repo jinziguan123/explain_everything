@@ -2,6 +2,10 @@
 
 Phase 5: 旧 ClaudeClient 改名 + 加 base_url 参数 (跨 vendor: Anthropic 官方 /
 DeepSeek anthropic / Bedrock 等)。
+Phase 13 hotfix #4 (2026-05-20): Anthropic SDK 在 non-streaming 模式下对
+max_tokens 有硬限制 (general formula > 21333 reject, 部分 model_cap 在
+8192). 改用 messages.stream() async-context-manager + get_final_message()
+解锁真实 model 上限. 下游 Message 对象同形, 解析逻辑不变.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -47,11 +51,38 @@ def _mock_tool_use_response(tool_input: dict, model: str = "claude-opus-4-7"):
     return resp
 
 
+def _stream_manager(message_resp):
+    """Helper: build async-context-manager mock for messages.stream(...).
+
+    Phase 13 hotfix #4: anthropic SDK messages.stream() returns
+    AsyncMessageStreamManager. `async with` yields AsyncMessageStream whose
+    get_final_message() resolves to the same Message shape create() returns.
+    Helper packages a pre-built mock message_resp into that shape.
+    """
+    stream = AsyncMock()
+    stream.get_final_message = AsyncMock(return_value=message_resp)
+    mgr = MagicMock()
+    mgr.__aenter__ = AsyncMock(return_value=stream)
+    mgr.__aexit__ = AsyncMock(return_value=None)
+    return mgr
+
+
+def _set_stream_returns(mock_anthropic, *message_responses):
+    """Configure mock_anthropic.messages.stream to return given responses
+    in order. Single resp → all calls return it; multiple → side_effect."""
+    if len(message_responses) == 1:
+        mock_anthropic.messages.stream = MagicMock(
+            return_value=_stream_manager(message_responses[0])
+        )
+    else:
+        mock_anthropic.messages.stream = MagicMock(
+            side_effect=[_stream_manager(r) for r in message_responses]
+        )
+
+
 class TestAnthropicProtocolClient:
     async def test_chat_text_response(self, mock_anthropic):
-        mock_anthropic.messages.create = AsyncMock(
-            return_value=_mock_message_response("hello world")
-        )
+        _set_stream_returns(mock_anthropic, _mock_message_response("hello world"))
         client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-opus-4-7")
         r = await client.chat([Message(role="user", content="hi")])
         assert r.text == "hello world"
@@ -59,8 +90,9 @@ class TestAnthropicProtocolClient:
         assert r.usage == {"input_tokens": 10, "output_tokens": 20}
 
     async def test_chat_with_schema_uses_tools(self, mock_anthropic):
-        mock_anthropic.messages.create = AsyncMock(
-            return_value=_mock_tool_use_response({"answer": "yes", "confidence": 0.9})
+        _set_stream_returns(
+            mock_anthropic,
+            _mock_tool_use_response({"answer": "yes", "confidence": 0.9}),
         )
         client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-opus-4-7")
         r = await client.chat(
@@ -68,15 +100,13 @@ class TestAnthropicProtocolClient:
             schema=_DemoSchema,
         )
         assert r.parsed == {"answer": "yes", "confidence": 0.9}
-        call_kwargs = mock_anthropic.messages.create.call_args.kwargs
+        call_kwargs = mock_anthropic.messages.stream.call_args.kwargs
         assert "tools" in call_kwargs
         assert call_kwargs["tools"][0]["name"] == "_DemoSchema"
         assert call_kwargs["tool_choice"] == {"type": "tool", "name": "_DemoSchema"}
 
     async def test_system_message_extracted(self, mock_anthropic):
-        mock_anthropic.messages.create = AsyncMock(
-            return_value=_mock_message_response("ok")
-        )
+        _set_stream_returns(mock_anthropic, _mock_message_response("ok"))
         client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-opus-4-7")
         await client.chat(
             [
@@ -84,27 +114,40 @@ class TestAnthropicProtocolClient:
                 Message(role="user", content="hi"),
             ]
         )
-        kwargs = mock_anthropic.messages.create.call_args.kwargs
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
         assert kwargs["system"] == "you are helpful"
         assert all(m["role"] != "system" for m in kwargs["messages"])
 
     async def test_default_model_used(self, mock_anthropic):
-        mock_anthropic.messages.create = AsyncMock(
-            return_value=_mock_message_response("ok")
-        )
+        _set_stream_returns(mock_anthropic, _mock_message_response("ok"))
         client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-haiku")
         await client.chat([Message(role="user", content="hi")])
-        kwargs = mock_anthropic.messages.create.call_args.kwargs
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
         assert kwargs["model"] == "claude-haiku"
 
     async def test_model_override(self, mock_anthropic):
-        mock_anthropic.messages.create = AsyncMock(
-            return_value=_mock_message_response("ok")
-        )
+        _set_stream_returns(mock_anthropic, _mock_message_response("ok"))
         client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-opus-4-7")
         await client.chat([Message(role="user", content="hi")], model="claude-haiku")
-        kwargs = mock_anthropic.messages.create.call_args.kwargs
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
         assert kwargs["model"] == "claude-haiku"
+
+    async def test_chat_uses_streaming_api_not_create(self, mock_anthropic):
+        """Phase 13 hotfix #4 (regression guard): chat() MUST go through
+        messages.stream() (async context manager), NOT messages.create().
+
+        Why: non-streaming create() caps max_tokens via SDK-side checks
+        (general formula > 21333 reject, model_cap e.g. claude-opus-4 = 8192).
+        Streaming unlocks the actual model output limit (deepseek-v4-pro
+        claims 384K). 直接 mock messages.create 来断言它没被调用.
+        """
+        _set_stream_returns(mock_anthropic, _mock_message_response("ok"))
+        # 显式 mock create 成 AsyncMock 以便 assert_not_called 可用
+        mock_anthropic.messages.create = AsyncMock()
+        client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-opus-4-7")
+        await client.chat([Message(role="user", content="hi")])
+        mock_anthropic.messages.create.assert_not_called()
+        assert mock_anthropic.messages.stream.called
 
     async def test_construct_with_default_base_url(self, mock_anthropic) -> None:
         """没传 base_url 时用 anthropic SDK 默认 base_url（不报错）。"""
