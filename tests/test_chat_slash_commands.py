@@ -1709,3 +1709,67 @@ class TestSlashStageGateRescore:
         assert "slash_next_step_hint" in types
         hint = next(e for e in events if e.type == "slash_next_step_hint")
         assert "/show" in hint.content
+
+
+class TestSlashStageGateCompress:
+    """Phase 14: /compress stage gate (allowed=[bp,ip], success_stage=done)."""
+
+    @pytest.mark.asyncio
+    async def test_compress_blocked_at_done(self):
+        """重跑 /compress on done session → gate 拒."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e000000c", stage="done")
+        chat = ChatSession("s_e000000c", llm=object())  # type: ignore[arg-type]
+        events = await dispatch_slash(chat, "/compress")
+        assert any(e.type == "slash_error" for e in events)
+        assert any(e.type == "slash_next_step_hint" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_compress_blocked_at_converged(self):
+        """重跑 /compress on converged session → gate 拒."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e000000d", stage="converged")
+        chat = ChatSession("s_e000000d", llm=object())  # type: ignore[arg-type]
+        events = await dispatch_slash(chat, "/compress")
+        assert any(e.type == "slash_error" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_compress_allowed_at_bootstrap_pending_pushes_done(self, monkeypatch):
+        """bp 允许 — handler 跑完, decorator 推 stage→done + persist."""
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.persistence.session import SessionStore
+        _make_done_session("s_e000000e", stage="bootstrap_pending")
+        chat = ChatSession("s_e000000e", llm=object())  # type: ignore[arg-type]
+
+        async def fake_propose(state, llm, min_count=3, max_count=5, **kwargs):
+            state.insight_candidates = ["c_001"]
+
+        async def fake_score(state, llm):
+            pass
+
+        async def fake_review(state, input_provider, console=None):
+            pass
+
+        async def fake_flush(session, storage, llm=None):
+            return 0
+
+        monkeypatch.setattr(
+            "explain_engine.engines.compression.propose_candidates", fake_propose
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.evaluation.score_all", fake_score
+        )
+        monkeypatch.setattr(
+            "explain_engine.hitl.cli_interactive.review_insights_async", fake_review
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.lexicon.flush_to_lexicon", fake_flush
+        )
+
+        events = await dispatch_slash(chat, "/compress")
+        types = [e.type for e in events]
+        assert "slash_compress" in types
+        assert "slash_next_step_hint" in types
+        # decorator 已推 stage 到 done + persist
+        meta = SessionStore().load("s_e000000e").meta
+        assert meta.stage == "done"

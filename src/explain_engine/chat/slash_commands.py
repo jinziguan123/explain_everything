@@ -857,6 +857,12 @@ def _ephemeral_reject(name: str) -> list[ChatEvent]:
     )]
 
 
+@with_stage_gate(
+    allowed=["bootstrap_pending", "insight_pending"],
+    success_stage="done",
+    fail_hint_key="need_promote_first",
+    success_hint_key="after_compress",
+)
 async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     """Phase 11 Wave 3: 当前 session compress + HITL review_insights + flush_to_lexicon.
 
