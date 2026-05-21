@@ -134,3 +134,32 @@ class TestErrorTemplates:
         assert "已归纳" in msg
         assert "bootstrap_pending" not in msg
         assert "['done']" not in msg
+
+
+class TestHintsByKey:
+    def test_all_six_keys_present(self):
+        from explain_engine.chat.chat_copy import HINTS_BY_KEY
+        expected = {
+            "need_promote_first", "need_compress_first",
+            "after_compress", "after_run",
+            "after_inference", "after_rescore",
+        }
+        assert expected.issubset(HINTS_BY_KEY.keys())
+
+    def test_after_compress_mentions_recommended_next_commands(self):
+        from explain_engine.chat.chat_copy import HINTS_BY_KEY
+        c = HINTS_BY_KEY["after_compress"]
+        assert "/run" in c
+        assert "/predict" in c
+        assert "/counterfactual" in c
+        # 关键: 无 reasoning loop / drivers / abstraction jargon
+        assert "reasoning loop" not in c
+        assert "drivers" not in c
+        assert "abstraction" not in c
+
+    def test_need_compress_first_uses_intuitive_chinese(self):
+        from explain_engine.chat.chat_copy import HINTS_BY_KEY
+        c = HINTS_BY_KEY["need_compress_first"]
+        assert "/compress" in c
+        assert "归纳" in c or "模式" in c
+        assert "abstraction" not in c

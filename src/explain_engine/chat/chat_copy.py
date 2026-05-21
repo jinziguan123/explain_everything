@@ -168,3 +168,31 @@ def err_stage_not_allowed(cmd: str, current_stage: str, allowed: list[str]) -> s
         f"/{cmd} 在当前阶段 ({current_zh}) 不能跑 — "
         f"需要阶段为: {allowed_zh}."
     )
+
+
+HINTS_BY_KEY: dict[str, str] = {
+    "need_promote_first": (
+        "session 还没启动 — 输入一个问题让 chat 建 session, 然后再 /compress."
+    ),
+    "need_compress_first": (
+        "需要先 /compress 把现象归纳成模式, 才能跑这个命令."
+    ),
+    "after_compress": (
+        "▸ 接下来可选:\n"
+        "  /run — 自动推理找深层原因 (推荐)\n"
+        "  /predict <假设> — 预测某干预的下游影响\n"
+        "  /counterfactual <假设> — 反事实分析"
+    ),
+    "after_run": (
+        "▸ session 已完整推理. 接下来可选:\n"
+        "  /predict <假设> — 预测干预影响\n"
+        "  /counterfactual <假设> — 反事实分析\n"
+        "  /show — 看完整因果图"
+    ),
+    "after_inference": (
+        "▸ 可继续 /predict 或 /counterfactual 探索, /show 看因果图更新."
+    ),
+    "after_rescore": (
+        "▸ 因果关系可信度已重评. /show 看变化, /run 重跑推理."
+    ),
+}
