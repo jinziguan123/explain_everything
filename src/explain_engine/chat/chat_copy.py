@@ -62,3 +62,47 @@ TERMS_MAP: dict[str, str] = {
 def zh(term: str) -> str:
     """把英文/技术词翻成中文直观短语. 找不到返原词 (defensive)."""
     return TERMS_MAP.get(term, term)
+
+
+COMMAND_DESCRIPTIONS: dict[str, str] = {
+    # 推进 session
+    "compress": "把多个现象归纳成模式 (建 session 后第一步)",
+    "run":      "自动推理找深层原因 (compress 之后做)",
+    "rescore":  "重新评估所有因果关系的可信度",
+
+    # 干预分析
+    "predict":         "预测某假设干预会带来什么下游影响",
+    "counterfactual":  "反事实分析: 如果不发生某事, 系统会怎么样",
+    "cf":              "(等同 /counterfactual)",
+
+    # 查看状态
+    "show":  "显示当前 session 的因果图 + 接受度评估",
+    "graph": "渲染因果图的可视化 (需安装 graphviz)",
+    "check": "查看接受度评估报告 (跟 /show 信息侧重不同)",
+
+    # 管理 session
+    "new":     "重置当前 chat, 回到刚启动的空白状态",
+    "resume":  "切换到历史 session",
+    "list":    "列出当前项目所有 session",
+    "lexicon": "查看跨 session 累积的概念库",
+
+    # 其他
+    "budget":  "查看 / 设置 LLM 调用预算",
+    "compact": "强制压缩对话记忆",
+    "save":    "立即把当前所有状态存盘",
+    "migrate": "(一次性) 老 session 文件迁移到新存储格式",
+
+    # 帮助 / 退出
+    "help": "看命令列表",
+    "quit": "退出 (自动存盘)",
+}
+
+
+HELP_GROUPS_ZH: list[tuple[str, list[str]]] = [
+    ("推进 session",              ["compress", "run", "rescore"]),
+    ("干预分析 (需先 /compress)", ["predict", "counterfactual"]),
+    ("查看状态 (只读)",           ["show", "graph", "check"]),
+    ("管理 session",              ["new", "resume", "list", "lexicon"]),
+    ("其他",                      ["budget", "compact", "save", "migrate"]),
+    ("帮助 / 退出",               ["help", "quit"]),
+]
