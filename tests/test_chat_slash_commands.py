@@ -866,6 +866,58 @@ class TestSlashRun:
         assert "无新发现" in events[0].content or "收敛" in events[0].content
         assert "no_gain_for_3_ticks" not in events[0].content
 
+    @pytest.mark.asyncio
+    async def test_run_with_unlimited_session_budget_passes_large_budget(self, monkeypatch):
+        """Phase 15.1 hotfix: chat_state.budget_per_session_limit==0 (用户 /budget
+        设无限) → /run 传大 budget 给 runtime, 不再受 state.budget_remaining 限制.
+
+        Root cause: chat 有两套 budget (chat_state LLM-call vs CognitiveState tick).
+        /budget 命令只改 chat_state; /run 老代码读 state.budget_remaining 计 tick budget.
+        用户设无限 mental model: 所有耗预算的都不限. 这条 honor 它.
+        """
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_b1a55001")
+        chat = ChatSession("s_b1a55001", llm=object())  # type: ignore[arg-type]
+        # 用户 /budget 设 per_session=0 (无限) + state.budget_remaining=5 (历史用了 15)
+        chat.chat_state.budget_per_session_limit = 0
+        chat.state.budget_remaining = 5
+
+        captured = {}
+
+        async def fake_run(state, llm, budget, on_tick=None, scheduler=None):
+            captured["budget"] = budget
+            state.tick = 0
+            return "no_gain_for_3_ticks"
+
+        monkeypatch.setattr("explain_engine.runtime.runtime.run", fake_run)
+        await dispatch_slash(chat, "/run")
+        # honor "无限": 传给 runtime 的 budget 应远超 5 (state.budget_remaining)
+        assert captured["budget"] >= 10**6, (
+            f"chat_state 设无限 (per_session_limit=0) 时 /run 应传大 budget, "
+            f"实际 {captured.get('budget')}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_with_finite_session_budget_uses_state_remaining(self, monkeypatch):
+        """Phase 15.1: chat_state.budget_per_session_limit>0 (有限预算) → 保留老行为
+        max(state.budget_remaining, 1) 不变."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_b1a55002")
+        chat = ChatSession("s_b1a55002", llm=object())  # type: ignore[arg-type]
+        chat.chat_state.budget_per_session_limit = 100  # 有限
+        chat.state.budget_remaining = 5
+
+        captured = {}
+
+        async def fake_run(state, llm, budget, on_tick=None, scheduler=None):
+            captured["budget"] = budget
+            state.tick = 0
+            return "no_gain_for_3_ticks"
+
+        monkeypatch.setattr("explain_engine.runtime.runtime.run", fake_run)
+        await dispatch_slash(chat, "/run")
+        assert captured["budget"] == 5  # 老行为: max(state.budget_remaining, 1)
+
 
 class TestSlashCheck:
     """Phase 11 Wave 3: /check multi-signal acceptance (read-only)."""

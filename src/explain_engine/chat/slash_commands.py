@@ -1027,7 +1027,14 @@ async def _handle_run(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 
     from explain_engine.runtime.runtime import run as runtime_run
 
-    budget = max(chat.state.budget_remaining, 1)
+    # Phase 15.1 hotfix: 若 chat_state.budget_per_session_limit == 0 (用户 /budget
+    # 设无限), /run 也应不受 state.budget_remaining 限制 — chat 用户的 mental
+    # model 是"无限"一处设全场动. 否则保留老行为 max(state.budget_remaining, 1).
+    # 1e9 实际等价无限 (跑不到这么多 tick).
+    if chat.chat_state.budget_per_session_limit == 0:
+        budget = 10**9
+    else:
+        budget = max(chat.state.budget_remaining, 1)
     try:
         # 2026-05-19 polish: Rich Status spinner — runtime.run 跑推理循环
         # (多次 LLM 调用, 总耗时几十秒到几分钟取决于 budget)
