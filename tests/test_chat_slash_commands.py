@@ -621,7 +621,8 @@ class TestSlashCompress:
     @pytest.mark.asyncio
     async def test_no_llm_rejects(self):
         from explain_engine.chat.session import ChatSession
-        _make_done_session("s_c0000001")
+        # Phase 14: stage=bp 让 gate 通过, 才能撞 handler 的 llm=None check.
+        _make_done_session("s_c0000001", stage="bootstrap_pending")
         chat = ChatSession("s_c0000001")  # llm=None
         events = await dispatch_slash(chat, "/compress")
         assert events[0].type == "slash_error"
@@ -631,7 +632,7 @@ class TestSlashCompress:
     async def test_happy_path_mock(self, monkeypatch):
         """Mock propose + review + flush → slash_compress event."""
         from explain_engine.chat.session import ChatSession
-        _make_done_session("s_c0000002")
+        _make_done_session("s_c0000002", stage="bootstrap_pending")
         chat = ChatSession("s_c0000002", llm=object())  # type: ignore[arg-type]
 
         called = {"propose": 0, "review": 0, "flush": 0}
@@ -680,7 +681,7 @@ class TestSlashCompress:
         cli `_run_compress` 有, chat `/compress` 漏. spec gap.
         """
         from explain_engine.chat.session import ChatSession
-        _make_done_session("s_c0000099")
+        _make_done_session("s_c0000099", stage="bootstrap_pending")
         chat = ChatSession("s_c0000099", llm=object())  # type: ignore[arg-type]
 
         called = {"propose": 0, "score": 0, "review": 0, "flush": 0}
@@ -730,7 +731,7 @@ class TestSlashCompress:
     async def test_propose_failure_returns_error(self, monkeypatch):
         """propose_candidates 抛 → slash_error, 不调 review."""
         from explain_engine.chat.session import ChatSession
-        _make_done_session("s_c0000003")
+        _make_done_session("s_c0000003", stage="bootstrap_pending")
         chat = ChatSession("s_c0000003", llm=object())  # type: ignore[arg-type]
 
         called = {"review": 0}
@@ -765,7 +766,7 @@ class TestSlashCompress:
         """
         from explain_engine.chat.session import ChatSession
         from explain_engine.schema.nodes import VariableNode
-        _make_done_session("s_aa00b001")
+        _make_done_session("s_aa00b001", stage="bootstrap_pending")
         chat = ChatSession("s_aa00b001", llm=object())  # type: ignore[arg-type]
 
         async def fake_propose(state, llm, min_count=3, max_count=5, **kwargs):
