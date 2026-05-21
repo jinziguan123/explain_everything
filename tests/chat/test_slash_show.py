@@ -52,24 +52,26 @@ def _make_session_with_graph(sid: str, *, l0: int = 3, l1: int = 2, l2: int = 0)
 
 
 class TestShowLayout:
+    """Phase 15: section header + L0/L1/L2 名称 全中文化."""
+
     @pytest.mark.asyncio
     async def test_four_section_headers(self):
         chat = _make_session_with_graph("s_5409a001")
         events = await dispatch_slash(chat, "/show")
         content = events[0].content
-        assert "=== Session ===" in content
-        assert "=== Graph" in content
-        assert "=== Edges" in content
-        assert "=== Multi-signal acceptance ===" in content
+        assert "=== 当前 session ===" in content
+        assert "=== 因果图" in content
+        assert "=== 因果关系" in content
+        assert "=== 接受度评估 ===" in content
 
     @pytest.mark.asyncio
     async def test_node_tree_grouped_by_level(self):
         chat = _make_session_with_graph("s_5409a002", l0=2, l1=1, l2=1)
         events = await dispatch_slash(chat, "/show")
         content = events[0].content
-        assert "[L0 Observations] (2)" in content
-        assert "[L1 Concepts] (1)" in content
-        assert "[L2 Drivers] (1)" in content
+        assert "[现象] (2)" in content
+        assert "[归纳出的模式] (1)" in content
+        assert "[深层原因] (1)" in content
 
     @pytest.mark.asyncio
     async def test_node_lines_show_epi_and_conf(self):
@@ -84,11 +86,13 @@ class TestShowLayout:
         chat = _make_session_with_graph("s_5409a004")
         events = await dispatch_slash(chat, "/show")
         content = events[0].content
-        assert "manifests_as (1):" in content
+        # raw key 保留 + 中文注释附加
+        assert "manifests_as" in content
+        assert "体现为" in content
 
     @pytest.mark.asyncio
     async def test_empty_graph(self):
-        """0 nodes → Graph section '(empty)', Edges section '(no edges)'."""
+        """0 nodes → Graph section '(空)', Edges section '(无因果关系)'."""
         from explain_engine.chat.session import ChatSession
         from tests.test_chat_session import _make_done_session
         _make_done_session("s_5409a005")
@@ -97,7 +101,7 @@ class TestShowLayout:
             chat.state.graph.remove_node(nid)
         events = await dispatch_slash(chat, "/show")
         content = events[0].content
-        assert "(empty)" in content or "(no edges)" in content
+        assert "(空)" in content or "(无因果关系)" in content
 
     @pytest.mark.asyncio
     async def test_weak_marker_priority_lifecycle_over_weak(self):
@@ -130,13 +134,13 @@ class TestShowLayout:
         chat = _make_session_with_graph("s_5409a007")
         events = await dispatch_slash(chat, "/show")
         content = events[0].content
-        ms_idx = content.find("=== Multi-signal acceptance ===")
-        eg_idx = content.find("=== Edges")
+        ms_idx = content.find("=== 接受度评估 ===")
+        eg_idx = content.find("=== 因果关系")
         assert ms_idx > eg_idx > 0
 
     @pytest.mark.asyncio
     async def test_aggregate_failure_does_not_crash(self):
-        """aggregate_acceptance raise → multi-signal section fallback, /show 不 crash."""
+        """aggregate_acceptance raise → 接受度评估 section fallback, /show 不 crash."""
         chat = _make_session_with_graph("s_5409a008")
         import explain_engine.engines.simulation as sim
         original = sim.aggregate_acceptance
@@ -148,7 +152,7 @@ class TestShowLayout:
         try:
             events = await dispatch_slash(chat, "/show")
             content = events[0].content
-            assert "aggregate_acceptance failed" in content
-            assert "=== Session ===" in content
+            assert "接受度评估失败" in content
+            assert "=== 当前 session ===" in content
         finally:
             sim.aggregate_acceptance = original

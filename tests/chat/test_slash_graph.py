@@ -35,7 +35,7 @@ def _make_session_with_graph(sid: str, *, l0=1, l1=1):
 class TestSlashGraph:
     @pytest.mark.asyncio
     async def test_empty_graph_returns_warning(self):
-        """0 nodes → 不调 graphviz, 输 '(empty graph, nothing to render)'."""
+        """0 nodes → 不调 graphviz, 输 '(因果图为空, 无内容可渲染)'."""
         from explain_engine.chat.session import ChatSession
         from tests.test_chat_session import _make_done_session
         _make_done_session("s_a5e0b001")
@@ -44,7 +44,8 @@ class TestSlashGraph:
             chat.state.graph.remove_node(nid)
         events = await dispatch_slash(chat, "/graph")
         assert events[0].type == "slash_graph"
-        assert "empty graph" in events[0].content.lower()
+        # Phase 15: 中文化错误文案
+        assert "因果图为空" in events[0].content
 
     @pytest.mark.asyncio
     async def test_dot_missing_returns_friendly_error(self, monkeypatch):
@@ -124,7 +125,7 @@ class TestSlashGraph:
 
     @pytest.mark.asyncio
     async def test_output_contains_multisignal_footer(self, monkeypatch):
-        """Output 末尾含 multi-signal verdict (consistency / essentialness / coverage)."""
+        """Output 末尾含 接受度评估 verdict (一致性 / 本质重要性 / 覆盖率)."""
         chat = _make_session_with_graph("s_a5e0b005")
         monkeypatch.setattr(
             "shutil.which",
@@ -143,7 +144,8 @@ class TestSlashGraph:
 
         events = await dispatch_slash(chat, "/graph")
         content = events[0].content
-        assert "Multi-signal" in content or "consistency" in content.lower()
+        # Phase 15: footer 中文化 ("接受度评估: 一致性=...")
+        assert "接受度评估" in content or "一致性" in content
 
     @pytest.mark.asyncio
     async def test_render_failure_returns_friendly_error(self, monkeypatch):

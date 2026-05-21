@@ -47,6 +47,7 @@ from explain_engine.chat.chat_copy import (
     msg_compress_done,
     msg_rescore_done,
     msg_run_done,
+    zh,
 )
 from explain_engine.chat.slash_stage_rules import with_stage_gate
 
@@ -164,56 +165,56 @@ async def _handle_show(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     lines: list[str] = []
 
     # ═══ Section 1: Session ═══
-    lines.append("=== Session ===")
-    lines.append(f"SID:      {chat.sid}")
-    lines.append(f"Question: {chat._session.meta.question}")
-    lines.append(f"Stage:    {chat._session.meta.stage}")
+    lines.append("=== 当前 session ===")
+    lines.append(f"SID:    {chat.sid}")
+    lines.append(f"问题:   {chat._session.meta.question}")
+    lines.append(f"阶段:   {zh(chat._session.meta.stage)}")
     lines.append("")
 
     # ═══ Section 2: Graph (node tree by L) ═══
     lines.append(
-        f"=== Graph ({len(g.nodes)} nodes: {n_l0} L0 / {n_l1} L1 / {n_l2} L2; "
-        f"{n_decayed} decayed, {n_stale} stale) ==="
+        f"=== 因果图 ({len(g.nodes)} 节点: {n_l0} 现象 / {n_l1} 模式 / "
+        f"{n_l2} 深层原因; {n_decayed} 衰减, {n_stale} 陈旧) ==="
     )
     lines.append("")
 
     if len(g.nodes) == 0:
-        lines.append("(empty)")
+        lines.append("(空)")
         lines.append("")
     else:
-        # L0 section
+        # 现象 section (L0)
         if n_l0 > 0:
-            lines.append(f"[L0 Observations] ({n_l0})")
+            lines.append(f"[现象] ({n_l0})")
             for nid in sorted(n.id for n in g.nodes.values() if n.abstraction_level == 0):
                 lines.append(f"  {_format_node_brief(state, nid, weak=nid in weak_l1_set)}")
             lines.append("")
 
-        # L1 section (with weak chain header inline)
+        # 归纳出的模式 section (L1)
         if n_l1 > 0:
-            l1_header = f"[L1 Concepts] ({n_l1})"
+            l1_header = f"[归纳出的模式] ({n_l1})"
             l1_weak = [n.id for n in g.nodes.values()
                        if n.abstraction_level == 1 and n.id in weak_l1_set]
             if l1_weak:
-                l1_header += f" — weak chain: {' '.join(sorted(l1_weak))}"
+                l1_header += f" — 薄弱因果链: {' '.join(sorted(l1_weak))}"
             lines.append(l1_header)
             for nid in sorted(n.id for n in g.nodes.values() if n.abstraction_level == 1):
                 lines.append(f"  {_format_node_brief(state, nid, weak=nid in weak_l1_set)}")
             lines.append("")
 
-        # L2 section (always shown — explicit "(none)" when zero)
-        lines.append(f"[L2 Drivers] ({n_l2})")
+        # 深层原因 section (L2) — always shown, 显 "(无)" when zero
+        lines.append(f"[深层原因] ({n_l2})")
         if n_l2 == 0:
-            lines.append("  (none — 尚未 expand 出 root driver)")
+            lines.append("  (无 — 尚未推出深层原因)")
         else:
             for nid in sorted(n.id for n in g.nodes.values() if n.abstraction_level == 2):
                 lines.append(f"  {_format_node_brief(state, nid)}")
         lines.append("")
 
     # ═══ Section 3: Edges (group by relation_type) ═══
-    lines.append(f"=== Edges ({len(g.edges)}) ===")
+    lines.append(f"=== 因果关系 ({len(g.edges)} 条) ===")
     lines.append("")
     if len(g.edges) == 0:
-        lines.append("(no edges)")
+        lines.append("(无因果关系)")
         lines.append("")
     else:
         by_type: dict[str, list] = {}
@@ -221,26 +222,31 @@ async def _handle_show(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
             by_type.setdefault(e.relation_type, []).append(e)
         for rtype in sorted(by_type):
             edges = sorted(by_type[rtype], key=lambda e: (e.source_node, e.target_node))
-            lines.append(f"{rtype} ({len(edges)}):")
+            # rtype 同时显英文 raw key + 中文注释 (manifests_as「体现为」)
+            rtype_zh = zh(rtype)
+            if rtype_zh != rtype:
+                lines.append(f"{rtype}「{rtype_zh}」({len(edges)} 条):")
+            else:
+                lines.append(f"{rtype} ({len(edges)} 条):")
             for edge in edges:
                 lines.append(f"  {_format_edge_brief(edge)}")
             lines.append("")
 
     # ═══ Section 4: Multi-signal verdict ═══
-    lines.append("=== Multi-signal acceptance ===")
+    lines.append("=== 接受度评估 ===")
     if report is not None:
-        lines.append(f"avg_consistency:    {report.avg_consistency:.3f}")
-        lines.append(f"avg_essentialness:  {report.avg_essentialness:.3f}")
-        lines.append(f"rollout_coverage:   {report.rollout_coverage:.3f}")
+        lines.append(f"一致性:         {report.avg_consistency:.3f}")
+        lines.append(f"本质重要性:     {report.avg_essentialness:.3f}")
+        lines.append(f"覆盖率:         {report.rollout_coverage:.3f}")
         weak_ids = sorted(report.weak_chain_l1s or [])
         if weak_ids:
-            lines.append(f"weak_chain_l1s ({len(weak_ids)}): {' '.join(weak_ids)}")
+            lines.append(f"薄弱因果链 ({len(weak_ids)}): {' '.join(weak_ids)}")
         else:
-            lines.append("weak_chain_l1s: (none)")
+            lines.append("薄弱因果链:     (无)")
         if report.input_alignment is not None:
-            lines.append(f"input_alignment:    {report.input_alignment:.3f}")
+            lines.append(f"输入对齐度:     {report.input_alignment:.3f}")
     else:
-        lines.append(f"(aggregate_acceptance failed: {agg_err})")
+        lines.append(f"(接受度评估失败: {agg_err})")
 
     return [ChatEvent(type="slash_show", content="\n".join(lines))]
 
@@ -273,7 +279,7 @@ async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     if len(g.nodes) == 0:
         return [ChatEvent(
             type="slash_graph",
-            content="(empty graph, nothing to render)",
+            content="(因果图为空, 无内容可渲染)",
         )]
 
     # Edge: dot binary missing
@@ -281,8 +287,8 @@ async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
         return [ChatEvent(
             type="slash_graph",
             content=(
-                "dot binary not found.\n"
-                "Install: brew install graphviz"
+                "找不到 graphviz 的 dot 可执行文件.\n"
+                "安装方式: brew install graphviz"
             ),
         )]
 
@@ -309,8 +315,8 @@ async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
         return [ChatEvent(
             type="slash_graph",
             content=(
-                f"dot render 失败: {type(exc).__name__}: {exc}\n"
-                "请检查 graphviz 安装 (brew reinstall graphviz) 或磁盘空间."
+                f"渲染失败: {type(exc).__name__}: {exc}\n"
+                "请检查 graphviz 是否完整 (brew reinstall graphviz) 及磁盘空间."
             ),
         )]
 
@@ -319,8 +325,8 @@ async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     n_l1 = sum(1 for n in g.nodes.values() if n.abstraction_level == 1)
     n_l2 = sum(1 for n in g.nodes.values() if n.abstraction_level == 2)
     header = (
-        f"/graph tick={tick} · {len(g.nodes)} nodes "
-        f"({n_l0} L0 / {n_l1} L1 / {n_l2} L2), {len(g.edges)} edges"
+        f"/graph 推理步={tick} · {len(g.nodes)} 节点 "
+        f"({n_l0} 现象 / {n_l1} 模式 / {n_l2} 深层原因), {len(g.edges)} 条因果关系"
     )
 
     # Inline display
@@ -330,11 +336,11 @@ async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
             # stderr=DEVNULL: chafa/imgcat 任何 warning 不污染用户 terminal.
             # stdout=None: 让 chafa/imgcat 把 image bytes 写到 terminal (inline 显示必需).
             subprocess.run(cmd, check=False, stderr=subprocess.DEVNULL)
-            inline_msg = f"(rendered inline via {renderer})"
+            inline_msg = f"(已通过 {renderer} 内联渲染)"
         except Exception as exc:
-            inline_msg = f"(inline render via {renderer} failed: {type(exc).__name__})"
+            inline_msg = f"(内联渲染失败 via {renderer}: {type(exc).__name__})"
     else:
-        inline_msg = "(install chafa for inline preview: brew install chafa)"
+        inline_msg = "(装 chafa 可内联预览: brew install chafa)"
 
     # Footer
     footer_lines = [
@@ -345,15 +351,15 @@ async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     ]
     if report is not None:
         footer_lines.append(
-            f"Multi-signal: consistency={report.avg_consistency:.3f} "
-            f"essentialness={report.avg_essentialness:.3f} "
-            f"coverage={report.rollout_coverage:.3f}"
+            f"接受度评估: 一致性={report.avg_consistency:.3f} "
+            f"本质重要性={report.avg_essentialness:.3f} "
+            f"覆盖率={report.rollout_coverage:.3f}"
         )
         weak_ids = sorted(report.weak_chain_l1s or [])
         if weak_ids:
-            footer_lines.append(f"weak L1: {' '.join(weak_ids)}")
+            footer_lines.append(f"薄弱模式: {' '.join(weak_ids)}")
     else:
-        footer_lines.append("Multi-signal: (aggregate_acceptance failed)")
+        footer_lines.append("接受度评估: (失败)")
 
     content = header + "\n" + "\n".join(footer_lines)
     return [ChatEvent(type="slash_graph", content=content)]
@@ -1066,22 +1072,19 @@ async def _handle_check(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     try:
         report = aggregate_acceptance(chat.state)
     except Exception as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/check 失败: {type(exc).__name__}: {exc}",
-        )]
+        return [ChatEvent(type="slash_error", content=err_failed("check", exc))]
 
-    weak_str = ", ".join(report.weak_chain_l1s) or "(none)"
-    missing_str = ", ".join(report.missing_l0) or "(none)"
+    weak_str = ", ".join(report.weak_chain_l1s) or "(无)"
+    missing_str = ", ".join(report.missing_l0) or "(无)"
     return [ChatEvent(
         type="slash_check",
         content=(
-            f"Multi-signal acceptance:\n"
-            f"  avg_consistency:   {report.avg_consistency:.3f}\n"
-            f"  avg_essentialness: {report.avg_essentialness:.3f}\n"
-            f"  rollout_coverage:  {report.rollout_coverage:.3f}\n"
-            f"  weak_chain_l1s:    {weak_str}\n"
-            f"  missing_l0:        {missing_str}"
+            f"接受度评估:\n"
+            f"  一致性:         {report.avg_consistency:.3f}\n"
+            f"  本质重要性:     {report.avg_essentialness:.3f}\n"
+            f"  覆盖率:         {report.rollout_coverage:.3f}\n"
+            f"  薄弱因果链:     {weak_str}\n"
+            f"  缺失现象:       {missing_str}"
         ),
     )]
 

@@ -59,12 +59,10 @@ class TestDispatchSlash:
         chat = ChatSession("s_51a55003")
         events = await dispatch_slash(chat, "/show")
         content = events[0].content
-        # Phase 12 (2026-05-19): /show 重写 4 section layout (Task A4).
-        # 旧断言 "Graph:" 改为 "=== Graph (" — section header 仍含 graph counts,
-        # 测试 intent 不变 (验 Question + graph 计数 + L0 marker 都出现).
-        assert "Question:" in content
-        assert "=== Graph (" in content
-        assert "L0" in content
+        # Phase 15: /show 输出全中文化 (问题: / === 因果图 / 现象). 验 3 关键串都在.
+        assert "问题:" in content
+        assert "=== 因果图 (" in content
+        assert "现象" in content
 
     @pytest.mark.asyncio
     async def test_budget_display_only_when_no_provider(self):
@@ -887,11 +885,12 @@ class TestSlashCheck:
         events = await dispatch_slash(chat, "/check")
         assert events[0].type == "slash_check"
         c = events[0].content
-        assert "avg_consistency" in c
-        assert "avg_essentialness" in c
-        assert "rollout_coverage" in c
-        assert "weak_chain_l1s" in c
-        assert "missing_l0" in c
+        # Phase 15: 中文化字段名
+        assert "一致性" in c
+        assert "本质重要性" in c
+        assert "覆盖率" in c
+        assert "薄弱因果链" in c
+        assert "缺失现象" in c
 
 
 class TestSlashPredict:
