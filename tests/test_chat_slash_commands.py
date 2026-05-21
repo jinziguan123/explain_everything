@@ -1902,3 +1902,48 @@ class TestCompressInsightPendingShortCircuit:
         await dispatch_slash(chat, "/compress")
         assert calls["propose"] == 1
         assert calls["score"] == 1
+
+
+class TestHelpGrouping:
+    """Phase 14 Task 16: /help 6 分组渲染 + 19 命令全在 + /cf alias 行."""
+
+    @pytest.mark.asyncio
+    async def test_help_includes_all_six_group_headers(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000012")
+        chat = ChatSession("s_e0000012")
+        events = await dispatch_slash(chat, "/help")
+        content = events[0].content
+        for header in (
+            "Session 推进",
+            "Session 干预",
+            "Inspection",
+            "Session 管理",
+            "其他",
+            "帮助 / 退出",
+        ):
+            assert header in content, f"missing group header: {header}"
+
+    @pytest.mark.asyncio
+    async def test_help_includes_all_commands(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000013")
+        chat = ChatSession("s_e0000013")
+        events = await dispatch_slash(chat, "/help")
+        content = events[0].content
+        for cmd in (
+            "compress", "run", "rescore", "predict", "counterfactual",
+            "show", "graph", "check", "new", "resume", "list", "lexicon",
+            "budget", "compact", "save", "migrate", "help", "quit",
+        ):
+            assert f"/{cmd}" in content, f"missing /{cmd}"
+
+    @pytest.mark.asyncio
+    async def test_help_includes_cf_alias_line(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000014")
+        chat = ChatSession("s_e0000014")
+        events = await dispatch_slash(chat, "/help")
+        content = events[0].content
+        assert "/cf" in content
+        assert "alias" in content.lower() or "counterfactual" in content

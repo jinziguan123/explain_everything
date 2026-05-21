@@ -77,15 +77,39 @@ async def _handle_quit(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     return [ChatEvent(type="slash_quit", content="Goodbye. Session saved.")]
 
 
+# Phase 14 Task 16: 按用途 6 分组渲染 /help. 顺序 = 用户典型 flow:
+# 推进 → 干预 → inspection → 管理 → 其他 → 帮助/退出.
+HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Session 推进", ("compress", "run", "rescore")),
+    ("Session 干预 (需先 /compress)", ("predict", "counterfactual")),
+    ("Inspection (read-only)", ("show", "graph", "check")),
+    ("Session 管理", ("new", "resume", "list", "lexicon")),
+    ("其他", ("budget", "compact", "save", "migrate")),
+    ("帮助 / 退出", ("help", "quit")),
+)
+
+
 async def _handle_help(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
-    """List slash commands + tools (含 readonly / HITL flags)."""
+    """List slash commands (6 分组) + tools (含 readonly / HITL flags)."""
     from explain_engine.chat.session import ChatEvent
     from explain_engine.chat.tools import ALL_TOOLS
 
-    lines = ["Available slash commands (local, bypass LLM):"]
-    for cmd in DEFAULT_COMMANDS:
-        lines.append(f"  /{cmd.name} — {cmd.description}")
-    lines.append("")
+    cmd_by_name = {c.name: c for c in DEFAULT_COMMANDS}
+
+    lines = ["Available slash commands (local, bypass LLM):", ""]
+    for group_name, cmd_names in HELP_GROUPS:
+        lines.append(f"  {group_name}:")
+        for n in cmd_names:
+            c = cmd_by_name.get(n)
+            if c is not None:
+                lines.append(f"    /{c.name} — {c.description}")
+        lines.append("")
+
+    # /cf alias 单独提一行
+    if "cf" in cmd_by_name:
+        lines.append("  Alias: /cf → /counterfactual")
+        lines.append("")
+
     lines.append("Available tools (LLM-callable):")
     for tool in ALL_TOOLS:
         flags = []
