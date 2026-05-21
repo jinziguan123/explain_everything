@@ -1569,3 +1569,59 @@ class TestSlashStageGateRun:
         chat = ChatSession("s_e0000002", llm=object())  # type: ignore[arg-type]
         events = await dispatch_slash(chat, "/run")
         assert any(e.type == "slash_error" for e in events)
+
+
+class TestSlashStageGatePredict:
+    """Phase 14: /predict stage gate (allowed=[done, converged], success_stage=None)."""
+
+    @pytest.mark.asyncio
+    async def test_predict_blocked_at_bootstrap_pending(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000003", stage="bootstrap_pending")
+        chat = ChatSession("s_e0000003", llm=object())  # type: ignore[arg-type]
+        events = await dispatch_slash(chat, "/predict 测试")
+        assert any(e.type == "slash_error" for e in events)
+        assert any(e.type == "slash_next_step_hint" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_predict_blocked_at_insight_pending(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000004", stage="insight_pending")
+        chat = ChatSession("s_e0000004", llm=object())  # type: ignore[arg-type]
+        events = await dispatch_slash(chat, "/predict 测试")
+        assert any(e.type == "slash_error" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_predict_allowed_at_done(self):
+        """stage=done → gate 通过, handler 跑 (走 user-cancel 路径避真 LLM)."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000005", stage="done")
+        chat = ChatSession("s_e0000005", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "q"  # 取消
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/predict")
+        types = [e.type for e in events]
+        # gate 通过 → 不是 slash_error gate 那条
+        assert "slash_predict" in types
+        assert not any(
+            "不允许" in (e.content if isinstance(e.content, str) else "")
+            for e in events
+        )
+
+    @pytest.mark.asyncio
+    async def test_predict_at_converged_also_allowed(self):
+        """stage=converged → gate 通过."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e0000006", stage="converged")
+        chat = ChatSession("s_e0000006", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "q"
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/predict")
+        types = [e.type for e in events]
+        assert "slash_predict" in types

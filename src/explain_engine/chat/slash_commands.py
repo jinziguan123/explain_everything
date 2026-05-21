@@ -1060,6 +1060,12 @@ async def _handle_check(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     )]
 
 
+@with_stage_gate(
+    allowed=["done", "converged"],
+    success_stage=None,
+    fail_hint_key="need_compress_first",
+    success_hint_key="after_inference",
+)
 async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     """Phase 11 Wave 3: forward prediction. Interactive prompt 收 intervention text.
 
