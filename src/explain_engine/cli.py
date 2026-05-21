@@ -958,6 +958,9 @@ def _render_event(con: Console, event) -> None:
             f"[yellow]Budget exhausted ({scope}). "
             f"Reset via /budget or new turn.[/yellow]"
         )
+    elif t == "slash_next_step_hint":
+        # Phase 14: 灰色 dim 提示 (with_stage_gate 装饰器 yield).
+        con.print(f"[dim]{escape(str(event.content or ''))}[/dim]")
     elif t.startswith("slash_"):
         con.print(escape(str(event.content or "")))
     else:

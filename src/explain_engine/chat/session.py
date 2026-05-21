@@ -112,6 +112,9 @@ class ChatEvent:
       Producer: _handle_new (2026-05-20 重构后).
       Consumer: repl_entry.enter_repl_async (主路径) /
                 cli._run_chat_repl_async (子命令路径 — 仅 exit, 提示重启).
+    - slash_next_step_hint: str — 灰色 dim 渲染. 在普通 slash output event 之后,
+      给用户提示当前 stage 下推荐的下一步命令. Producer: with_stage_gate decorator
+      (chat/slash_stage_rules.py, Phase 14).
     """
 
     type: str
