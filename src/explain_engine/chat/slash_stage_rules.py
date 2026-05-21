@@ -71,6 +71,13 @@ def with_stage_gate(
                     except Exception:
                         pass  # persist 失败不阻断 hint 显示
 
+            # ⑤ success hint
+            if success_hint_key and success_hint_key in HINTS_BY_KEY:
+                events.append(ChatEvent(
+                    type="slash_next_step_hint",
+                    content=HINTS_BY_KEY[success_hint_key],
+                ))
+
             return events
         return wrapped
     return deco

@@ -171,6 +171,32 @@ class TestSuccessTransition:
         assert chat._persist_count == 0
 
 
+class TestSuccessHint:
+    @pytest.mark.asyncio
+    async def test_success_hint_appended_when_key_in_table(self):
+        from explain_engine.chat.slash_stage_rules import HINTS_BY_KEY
+        HINTS_BY_KEY["__test_success__"] = "test success message"
+        try:
+            @with_stage_gate(allowed=["done"], success_hint_key="__test_success__")
+            async def handler(c, args):
+                return [ChatEvent(type="slash_run", content="ok")]
+
+            events = await handler(_FakeChat(stage="done"), [])
+            assert events[-1].type == "slash_next_step_hint"
+            assert events[-1].content == "test success message"
+        finally:
+            HINTS_BY_KEY.pop("__test_success__", None)
+
+    @pytest.mark.asyncio
+    async def test_no_success_hint_when_handler_returns_error(self):
+        @with_stage_gate(allowed=["done"], success_hint_key="after_run")
+        async def handler(c, args):
+            return [ChatEvent(type="slash_error", content="x")]
+
+        events = await handler(_FakeChat(stage="done"), [])
+        assert all(e.type != "slash_next_step_hint" for e in events)
+
+
 class _FakeChat:
     """Minimal duck-typed chat for decorator unit tests."""
 
