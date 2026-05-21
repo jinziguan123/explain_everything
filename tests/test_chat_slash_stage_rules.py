@@ -197,6 +197,28 @@ class TestSuccessHint:
         assert all(e.type != "slash_next_step_hint" for e in events)
 
 
+class TestHintsByKey:
+    def test_all_six_keys_present(self):
+        from explain_engine.chat.slash_stage_rules import HINTS_BY_KEY
+        expected = {
+            "need_promote_first",
+            "need_compress_first",
+            "after_compress",
+            "after_run",
+            "after_inference",
+            "after_rescore",
+        }
+        assert expected.issubset(HINTS_BY_KEY.keys())
+
+    def test_hint_content_mentions_relevant_commands(self):
+        from explain_engine.chat.slash_stage_rules import HINTS_BY_KEY
+        c = HINTS_BY_KEY["after_compress"]
+        assert "/run" in c
+        assert "/predict" in c
+        assert "/compress" in HINTS_BY_KEY["need_compress_first"]
+        assert "/show" in HINTS_BY_KEY["after_rescore"]
+
+
 class _FakeChat:
     """Minimal duck-typed chat for decorator unit tests."""
 
