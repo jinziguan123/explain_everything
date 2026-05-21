@@ -90,13 +90,13 @@ def _render_table_to_string(table) -> str:
 
 
 async def _handle_quit(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
-    """Signal CLI to exit. Actual exit handled by F.2 CLI wrapper.
+    """通知 CLI 退出. 真正退出由 F.2 CLI wrapper 处理.
 
     本 handler 只 yield slash_quit event; CLI loop (F.2) 收到该 event
     后跳出 input loop, 调 chat.aclose() flush 后退出.
     """
     from explain_engine.chat.session import ChatEvent
-    return [ChatEvent(type="slash_quit", content="Goodbye. Session saved.")]
+    return [ChatEvent(type="slash_quit", content="再见, session 已存盘.")]
 
 
 async def _handle_help(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
@@ -407,21 +407,21 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 
     console = Console()
     console.print(
-        f"\n[bold]Current budget[/bold]\n"
-        f"  per-turn limit:    {_format_budget_value(cs.budget_per_turn_limit, cs.budget_per_turn_remaining)}\n"
-        f"  per-session limit: {_format_budget_value(cs.budget_per_session_limit, cs.budget_per_session_remaining)}\n"
+        f"\n[bold]当前预算[/bold]\n"
+        f"  本轮预算上限:     {_format_budget_value(cs.budget_per_turn_limit, cs.budget_per_turn_remaining)}\n"
+        f"  本 session 上限:  {_format_budget_value(cs.budget_per_session_limit, cs.budget_per_session_remaining)}\n"
     )
 
     if chat.input_provider is None:
         return [ChatEvent(
             type="slash_budget",
-            content="(no input_provider; display-only — test/non-REPL 路径)",
+            content="(无输入通道, 仅展示 — test/非交互模式)",
         )]
 
     # 收 per-turn
     try:
         new_turn_str = await chat.input_provider(
-            f"新 per-turn limit (回车保持 {cs.budget_per_turn_limit}, 0=无限, q 取消): "
+            f"新本轮上限 (回车保持 {cs.budget_per_turn_limit}, 0=无限, q 取消): "
         )
     except (EOFError, KeyboardInterrupt):
         return [ChatEvent(type="slash_budget", content="已取消.")]
@@ -437,7 +437,7 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
             if new_turn < 0:
                 return [ChatEvent(
                     type="slash_error",
-                    content="per-turn limit 需 >= 0 (0=无限); 已取消.",
+                    content="本轮上限需 >= 0 (0=无限); 已取消.",
                 )]
         except ValueError:
             return [ChatEvent(
@@ -448,7 +448,7 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     # 收 per-session
     try:
         new_session_str = await chat.input_provider(
-            f"新 per-session limit (回车保持 {cs.budget_per_session_limit}, 0=无限, q 取消): "
+            f"新 session 上限 (回车保持 {cs.budget_per_session_limit}, 0=无限, q 取消): "
         )
     except (EOFError, KeyboardInterrupt):
         return [ChatEvent(type="slash_budget", content="已取消.")]
@@ -464,7 +464,7 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
             if new_session < 0:
                 return [ChatEvent(
                     type="slash_error",
-                    content="per-session limit 需 >= 0 (0=无限); 已取消.",
+                    content="session 上限需 >= 0 (0=无限); 已取消.",
                 )]
         except ValueError:
             return [ChatEvent(
@@ -497,8 +497,8 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
         type="slash_budget",
         content=(
             f"[已更新]\n"
-            f"  per-turn: {_fmt_limit(old_turn)} → {_fmt_limit(new_turn)}\n"
-            f"  per-session: {_fmt_limit(old_session)} → {_fmt_limit(new_session)}"
+            f"  本轮:    {_fmt_limit(old_turn)} → {_fmt_limit(new_turn)}\n"
+            f"  session: {_fmt_limit(old_session)} → {_fmt_limit(new_session)}"
         ),
     )]
 
@@ -513,18 +513,16 @@ async def _handle_compact(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     from explain_engine.chat.session import ChatEvent
     return [ChatEvent(
         type="slash_compact",
-        content="Force compaction requested. Will run on next reflect tick or via CLI handler.",
+        content="已请求强制压缩对话记忆. 将在下次反思 tick 或经 CLI handler 执行.",
     )]
 
 
 async def _handle_save(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
-    """Explicit flush sidecars (chat_state.json + graph)."""
+    """显式存盘 sidecar (chat_state.json + graph)."""
     from explain_engine.chat.session import ChatEvent
+    from explain_engine.chat.chat_copy import msg_save_done
     chat.persist()
-    return [ChatEvent(
-        type="slash_save",
-        content=f"Saved session {chat.sid} to disk (graph + chat_state + transcript).",
-    )]
+    return [ChatEvent(type="slash_save", content=msg_save_done(chat.sid))]
 
 
 async def _handle_new(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
@@ -1401,15 +1399,12 @@ async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     try:
         sids = await asyncio.to_thread(detect_legacy_sessions)
     except Exception as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/migrate detect 失败: {type(exc).__name__}: {exc}",
-        )]
+        return [ChatEvent(type="slash_error", content=err_failed("migrate", exc))]
 
     if not sids:
         return [ChatEvent(
             type="slash_migrate",
-            content="无老 sessions/*.json 需迁 (或目录不存在).",
+            content="无老 session 文件需迁移 (或目录不存在).",
         )]
 
     n = len(sids)
@@ -1417,15 +1412,15 @@ async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]
         return [ChatEvent(
             type="slash_migrate",
             content=(
-                f"检测到 {n} legacy session(s): {sids}. "
-                f"需在 REPL (input_provider 已挂) 中调用 /migrate 确认; "
-                f"当前无 provider, 跳过."
+                f"检测到 {n} 个老 session 文件: {sids}. "
+                f"需在交互模式 (chat REPL) 中调用 /migrate 确认; "
+                f"当前无输入通道, 跳过."
             ),
         )]
 
     try:
         confirm = (await chat.input_provider(
-            f"将迁 {n} session 到 ~/.explain/projects/<proj>/sessions/. "
+            f"将迁移 {n} 个 session 到 ~/.explain/projects/<proj>/sessions/. "
             f"确认 (y/n)? "
         )).strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -1437,21 +1432,18 @@ async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     try:
         results = await asyncio.to_thread(migrate_all, dry_run=False)
     except Exception as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/migrate 失败: {type(exc).__name__}: {exc}",
-        )]
+        return [ChatEvent(type="slash_error", content=err_failed("migrate", exc))]
 
     migrated = [r["sid"] for r in results if r["migrated"]]
     skipped = [(r["sid"], r["reason"]) for r in results if not r["migrated"]]
 
-    lines = [f"成功迁 {len(migrated)}/{len(results)} session."]
+    lines = [f"成功迁移 {len(migrated)}/{len(results)} 个 session."]
     if migrated:
         head = migrated[:5]
         tail = "..." if len(migrated) > 5 else ""
-        lines.append(f"  migrated: {head}{tail}")
+        lines.append(f"  已迁移: {head}{tail}")
     if skipped:
-        lines.append(f"  skipped ({len(skipped)}):")
+        lines.append(f"  跳过 ({len(skipped)}):")
         for sid, reason in skipped[:5]:
             lines.append(f"    {sid}: {reason}")
 

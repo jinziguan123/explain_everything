@@ -35,7 +35,9 @@ class TestDispatchSlash:
         events = await dispatch_slash(chat, "/quit")
         assert len(events) == 1
         assert events[0].type == "slash_quit"
-        assert "Goodbye" in events[0].content
+        # Phase 15: 中文 farewell ("再见, session 已存盘.")
+        assert "再见" in events[0].content
+        assert "存盘" in events[0].content
 
     @pytest.mark.asyncio
     async def test_help_lists_commands_and_tools(self):
@@ -73,7 +75,8 @@ class TestDispatchSlash:
         events = await dispatch_slash(chat, "/budget")
         assert len(events) == 1
         assert events[0].type == "slash_budget"
-        assert "display-only" in events[0].content
+        # Phase 15: "(无输入通道, 仅展示 — test/非交互模式)"
+        assert "仅展示" in events[0].content or "无输入通道" in events[0].content
 
     @pytest.mark.asyncio
     async def test_compact_yields_compact_event(self):
@@ -397,7 +400,8 @@ class TestSlashBudgetConfig:
         )
         events = await dispatch_slash(chat, "/budget")
         assert events[0].type == "slash_budget"
-        assert "display-only" in events[0].content
+        # Phase 15: 中文化 ("仅展示" / "无输入通道")
+        assert "仅展示" in events[0].content or "无输入通道" in events[0].content
         # state 不变
         assert (
             chat.chat_state.budget_per_turn_limit,
@@ -1489,7 +1493,8 @@ class TestSlashMigrate:
         eph.input_provider = provider
         events = await dispatch_slash(eph, "/migrate")
         assert events[0].type == "slash_migrate"
-        assert "成功迁 2" in events[0].content
+        # Phase 15: "成功迁移 2/2 个 session."
+        assert "成功迁移 2" in events[0].content
         assert called["migrate_all_dry"] is False
 
     @pytest.mark.asyncio
