@@ -49,6 +49,7 @@ class TestCommandDescriptions:
     def test_descriptions_contain_chinese(self):
         """每条 desc 含至少 1 中文字 (catch 漏译)."""
         import re
+
         from explain_engine.chat.chat_copy import COMMAND_DESCRIPTIONS
         chinese_pattern = re.compile(r'[一-鿿]')
         for cmd, desc in COMMAND_DESCRIPTIONS.items():
@@ -169,8 +170,8 @@ class TestStatusAndInfoConstants:
     def test_status_constants_have_rich_markup(self):
         from explain_engine.chat.chat_copy import (
             STATUS_COMPRESS_PROPOSE,
-            STATUS_RUN,
             STATUS_LEXICON_FLUSH,
+            STATUS_RUN,
         )
         for s in (STATUS_COMPRESS_PROPOSE, STATUS_RUN, STATUS_LEXICON_FLUSH):
             assert "[bold green]" in s

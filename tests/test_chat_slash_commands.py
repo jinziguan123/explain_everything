@@ -1976,6 +1976,7 @@ class TestSlashRegistryUsesChineseDescriptions:
 
     def test_all_commands_have_chinese_description(self):
         import re
+
         from explain_engine.chat.slash_commands import DEFAULT_COMMANDS
         chinese_pattern = re.compile(r'[一-鿿]')
         for c in DEFAULT_COMMANDS:

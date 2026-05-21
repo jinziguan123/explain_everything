@@ -519,8 +519,8 @@ async def _handle_compact(chat: ChatSession, args: list[str]) -> list[ChatEvent]
 
 async def _handle_save(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     """显式存盘 sidecar (chat_state.json + graph)."""
-    from explain_engine.chat.session import ChatEvent
     from explain_engine.chat.chat_copy import msg_save_done
+    from explain_engine.chat.session import ChatEvent
     chat.persist()
     return [ChatEvent(type="slash_save", content=msg_save_done(chat.sid))]
 

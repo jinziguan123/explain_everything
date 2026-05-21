@@ -7,7 +7,6 @@ hitl/cli_interactive) 引此 module 的常量 / 模板, 不再硬编中文/英�
 
 from __future__ import annotations
 
-
 TERMS_MAP: dict[str, str] = {
     # ── Graph 节点层次 ──
     "L0": "现象",
