@@ -26,6 +26,48 @@ class TestPassThrough:
         assert events[0].content == "done"
 
 
+class TestGateCheck:
+    @pytest.mark.asyncio
+    async def test_blocks_disallowed_stage(self):
+        """stage=bp + allowed=[done] → slash_error, handler 不被调."""
+        called = {"n": 0}
+
+        @with_stage_gate(allowed=["done"])
+        async def handler(chat, args):
+            called["n"] += 1
+            return [ChatEvent(type="slash_ok", content="should not run")]
+
+        events = await handler(_FakeChat(stage="bootstrap_pending"), [])
+        assert called["n"] == 0
+        assert len(events) == 1
+        assert events[0].type == "slash_error"
+        assert "bootstrap_pending" in events[0].content
+        assert "['done']" in events[0].content or "'done'" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_allows_listed_stage(self):
+        """stage=done + allowed=[done] → handler 被调."""
+
+        @with_stage_gate(allowed=["done"])
+        async def handler(chat, args):
+            return [ChatEvent(type="slash_ok", content="ran")]
+
+        events = await handler(_FakeChat(stage="done"), [])
+        assert events[0].type == "slash_ok"
+
+    @pytest.mark.asyncio
+    async def test_allowed_none_means_any_stage(self):
+        """allowed=None → 任意 stage 都允许."""
+
+        @with_stage_gate(allowed=None)
+        async def handler(chat, args):
+            return [ChatEvent(type="slash_ok", content="ran")]
+
+        for stage in ("bootstrap_pending", "insight_pending", "done", "converged"):
+            events = await handler(_FakeChat(stage=stage), [])
+            assert events[0].type == "slash_ok"
+
+
 class _FakeChat:
     """Minimal duck-typed chat for decorator unit tests."""
 

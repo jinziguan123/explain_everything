@@ -32,6 +32,25 @@ def with_stage_gate(
     def deco(fn: Handler) -> Handler:
         @wraps(fn)
         async def wrapped(chat, args):
+            from explain_engine.chat.session import ChatEvent
+            stage = chat._session.meta.stage
+
+            # ① gate check
+            if allowed is not None and stage not in allowed:
+                return [ChatEvent(
+                    type="slash_error",
+                    content=(
+                        f"/{_cmd_name(fn)} 在当前 stage={stage!r} 不允许 "
+                        f"(需 stage ∈ {allowed})."
+                    ),
+                )]
+
             return await fn(chat, args)
         return wrapped
     return deco
+
+
+def _cmd_name(fn) -> str:
+    """`_handle_run` → `run`. 用于 error 文案."""
+    name = fn.__name__
+    return name.removeprefix("_handle_") if name.startswith("_handle_") else name
