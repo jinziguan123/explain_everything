@@ -29,7 +29,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from explain_engine.chat.chat_copy import COMMAND_DESCRIPTIONS
+from explain_engine.chat.chat_copy import COMMAND_DESCRIPTIONS, HELP_GROUPS_ZH
 from explain_engine.chat.slash_stage_rules import with_stage_gate
 
 if TYPE_CHECKING:
@@ -78,27 +78,18 @@ async def _handle_quit(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     return [ChatEvent(type="slash_quit", content="Goodbye. Session saved.")]
 
 
-# Phase 14 Task 16: 按用途 6 分组渲染 /help. 顺序 = 用户典型 flow:
-# 推进 → 干预 → inspection → 管理 → 其他 → 帮助/退出.
-HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Session 推进", ("compress", "run", "rescore")),
-    ("Session 干预 (需先 /compress)", ("predict", "counterfactual")),
-    ("Inspection (read-only)", ("show", "graph", "check")),
-    ("Session 管理", ("new", "resume", "list", "lexicon")),
-    ("其他", ("budget", "compact", "save", "migrate")),
-    ("帮助 / 退出", ("help", "quit")),
-)
-
-
 async def _handle_help(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
-    """List slash commands (6 分组) + tools (含 readonly / HITL flags)."""
+    """所有 slash 命令 6 中文分组 + tools (含 readonly / HITL flag).
+
+    Phase 15: group name + 标题 全中文; HELP_GROUPS_ZH 引自 chat_copy.
+    """
     from explain_engine.chat.session import ChatEvent
     from explain_engine.chat.tools import ALL_TOOLS
 
     cmd_by_name = {c.name: c for c in DEFAULT_COMMANDS}
 
-    lines = ["Available slash commands (local, bypass LLM):", ""]
-    for group_name, cmd_names in HELP_GROUPS:
+    lines = ["所有 slash 命令 (本地处理, 不走 LLM):", ""]
+    for group_name, cmd_names in HELP_GROUPS_ZH:
         lines.append(f"  {group_name}:")
         for n in cmd_names:
             c = cmd_by_name.get(n)
@@ -106,18 +97,17 @@ async def _handle_help(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
                 lines.append(f"    /{c.name} — {c.description}")
         lines.append("")
 
-    # /cf alias 单独提一行
     if "cf" in cmd_by_name:
-        lines.append("  Alias: /cf → /counterfactual")
+        lines.append("  别名: /cf → /counterfactual")
         lines.append("")
 
-    lines.append("Available tools (LLM-callable):")
+    lines.append("可被 LLM 调用的工具:")
     for tool in ALL_TOOLS:
         flags = []
         if tool.is_readonly:
-            flags.append("readonly")
+            flags.append("只读")
         if tool.requires_hitl:
-            flags.append("HITL")
+            flags.append("需人工审查")
         flag_str = f" [{', '.join(flags)}]" if flags else ""
         lines.append(f"  {tool.name}{flag_str}")
     return [ChatEvent(type="slash_help", content="\n".join(lines))]

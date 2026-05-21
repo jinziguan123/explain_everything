@@ -1915,11 +1915,12 @@ class TestHelpGrouping:
         chat = ChatSession("s_e0000012")
         events = await dispatch_slash(chat, "/help")
         content = events[0].content
+        # Phase 15 起 6 中文 group (chat_copy.HELP_GROUPS_ZH)
         for header in (
-            "Session 推进",
-            "Session 干预",
-            "Inspection",
-            "Session 管理",
+            "推进 session",
+            "干预分析",
+            "查看状态",
+            "管理 session",
             "其他",
             "帮助 / 退出",
         ):
@@ -1974,3 +1975,35 @@ class TestSlashRegistryUsesChineseDescriptions:
                 assert f not in c.description, (
                     f"/{c.name} desc 仍含 jargon: '{f}' in '{c.description}'"
                 )
+
+
+class TestHelpGroupingChinese:
+    """Phase 15 Task 11: /help 中文 group header + 不含 Phase 14 英文 jargon."""
+
+    @pytest.mark.asyncio
+    async def test_help_shows_chinese_group_headers(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_a0000001")
+        chat = ChatSession("s_a0000001")
+        events = await dispatch_slash(chat, "/help")
+        content = events[0].content
+        for header in (
+            "推进 session",
+            "干预分析",
+            "查看状态",
+            "管理 session",
+            "其他",
+            "帮助 / 退出",
+        ):
+            assert header in content, f"missing chinese group header: {header}"
+
+    @pytest.mark.asyncio
+    async def test_help_no_english_group_names(self):
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_a0000002")
+        chat = ChatSession("s_a0000002")
+        events = await dispatch_slash(chat, "/help")
+        content = events[0].content
+        # Phase 14 老 group name 应被替换
+        assert "Session 推进" not in content
+        assert "Inspection" not in content
