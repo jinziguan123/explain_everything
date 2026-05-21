@@ -1,4 +1,7 @@
-"""Phase 14: chat slash 命令的 stage gate + transition + hint 装饰器."""
+"""Phase 14: chat slash 命令的 stage gate + transition + hint 装饰器.
+
+Phase 15 起 HINTS_BY_KEY 改 import from chat_copy (single source).
+"""
 
 from __future__ import annotations
 
@@ -6,40 +9,15 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import TYPE_CHECKING
 
+from explain_engine.chat.chat_copy import HINTS_BY_KEY  # single source
+
 if TYPE_CHECKING:
     from explain_engine.chat.session import ChatEvent, ChatSession
 
 Handler = Callable[["ChatSession", list[str]], Awaitable[list["ChatEvent"]]]
 
 
-HINTS_BY_KEY: dict[str, str] = {
-    "need_promote_first": (
-        "session 还没启动 — 自然语言输入一个 question 先建 session, "
-        "然后再 /compress."
-    ),
-    "need_compress_first": (
-        "需要先 /compress 压缩 graph 抽出 abstraction 层. "
-        "当前 stage 不允许这个命令."
-    ),
-    "after_compress": (
-        "▸ 下一步可选:\n"
-        "  /run — 自动跑 reasoning loop 推 drivers (推荐)\n"
-        "  /predict <现象> — 预测某干预的下游效果\n"
-        "  /counterfactual <现象> — 反事实分析"
-    ),
-    "after_run": (
-        "▸ session 已收敛. 可选:\n"
-        "  /predict <现象> — 干预预测\n"
-        "  /counterfactual <现象> — 反事实\n"
-        "  /show — 看完整 graph"
-    ),
-    "after_inference": (
-        "▸ 可继续 /predict 或 /counterfactual 探索, /show 看 graph 更新."
-    ),
-    "after_rescore": (
-        "▸ edge confidence 已重评. /show 看变化, /run 重跑 reasoning loop."
-    ),
-}
+__all__ = ["HINTS_BY_KEY", "with_stage_gate"]
 
 
 def with_stage_gate(
