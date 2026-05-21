@@ -954,9 +954,11 @@ def _render_event(con: Console, event) -> None:
             con.print()
     elif t == "budget_exhausted":
         scope = getattr(event, "scope", "unknown")
+        scope_zh_map = {"per_turn": "本轮", "per_session": "本 session"}
+        scope_zh = scope_zh_map.get(scope, scope)
         con.print(
-            f"[yellow]Budget exhausted ({scope}). "
-            f"Reset via /budget or new turn.[/yellow]"
+            f"[yellow]预算耗尽 ({scope_zh}). "
+            f"用 /budget 重设或开新一轮对话.[/yellow]"
         )
     elif t == "slash_next_step_hint":
         # Phase 14: 灰色 dim 提示 (with_stage_gate 装饰器 yield).

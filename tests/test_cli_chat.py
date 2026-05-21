@@ -173,3 +173,37 @@ class TestReplSwitchSession:
         # 第 1 input: A. 第 2 input: B (切 A→B 成功后). 第 3 input: 应该是 B
         # (切 B→X 失败, recovery 回 B 不是 A).
         assert observed_sids == ["s_aaaaaa01", "s_aaaaaa02", "s_aaaaaa02"]
+
+
+class TestRenderBudgetExhaustedChinese:
+    """Phase 15 Task 9: budget_exhausted scope 字段中文化渲染."""
+
+    def test_per_turn_scope_translated(self):
+        from io import StringIO
+
+        from rich.console import Console
+
+        from explain_engine.chat.loop import BudgetExhaustedEvent
+        from explain_engine.cli import _render_event
+
+        buf = StringIO()
+        con = Console(file=buf, force_terminal=False, width=100)
+        _render_event(con, BudgetExhaustedEvent(scope="per_turn"))
+        out = buf.getvalue()
+        assert "本轮" in out or "本 turn" in out
+        assert "per_turn" not in out
+
+    def test_per_session_scope_translated(self):
+        from io import StringIO
+
+        from rich.console import Console
+
+        from explain_engine.chat.loop import BudgetExhaustedEvent
+        from explain_engine.cli import _render_event
+
+        buf = StringIO()
+        con = Console(file=buf, force_terminal=False, width=100)
+        _render_event(con, BudgetExhaustedEvent(scope="per_session"))
+        out = buf.getvalue()
+        assert "本 session" in out or "本轮 session" in out
+        assert "per_session" not in out
