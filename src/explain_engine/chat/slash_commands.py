@@ -46,6 +46,8 @@ from explain_engine.chat.chat_copy import (
     err_no_llm,
     msg_compress_done,
     msg_rescore_done,
+    msg_resume_already,
+    msg_resume_switching,
     msg_run_done,
     zh,
 )
@@ -576,7 +578,7 @@ async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     if args:
         return [ChatEvent(
             type="slash_error",
-            content="Usage: /resume  (无参数, 弹列表后选号)",
+            content="用法: /resume  (无参数, 弹列表后选号)",
         )]
 
     # SessionStore.list() 自动 sort by created_at desc + log warning 跳过坏 session;
@@ -586,21 +588,21 @@ async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     if not metas:
         return [ChatEvent(
             type="slash_resume",
-            content="当前 project 无 session.",
+            content="当前项目无任何 session.",
         )]
 
     # 渲染表 — 用临时 Console (跟 /new 同款, 避免 from cli import console 反向依赖)
     console = Console()
-    table = Table(title=f"Sessions ({len(metas)})")
+    table = Table(title=f"Session 列表 ({len(metas)})")
     table.add_column("#", style="bold")
     table.add_column("ID", style="cyan")
     table.add_column("问题", style="bold")
-    table.add_column("Stage")
-    table.add_column("Created")
+    table.add_column("阶段")
+    table.add_column("创建时间")
     for i, m in enumerate(metas, start=1):
         is_current = "* " if m.session_id == chat.sid else "  "
         ts = datetime.fromtimestamp(m.created_at).strftime("%Y-%m-%d %H:%M")
-        table.add_row(f"{is_current}{i}", m.session_id, m.question, m.stage, ts)
+        table.add_row(f"{is_current}{i}", m.session_id, m.question, zh(m.stage), ts)
     console.print(table)
 
     # 收 user input. F-1 (2026-05-18): chat.input_provider set 时 (REPL 启动
@@ -634,20 +636,11 @@ async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 
     target_sid = metas[idx - 1].session_id
     if target_sid == chat.sid:
-        return [ChatEvent(
-            type="slash_resume",
-            content=f"已在 session {target_sid}, 不切换.",
-        )]
+        return [ChatEvent(type="slash_resume", content=msg_resume_already(target_sid))]
 
     return [
-        ChatEvent(
-            type="slash_resume",
-            content=f"切换到 session {target_sid}...",
-        ),
-        ChatEvent(
-            type="slash_switch_session",
-            content={"sid": target_sid},
-        ),
+        ChatEvent(type="slash_resume", content=msg_resume_switching(target_sid)),
+        ChatEvent(type="slash_switch_session", content={"sid": target_sid}),
     ]
 
 
@@ -1316,17 +1309,17 @@ async def _handle_list(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     if not metas:
         return [ChatEvent(
             type="slash_list",
-            content="当前 project 无 session.",
+            content="当前项目无任何 session.",
         )]
 
-    table = Table(title=f"Sessions ({len(metas)})")
+    table = Table(title=f"Session 列表 ({len(metas)})")
     table.add_column("ID", style="cyan")
     table.add_column("问题", style="bold")
-    table.add_column("Stage")
-    table.add_column("Created")
+    table.add_column("阶段")
+    table.add_column("创建时间")
     for m in metas:
         ts = datetime.fromtimestamp(m.created_at).strftime("%Y-%m-%d %H:%M")
-        table.add_row(m.session_id, m.question, m.stage, ts)
+        table.add_row(m.session_id, m.question, zh(m.stage), ts)
 
     return [ChatEvent(
         type="slash_list",
@@ -1354,21 +1347,25 @@ async def _handle_lexicon(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     if not variables:
         return [ChatEvent(
             type="slash_lexicon",
-            content="lexicon 暂无变量. 跑 /compress 或退出 chat 让 aclose flush.",
+            content="概念库暂无变量. 跑 /compress 或退出 chat 即可写入概念库.",
         )]
 
-    table = Table(title=f"Variable Lexicon ({len(variables)} vars)")
-    table.add_column("global_id", style="cyan")
+    # abstraction_level 0/1/2 翻成中文短语
+    level_zh_map = {0: "现象", 1: "模式", 2: "深层原因"}
+
+    table = Table(title=f"概念库 ({len(variables)} 项)")
+    table.add_column("全局 ID", style="cyan")
     table.add_column("名称", style="bold")
-    table.add_column("Level", justify="right")
-    table.add_column("reuse", justify="right")
-    table.add_column("avg_ess", justify="right")
-    table.add_column("last_seen", style="dim")
+    table.add_column("层级", justify="right")
+    table.add_column("被复用次数", justify="right")
+    table.add_column("平均本质重要性", justify="right")
+    table.add_column("最近使用", style="dim")
     for v in variables:
+        lvl = v["abstraction_level"]
         table.add_row(
             v["global_id"],
             v["name"],
-            f"L{v['abstraction_level']}",
+            level_zh_map.get(lvl, f"L{lvl}"),
             str(v["fitness"]["reuse_count"]),
             f"{v['fitness']['avg_essentialness']:.2f}",
             v["fitness"]["last_seen_at"][:10],

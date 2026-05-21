@@ -1281,12 +1281,13 @@ class TestSlashList:
 
     @pytest.mark.asyncio
     async def test_empty_project(self):
-        """No session → '当前 project 无 session.' info."""
+        """No session → '当前项目无任何 session.' info."""
         eph = _new_ephemeral()
         events = await dispatch_slash(eph, "/list")
         assert len(events) == 1
         assert events[0].type == "slash_list"
-        assert "无 session" in events[0].content
+        # Phase 15: "当前项目无任何 session."
+        assert "无任何 session" in events[0].content or "无 session" in events[0].content
 
     @pytest.mark.asyncio
     async def test_with_sessions(self):
@@ -1378,8 +1379,9 @@ class TestSlashLexicon:
         assert "Beta" in content
         assert "v_aaaaaaaa" in content
         assert "v_bbbbbbbb" in content
-        assert "L1" in content
-        assert "L2" in content
+        # Phase 15: abstraction_level 翻成中文 (1→模式, 2→深层原因)
+        assert "模式" in content
+        assert "深层原因" in content
 
     @pytest.mark.asyncio
     async def test_ephemeral_works(self):
