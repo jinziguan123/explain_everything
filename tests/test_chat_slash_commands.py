@@ -921,7 +921,8 @@ class TestSlashPredict:
         # input_provider 默认 None
         events = await dispatch_slash(chat, "/predict")
         assert events[0].type == "slash_error"
-        assert "input_provider" in events[0].content
+        # Phase 15: "需要在交互模式下运行 (当前无 input 通道)"
+        assert "交互模式" in events[0].content or "input" in events[0].content
 
     @pytest.mark.asyncio
     async def test_q_cancels(self):

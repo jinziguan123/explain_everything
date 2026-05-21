@@ -36,7 +36,9 @@ from explain_engine.chat.chat_copy import (
     INFO_MID_STAGE_SAVED,
     STATUS_COMPRESS_PROPOSE,
     STATUS_COMPRESS_SCORE,
+    STATUS_COUNTERFACTUAL,
     STATUS_LEXICON_FLUSH,
+    STATUS_PREDICT,
     STATUS_RESCORE,
     STATUS_RUN,
     err_ephemeral_reject,
@@ -1106,20 +1108,17 @@ async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]
         return _ephemeral_reject("predict")
 
     if chat.llm is None:
-        return [ChatEvent(
-            type="slash_error",
-            content="/predict 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
-        )]
+        return [ChatEvent(type="slash_error", content=err_no_llm("predict"))]
 
     if chat.input_provider is None:
         return [ChatEvent(
             type="slash_error",
-            content="/predict 需 input_provider (REPL 模式), 当前 None.",
+            content="/predict 需要在交互模式下运行 (当前无 input 通道).",
         )]
 
     try:
         intervention = (await chat.input_provider(
-            "intervention 描述 (e.g. '如果 X 增加', q 取消): "
+            "干预描述 (e.g. '如果 X 增加', q 取消): "
         )).strip()
     except (EOFError, KeyboardInterrupt):
         return [ChatEvent(type="slash_predict", content="已取消.")]
@@ -1132,28 +1131,19 @@ async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     from explain_engine.engines.prediction import predict as prediction_predict
     try:
         # 2026-05-19 polish: Rich Status spinner — prediction LLM 调用 (~5-15s)
-        with Console().status(
-            "[bold green]调 LLM 跑 prediction...[/bold green]"
-        ):
+        with Console().status(STATUS_PREDICT):
             report = await prediction_predict(chat.state, intervention, chat.llm)
     except Exception as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/predict 失败: {type(exc).__name__}: {exc}",
-        )]
+        return [ChatEvent(type="slash_error", content=err_failed("predict", exc))]
 
     chat.persist()
 
     # Fix 3 (2026-05-19 smoke bug 2): 显 node.name + description 而非裸 ID.
-    # _format_node_brief 从 chat.state.graph.nodes 读 — predict 已经把新 node
-    # add 到 graph (predict 副作用), 所以 c_005 / p_xxx 都能查到.
     new_nodes_block = _format_node_list(chat.state, report.new_node_ids)
     predicted_block = _format_node_list(chat.state, report.predicted_L0_ids)
     activated_block = _format_node_list(chat.state, report.activated_existing_L0)
 
-    # Fix 2 (2026-05-19 smoke bug): 加 top-3 propagation_acts display.
-    # PredictionReport.propagation_acts 是核心信息 (新 concept 通过 edge
-    # 影响现 graph mid-level node 的 activation map). 同样显 name+desc.
+    # Fix 2: top-3 propagation_acts display (新 concept 经因果关系影响现因果图节点).
     prop_acts = getattr(report, "propagation_acts", {})
     if prop_acts:
         top_acts = sorted(prop_acts.items(), key=lambda kv: -abs(kv[1]))[:3]
@@ -1162,16 +1152,16 @@ async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]
             for nid, act in top_acts
         )
     else:
-        prop_lines = "    (无 propagation, intervention 跟现 graph 无 edge 关联)"
+        prop_lines = "    (无影响传导, 干预跟现因果图无关联)"
 
     return [ChatEvent(
         type="slash_predict",
         content=(
-            f"prediction (intervention={intervention!r}):\n"
-            f"  new_nodes:\n{new_nodes_block}\n"
-            f"  predicted_L0:\n{predicted_block}\n"
-            f"  activated_existing_L0:\n{activated_block}\n"
-            f"  top propagation (现 graph mid-level 受影响, sign=activation delta):\n"
+            f"预测结果 (干预: {intervention!r}):\n"
+            f"  新增节点:\n{new_nodes_block}\n"
+            f"  预测的现象:\n{predicted_block}\n"
+            f"  激活的已有现象:\n{activated_block}\n"
+            f"  影响最大的 3 个中间节点 (正负号 = 激活变化方向):\n"
             f"{prop_lines}"
         ),
     )]
@@ -1196,20 +1186,17 @@ async def _handle_counterfactual(chat: ChatSession, args: list[str]) -> list[Cha
         return _ephemeral_reject("counterfactual")
 
     if chat.llm is None:
-        return [ChatEvent(
-            type="slash_error",
-            content="/counterfactual 需要 LLM client; 当前 chat session 启动时未绑定 llm.",
-        )]
+        return [ChatEvent(type="slash_error", content=err_no_llm("counterfactual"))]
 
     if chat.input_provider is None:
         return [ChatEvent(
             type="slash_error",
-            content="/counterfactual 需 input_provider (REPL 模式), 当前 None.",
+            content="/counterfactual 需要在交互模式下运行 (当前无 input 通道).",
         )]
 
     try:
         intervention = (await chat.input_provider(
-            "counterfactual 描述 (e.g. '若用 X 替代 Y', q 取消): "
+            "反事实假设 (e.g. '若用 X 替代 Y', q 取消): "
         )).strip()
     except (EOFError, KeyboardInterrupt):
         return [ChatEvent(type="slash_counterfactual", content="已取消.")]
@@ -1222,19 +1209,14 @@ async def _handle_counterfactual(chat: ChatSession, args: list[str]) -> list[Cha
     from explain_engine.engines.counterfactual import substitute
     try:
         # 2026-05-19 polish: Rich Status spinner — counterfactual LLM 调用 (~5-15s)
-        with Console().status(
-            "[bold green]调 LLM 跑 counterfactual...[/bold green]"
-        ):
+        with Console().status(STATUS_COUNTERFACTUAL):
             report = await substitute(chat.state, intervention, chat.llm)
     except Exception as exc:
-        return [ChatEvent(
-            type="slash_error",
-            content=f"/counterfactual 失败: {type(exc).__name__}: {exc}",
-        )]
+        return [ChatEvent(type="slash_error", content=err_failed("counterfactual", exc))]
 
     # 副作用 = 0, 不 persist.
-    removed_str = ", ".join(report.removed_node_ids) or "(none)"
-    added_str = ", ".join(report.added_node_ids) or "(none)"
+    removed_str = ", ".join(report.removed_node_ids) or "(无)"
+    added_str = ", ".join(report.added_node_ids) or "(无)"
     # Top |diff| > 0.05 (跟 cli 同 cutoff)
     sig_diff = sorted(
         [(nid, v) for nid, v in report.activation_diff.items() if abs(v) > 0.05],
@@ -1242,18 +1224,18 @@ async def _handle_counterfactual(chat: ChatSession, args: list[str]) -> list[Cha
     )[:5]
     diff_lines = (
         "\n".join(f"    {nid}: {v:+.2f}" for nid, v in sig_diff)
-        if sig_diff else "    (无明显 diff)"
+        if sig_diff else "    (无明显差异)"
     )
 
     content_lines = [
-        f"counterfactual (intervention={intervention!r}):",
-        f"  removed:       {removed_str}",
-        f"  substituted:   {added_str}",
-        "  top diff (baseline - cf):",
+        f"反事实分析 (假设: {intervention!r}):",
+        f"  移除:    {removed_str}",
+        f"  替代后:  {added_str}",
+        "  影响最大的差异 (原因果图 - 反事实):",
         diff_lines,
     ]
     if report.alt_narrative:
-        content_lines.append(f"  narrative: {report.alt_narrative}")
+        content_lines.append(f"  替代叙事: {report.alt_narrative}")
 
     return [ChatEvent(
         type="slash_counterfactual",
