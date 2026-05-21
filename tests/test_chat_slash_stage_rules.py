@@ -110,6 +110,67 @@ class TestFailHint:
         assert all(e.type != "slash_next_step_hint" for e in events)
 
 
+class TestSuccessTransition:
+    @pytest.mark.asyncio
+    async def test_stage_updated_on_success(self):
+        """handler 返无 error + success_stage 设 → stage 更新."""
+        chat = _FakeChat(stage="done")
+
+        @with_stage_gate(allowed=["done"], success_stage="converged")
+        async def handler(c, args):
+            return [ChatEvent(type="slash_run", content="ok")]
+
+        await handler(chat, [])
+        assert chat._session.meta.stage == "converged"
+
+    @pytest.mark.asyncio
+    async def test_persist_called_on_success_transition(self):
+        chat = _FakeChat(stage="done")
+
+        @with_stage_gate(allowed=["done"], success_stage="converged")
+        async def handler(c, args):
+            return [ChatEvent(type="slash_run", content="ok")]
+
+        await handler(chat, [])
+        assert chat._persist_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_transition_when_handler_returns_error(self):
+        """handler 自己 yield slash_error → 不 transition."""
+        chat = _FakeChat(stage="done")
+
+        @with_stage_gate(allowed=["done"], success_stage="converged")
+        async def handler(c, args):
+            return [ChatEvent(type="slash_error", content="business logic 出错")]
+
+        await handler(chat, [])
+        assert chat._session.meta.stage == "done"
+        assert chat._persist_count == 0
+
+    @pytest.mark.asyncio
+    async def test_no_transition_when_success_stage_none(self):
+        chat = _FakeChat(stage="done")
+
+        @with_stage_gate(allowed=["done"], success_stage=None)
+        async def handler(c, args):
+            return [ChatEvent(type="slash_predict", content="ok")]
+
+        await handler(chat, [])
+        assert chat._session.meta.stage == "done"
+
+    @pytest.mark.asyncio
+    async def test_idempotent_transition_no_double_persist(self):
+        """stage 已等于 success_stage → 不 persist (no-op)."""
+        chat = _FakeChat(stage="converged")
+
+        @with_stage_gate(allowed=["converged"], success_stage="converged")
+        async def handler(c, args):
+            return [ChatEvent(type="slash_x", content="ok")]
+
+        await handler(chat, [])
+        assert chat._persist_count == 0
+
+
 class _FakeChat:
     """Minimal duck-typed chat for decorator unit tests."""
 

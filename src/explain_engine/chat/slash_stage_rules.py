@@ -51,7 +51,27 @@ def with_stage_gate(
                     ))
                 return events
 
-            return await fn(chat, args)
+            # ② 调 handler
+            events = await fn(chat, args)
+
+            # ③ handler 自己 yield error → 不 transition, 不 hint
+            has_error = any(e.type == "slash_error" for e in events)
+            if has_error:
+                return events
+
+            # ④ stage transition + persist
+            if success_stage is not None and stage != success_stage:
+                chat._session.meta.stage = success_stage
+                if (
+                    hasattr(chat, "persist")
+                    and not getattr(chat, "is_ephemeral", False)
+                ):
+                    try:
+                        chat.persist()
+                    except Exception:
+                        pass  # persist 失败不阻断 hint 显示
+
+            return events
         return wrapped
     return deco
 
