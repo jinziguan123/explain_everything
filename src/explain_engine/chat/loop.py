@@ -142,13 +142,10 @@ async def query_loop(
     chat.next_turn_hint = None
 
     while True:
-        # ── Budget check (per-turn first, fall through to per-session) ──
-        if budget.turn_exhausted():
-            yield BudgetExhaustedEvent(scope="per_turn")
-            return
-        if budget.session_exhausted():
-            yield BudgetExhaustedEvent(scope="per_session")
-            return
+        # 2026-05-20 hotfix: mid-loop budget enforcement 删除. 默认 unlimited;
+        # 即便用户设有限值, 也只在 ChatSession.handle_user_input turn-start
+        # check session_exhausted() 拒下一轮 user 输入 — 当前 turn 必跑完.
+        # budget.consume() (per-tool below) 仍保留 tracking (display 用).
 
         # ── Assemble system prompt (dynamic each iter) ──
         sys_prompt = assemble_system_prompt(
@@ -215,23 +212,13 @@ async def query_loop(
             return
 
         # ── Dispatch each tool call ──
-        # I1: 单次 LLM response 可含多个 tool_use; 仅外层 while 顶部检查 budget
-        # 会让 budget 被 overshoot (e.g. budget=1, response 含 5 tool_use → -4).
-        # 故 dispatch 每个 tool 前再次检查 budget; 0 即 break + 记 scope, 同时
-        # 已 dispatch 的 tool_result 仍 append (部分结果持久, 不丢历史), 然后
-        # yield BudgetExhaustedEvent + return.
+        # 2026-05-20 hotfix: 删 mid-loop budget check (I1 老逻辑). 现在
+        # mid-turn 永不打断 — overshoot 允许 (per_turn_remaining 可走负).
+        # turn-start enforce 由 ChatSession.handle_user_input 在调 query_loop
+        # 前完成. 这里只 consume() track 实际用量.
         tool_result_messages: list[dict[str, Any]] = []
         dispatched_tool_uses: list[dict[str, Any]] = []
-        budget_exhausted_scope: str | None = None
         for tool_use in response.tool_uses:
-            # mid-loop budget check (防 multi-tool response overshoot)
-            if budget.turn_exhausted():
-                budget_exhausted_scope = "per_turn"
-                break
-            if budget.session_exhausted():
-                budget_exhausted_scope = "per_session"
-                break
-
             tool = _tool_by_name(tool_use["name"])
             if tool is None:
                 result = f"unknown tool: {tool_use['name']!r}"
@@ -319,9 +306,5 @@ async def query_loop(
             }
             chat.transcript.append(user_msg)
             chat.storage.append_transcript(chat.sid, user_msg)
-
-        # I1: mid-loop budget break → yield BudgetExhaustedEvent + return
-        # (transcript 已 append 部分 result, 不丢历史)
-        if budget_exhausted_scope is not None:
-            yield BudgetExhaustedEvent(scope=budget_exhausted_scope)
-            return
+        # 2026-05-20 hotfix: mid-loop budget break 删. while 继续, 直到 LLM
+        # 自身停 (无 tool_uses → end_turn → return).

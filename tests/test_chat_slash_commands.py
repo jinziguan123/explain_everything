@@ -503,46 +503,67 @@ class TestSlashBudgetConfig:
         assert "abc" in events[0].content
         assert chat.chat_state.budget_per_turn_limit == before_turn
 
-    @pytest.mark.parametrize("invalid_input", ["-1", "0"])
     @pytest.mark.asyncio
-    async def test_negative_or_zero_rejects(self, invalid_input):
-        """Provider 返 '-1' / '0' → slash_error."""
+    async def test_negative_rejects(self):
+        """2026-05-20 hotfix: 0 现在 valid (=unlimited), 只 -1 才 reject."""
         from explain_engine.chat.session import ChatSession
         _make_done_session("s_bbb00007")
         chat = ChatSession("s_bbb00007")
         before_turn = chat.chat_state.budget_per_turn_limit
 
         async def fake_provider(prompt):
-            return invalid_input
+            return "-1"
         chat.input_provider = fake_provider
 
         events = await dispatch_slash(chat, "/budget")
         assert events[0].type == "slash_error"
-        assert ">= 1" in events[0].content
+        assert ">= 0" in events[0].content
         assert chat.chat_state.budget_per_turn_limit == before_turn
 
     @pytest.mark.asyncio
-    async def test_remaining_capped_to_new_limit(self):
-        """new_limit < 当前 remaining → remaining 被 cap 到 new_limit."""
+    async def test_zero_means_unlimited(self):
+        """2026-05-20 hotfix: 输 0 → 设 unlimited (有效输入, 不再 reject)."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_bbbb0007")
+        chat = ChatSession("s_bbbb0007")
+
+        async def fake_provider(prompt):
+            return "0"  # both prompts answer 0
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/budget")
+        # success 路径 (slash_budget), 不是 error
+        assert events[0].type == "slash_budget"
+        assert "已更新" in events[0].content
+        assert chat.chat_state.budget_per_turn_limit == 0
+        assert chat.chat_state.budget_per_session_limit == 0
+
+    @pytest.mark.asyncio
+    async def test_commit_refills_remaining_to_limit(self):
+        """2026-05-20 hotfix bug 2: /budget commit 把 remaining 拉满 (refill)
+        到新 limit, 不再 min cap. 用户用尽后重设 = 重新授权 budget."""
         from explain_engine.chat.session import ChatSession
         _make_done_session("s_bbb00008")
         chat = ChatSession("s_bbb00008")
-        # 模拟 chat 已跑过几轮, remaining 还是 default 10/50
-        chat.chat_state.budget_per_turn_remaining = 10  # default
-        chat.chat_state.budget_per_session_remaining = 50
+        # 模拟 budget 已用尽 (用户场景: per_session 100000 跑到 0)
+        chat.chat_state.budget_per_turn_remaining = 0
+        chat.chat_state.budget_per_turn_limit = 100000
+        chat.chat_state.budget_per_session_remaining = 0
+        chat.chat_state.budget_per_session_limit = 100000
 
         calls = []
         async def fake_provider(prompt):
             calls.append(prompt)
-            return "3" if len(calls) == 1 else "20"
+            # 用户重设同样 100000 想 refill
+            return "100000"
         chat.input_provider = fake_provider
 
         events = await dispatch_slash(chat, "/budget")
         assert events[0].type == "slash_budget"
         assert "已更新" in events[0].content
-        # remaining 被 cap (从 10 → 3, 从 50 → 20)
-        assert chat.chat_state.budget_per_turn_remaining == 3
-        assert chat.chat_state.budget_per_session_remaining == 20
+        # remaining refilled to limit (老逻辑 min(0,100000)=0 还是 0; bug 修)
+        assert chat.chat_state.budget_per_turn_remaining == 100000
+        assert chat.chat_state.budget_per_session_remaining == 100000
 
     @pytest.mark.asyncio
     async def test_ephemeral_session_supported(self):

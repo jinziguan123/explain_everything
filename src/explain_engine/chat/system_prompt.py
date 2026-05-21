@@ -33,8 +33,8 @@ Question: {question}
 
 # Budget
 
-per-turn remaining: {per_turn_remaining} / {per_turn_limit}
-per-session remaining: {per_session_remaining} / {per_session_limit}
+per-turn: {per_turn_display}
+per-session: {per_session_display}
 
 # Session memory
 
@@ -174,16 +174,27 @@ def assemble_system_prompt(
     """
     ctx = ToolContext(state=state)
     hint_section = f"\n# Last reflect hint\n{hint}\n" if hint else ""
+
+    # 2026-05-20 hotfix: 渲 budget — limit=0 (unlimited) 显 "unlimited (used K)",
+    # finite 显 "{remaining}/{limit} remaining". 不直接喂 LLM 原始负数 (会 confuse).
+    def _budget_display(remaining: int, limit: int) -> str:
+        if limit == 0:
+            used = max(0, -remaining)
+            return f"unlimited (used {used})"
+        return f"{remaining}/{limit} remaining"
+
     return SYSTEM_PROMPT_TEMPLATE.format(
         tool_count=len(ALL_TOOLS),
         tool_catalog=_render_tool_catalog(ctx),
         question=question,
         graph_summary=_render_graph_summary(state),
         multi_signal_summary=_render_multi_signal(state),
-        per_turn_remaining=budget["per_turn_remaining"],
-        per_turn_limit=budget["per_turn_limit"],
-        per_session_remaining=budget["per_session_remaining"],
-        per_session_limit=budget["per_session_limit"],
+        per_turn_display=_budget_display(
+            budget["per_turn_remaining"], budget["per_turn_limit"],
+        ),
+        per_session_display=_budget_display(
+            budget["per_session_remaining"], budget["per_session_limit"],
+        ),
         memory_section=_render_memory_section(memory_md),
         hint_section=hint_section,
     )

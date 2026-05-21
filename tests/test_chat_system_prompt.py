@@ -118,15 +118,30 @@ class TestSystemPromptGraphSummary:
 
 
 class TestSystemPromptBudgetStatus:
-    def test_system_prompt_includes_budget_status(self) -> None:
-        """Prompt 必须含 per-turn / per-session 剩余."""
+    def test_system_prompt_includes_budget_finite_format(self) -> None:
+        """Prompt 含 budget 行. 2026-05-20 hotfix: finite 显 'X/Y remaining'."""
         state = _make_state()
         prompt = assemble_system_prompt(
             state=state, question="why X", memory_md="",
             budget=_make_budget(per_turn=7, per_session=43),
         )
-        assert "7 / 10" in prompt  # per-turn remaining/limit
-        assert "43 / 50" in prompt  # per-session remaining/limit
+        assert "7/10 remaining" in prompt  # per-turn
+        assert "43/50 remaining" in prompt  # per-session
+
+    def test_system_prompt_unlimited_budget(self) -> None:
+        """2026-05-20 hotfix: limit=0 (unlimited) 显 'unlimited (used K)'."""
+        state = _make_state()
+        prompt = assemble_system_prompt(
+            state=state, question="why X", memory_md="",
+            budget={
+                "per_turn_remaining": -5,  # 已用 5
+                "per_turn_limit": 0,
+                "per_session_remaining": -20,  # 已用 20
+                "per_session_limit": 0,
+            },
+        )
+        assert "unlimited (used 5)" in prompt
+        assert "unlimited (used 20)" in prompt
 
 
 class TestSystemPromptMemoryHint:

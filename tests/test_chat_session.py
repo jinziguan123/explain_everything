@@ -45,16 +45,21 @@ class TestChatSessionLoad:
         # No transcript / memory yet for fresh chat
         assert chat.transcript == []
         assert chat.memory_md == ""
-        # chat_state defaults
+        # chat_state defaults (2026-05-20 hotfix: budget 默 0 = unlimited)
         assert chat.chat_state.turn_count == 0
-        assert chat.chat_state.budget_per_session_remaining == 50
+        assert chat.chat_state.budget_per_session_remaining == 0
+        assert chat.chat_state.budget_per_session_limit == 0  # unlimited
 
     def test_load_creates_empty_sidecar_state(self) -> None:
-        """If no chat_state.json exists, default values used."""
+        """If no chat_state.json exists, default values used.
+
+        2026-05-20 hotfix: 默 budget 改 0 (unlimited sentinel).
+        """
         _make_done_session("s_002abcde")
         chat = ChatSession("s_002abcde")
         assert isinstance(chat.chat_state, ChatStateDict)
-        assert chat.chat_state.budget_per_turn_remaining == 10
+        assert chat.chat_state.budget_per_turn_remaining == 0
+        assert chat.chat_state.budget_per_turn_limit == 0  # unlimited
 
     def test_load_missing_session_raises(self) -> None:
         with pytest.raises(FileNotFoundError):
@@ -109,9 +114,15 @@ class TestHandleUserInput:
 
     @pytest.mark.asyncio
     async def test_non_slash_resets_per_turn_budget(self) -> None:
+        """Turn start 时 reset_turn() 把 per-turn remaining 拉回 limit.
+
+        2026-05-20 hotfix: 默 unlimited (limit=0) → reset 把 remaining 归 0
+        (tracking 起点). 老 case 默 10/50 已废.
+        """
         _make_done_session("s_007abcde")
         chat = ChatSession("s_007abcde")
-        # Simulate prior turn ate budget
+        # 设 finite limit + 残余 remaining 模拟前 turn 用过
+        chat.chat_state.budget_per_turn_limit = 10
         chat.chat_state.budget_per_turn_remaining = 3
         events: list[ChatEvent] = []
         async for ev in chat.handle_user_input("test"):

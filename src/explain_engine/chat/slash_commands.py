@@ -324,21 +324,37 @@ async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     return [ChatEvent(type="slash_graph", content=content)]
 
 
+def _format_budget_value(limit: int, remaining: int) -> str:
+    """渲单轴 budget: '无限 (已用 K)' for unlimited, '{limit} (剩余 {remaining})' for finite.
+
+    unlimited (limit==0) 时 remaining 走负值 tracking (BudgetCounter.consume 也扣),
+    display 用 -remaining = 已用次数.
+    """
+    if limit == 0:
+        used = max(0, -remaining)
+        return f"无限 (已用 {used})"
+    return f"{limit}  (剩余 {remaining})"
+
+
 async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
-    """Phase 11 Wave 2.5: interactive config (取代 cli `--tool-budget-*` flag).
+    """Phase 11 Wave 2.5 + 2026-05-20 hotfix: interactive budget config.
 
     Display 当前 per-turn / per-session limit + remaining, 然后 sequential
     prompt 收 2 个新 limit. 用 chat.chat_state 直接读写 (而非 chat.budget
-    BudgetCounter property), 让 EphemeralChatSession 也支持 (Wave 1 review
-    I-1 fold; 不变量 #5 设计 §3.2).
+    BudgetCounter property), 让 EphemeralChatSession 也支持.
+
+    2026-05-20 hotfix 行为变化:
+    - 默 limit=0 = unlimited (新 session). Display "无限 (已用 K)".
+    - 输 0 = 设 unlimited (有效输入, 不再报 < 1 error).
+    - Commit 时 remaining = limit (full refill, 不是 min cap). 修 bug:
+      用户 100k 已用尽再设 100k limit, 老逻辑 min(0, 100000)=0 还是 0;
+      新逻辑直接 remaining=new_limit, "用尽后重设 = 重新授权".
 
     UX:
-    - chat.input_provider is None: display-only 返 slash_budget info (test /
-      非 REPL 路径).
+    - chat.input_provider is None: display-only (test / 非 REPL).
     - 输 'q' / 'quit': 取消, 不改.
     - 空输入: 保持原 limit.
-    - 非数字 / < 1: 返 slash_error, 不改.
-    - remaining > new_limit: cap 到 new_limit (避免 inconsistent state).
+    - 非数字 / < 0: 返 slash_error, 不改.
     """
     from rich.console import Console
 
@@ -349,10 +365,8 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     console = Console()
     console.print(
         f"\n[bold]Current budget[/bold]\n"
-        f"  per-turn limit:    {cs.budget_per_turn_limit}  "
-        f"(剩余 {cs.budget_per_turn_remaining})\n"
-        f"  per-session limit: {cs.budget_per_session_limit}  "
-        f"(剩余 {cs.budget_per_session_remaining})\n"
+        f"  per-turn limit:    {_format_budget_value(cs.budget_per_turn_limit, cs.budget_per_turn_remaining)}\n"
+        f"  per-session limit: {_format_budget_value(cs.budget_per_session_limit, cs.budget_per_session_remaining)}\n"
     )
 
     if chat.input_provider is None:
@@ -364,7 +378,7 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     # 收 per-turn
     try:
         new_turn_str = await chat.input_provider(
-            f"新 per-turn limit (回车保持 {cs.budget_per_turn_limit}, q 取消): "
+            f"新 per-turn limit (回车保持 {cs.budget_per_turn_limit}, 0=无限, q 取消): "
         )
     except (EOFError, KeyboardInterrupt):
         return [ChatEvent(type="slash_budget", content="已取消.")]
@@ -377,10 +391,10 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     if new_turn_str:
         try:
             new_turn = int(new_turn_str)
-            if new_turn < 1:
+            if new_turn < 0:
                 return [ChatEvent(
                     type="slash_error",
-                    content="per-turn limit 需 >= 1; 已取消.",
+                    content="per-turn limit 需 >= 0 (0=无限); 已取消.",
                 )]
         except ValueError:
             return [ChatEvent(
@@ -391,7 +405,7 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     # 收 per-session
     try:
         new_session_str = await chat.input_provider(
-            f"新 per-session limit (回车保持 {cs.budget_per_session_limit}, q 取消): "
+            f"新 per-session limit (回车保持 {cs.budget_per_session_limit}, 0=无限, q 取消): "
         )
     except (EOFError, KeyboardInterrupt):
         return [ChatEvent(type="slash_budget", content="已取消.")]
@@ -404,10 +418,10 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     if new_session_str:
         try:
             new_session = int(new_session_str)
-            if new_session < 1:
+            if new_session < 0:
                 return [ChatEvent(
                     type="slash_error",
-                    content="per-session limit 需 >= 1; 已取消.",
+                    content="per-session limit 需 >= 0 (0=无限); 已取消.",
                 )]
         except ValueError:
             return [ChatEvent(
@@ -415,15 +429,14 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
                 content=f"输入非数字 {new_session_str!r}; 已取消.",
             )]
 
-    # Apply + cap remaining
+    # Apply + refill remaining (2026-05-20 hotfix bug 2: 老逻辑 min(remaining,
+    # new_limit) 只 cap 不 refill, 用尽后无法重设有效 budget).
     old_turn = cs.budget_per_turn_limit
     old_session = cs.budget_per_session_limit
     cs.budget_per_turn_limit = new_turn
     cs.budget_per_session_limit = new_session
-    cs.budget_per_turn_remaining = min(cs.budget_per_turn_remaining, new_turn)
-    cs.budget_per_session_remaining = min(
-        cs.budget_per_session_remaining, new_session
-    )
+    cs.budget_per_turn_remaining = new_turn  # refill (0 if unlimited)
+    cs.budget_per_session_remaining = new_session  # refill (0 if unlimited)
 
     # Wave 2.5 review I-A: slash 改 chat_state 后立即 persist, 防进程中断丢
     # 配置. ephemeral 无 persist (没 sid), 跳过 — 改动在 in-memory chat_state,
@@ -434,12 +447,15 @@ async def _handle_budget(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
         except Exception:
             pass  # persist 失败不该 block /budget 返回
 
+    def _fmt_limit(v: int) -> str:
+        return "无限" if v == 0 else str(v)
+
     return [ChatEvent(
         type="slash_budget",
         content=(
             f"[已更新]\n"
-            f"  per-turn: {old_turn} → {new_turn}\n"
-            f"  per-session: {old_session} → {new_session}"
+            f"  per-turn: {_fmt_limit(old_turn)} → {_fmt_limit(new_turn)}\n"
+            f"  per-session: {_fmt_limit(old_session)} → {_fmt_limit(new_session)}"
         ),
     )]
 

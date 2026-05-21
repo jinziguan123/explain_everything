@@ -26,13 +26,13 @@ class TestEphemeralChatSession:
         assert eph.memory_md == ""
 
     def test_default_chat_state(self):
-        """默认 budget 10/50 (Phase 9 ChatStateDict)."""
+        """默认 budget unlimited (2026-05-20 hotfix: 0 = unlimited sentinel)."""
         from explain_engine.chat.ephemeral import EphemeralChatSession
         from explain_engine.persistence.storage_v2 import StorageV2
 
         eph = EphemeralChatSession(storage=StorageV2())
-        assert eph.chat_state.budget_per_turn_limit == 10
-        assert eph.chat_state.budget_per_session_limit == 50
+        assert eph.chat_state.budget_per_turn_limit == 0
+        assert eph.chat_state.budget_per_session_limit == 0
 
     def test_input_provider_default_none(self):
         """input_provider 默认 None, REPL 启动时 set."""

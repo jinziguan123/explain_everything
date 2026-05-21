@@ -63,21 +63,28 @@ class ChatStateDict:
 
     字段:
     - budget_per_turn_remaining / budget_per_turn_limit:
-        单 turn 内最多 N 次 LLM 调用. 每 turn 开始重置为 limit.
+        单 turn 内 tool 调用 tracking. 每 turn 开始重置为 limit.
+        2026-05-20 重构: per_turn 仅 tracking, 不 enforce — 删 mid-loop check.
     - budget_per_session_remaining / budget_per_session_limit:
-        整 session 跨 turn 累计预算. 不重置.
+        整 session 跨 turn 累计预算. 不重置. 由 handle_user_input 在 turn-start
+        check session_exhausted(), 拒受新 user 输入. mid-turn 不打断.
     - last_compact_at_turn: 上次 memory.md compact 在哪个 turn (Phase 9 Wave E).
     - turn_count: 累计 user input 次数.
     - last_input_alignment: Phase 8 input_validation 报告 (Phase 8 B fix 折叠位置).
         等价于 Phase 8 CognitiveState.last_input_alignment_report,
         Wave E.2 完成迁移后从 state 移除, 仅保留在此. 字段名缩写不带 _report
         以减少 chat_state.json 噪声.
+
+    Budget sentinel 约定 (2026-05-20 hotfix):
+    - limit == 0 → unlimited (default). exhausted() 永 False. /budget 显 "无限".
+    - limit > 0  → finite. exhausted at remaining <= 0. turn-start enforce.
+    - 默 0/0 = 全 unlimited. 用户 /budget 可设有限值 (含 0 = 还原 unlimited).
     """
 
-    budget_per_turn_remaining: int = 10
-    budget_per_session_remaining: int = 50
-    budget_per_turn_limit: int = 10
-    budget_per_session_limit: int = 50
+    budget_per_turn_remaining: int = 0
+    budget_per_session_remaining: int = 0
+    budget_per_turn_limit: int = 0
+    budget_per_session_limit: int = 0
     last_compact_at_turn: int = 0
     turn_count: int = 0
     last_input_alignment: dict | None = None
@@ -246,6 +253,16 @@ class ChatSession:
             # NOTE: slash 不 append transcript / 不 bump turn_count —
             # 这些是管理命令, 非真正 user→assistant 对话.
             return
+
+        # 2026-05-20 hotfix: turn-start budget enforce. 用户设有限值且 session
+        # 已用尽 → 拒受新 user 输入 (不调 query_loop, 不进 LLM 流). 默 unlimited
+        # (limit==0) → session_exhausted 永 False, 不会 hit 这条. mid-turn 不
+        # enforce (query_loop 已删 mid-loop check), 保证当前 turn 不被打断.
+        if self.budget.session_exhausted():
+            from explain_engine.chat.loop import BudgetExhaustedEvent
+            yield BudgetExhaustedEvent(scope="per_session")
+            return
+
         # Append user message
         self.transcript.append({
             "role": "user",
