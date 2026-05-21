@@ -60,8 +60,11 @@ class TestGateCheck:
         assert called["n"] == 0
         assert len(events) == 1
         assert events[0].type == "slash_error"
-        assert "bootstrap_pending" in events[0].content
-        assert "['done']" in events[0].content or "'done'" in events[0].content
+        # Phase 15: stage 值 + allowed list 翻成中文, 不直露英文
+        assert "等待启动" in events[0].content
+        assert "已归纳" in events[0].content
+        assert "bootstrap_pending" not in events[0].content
+        assert "['done']" not in events[0].content
 
     @pytest.mark.asyncio
     async def test_allows_listed_stage(self):

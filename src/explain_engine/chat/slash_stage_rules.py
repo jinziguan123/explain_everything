@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import TYPE_CHECKING
 
-from explain_engine.chat.chat_copy import HINTS_BY_KEY  # single source
+from explain_engine.chat.chat_copy import HINTS_BY_KEY, err_stage_not_allowed
 
 if TYPE_CHECKING:
     from explain_engine.chat.session import ChatEvent, ChatSession
@@ -50,10 +50,7 @@ def with_stage_gate(
             if allowed is not None and stage not in allowed:
                 events = [ChatEvent(
                     type="slash_error",
-                    content=(
-                        f"/{_cmd_name(fn)} 在当前 stage={stage!r} 不允许 "
-                        f"(需 stage ∈ {allowed})."
-                    ),
+                    content=err_stage_not_allowed(_cmd_name(fn), stage, allowed),
                 )]
                 if fail_hint_key and fail_hint_key in HINTS_BY_KEY:
                     events.append(ChatEvent(
