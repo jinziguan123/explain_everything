@@ -329,11 +329,17 @@ async def flush_to_lexicon(
     """
     path = storage.knowledge_dir() / "variables.json"
     lexicon = _load_lexicon(path)
+    log_dir = storage.knowledge_dir().parent / "logs"
     # Phase 13: lazy embedding backfill. Wired here (not _load_lexicon) so
     # read-only paths (/lexicon display, _select_top_k_vars for prompt prior)
     # don't trigger BGE-M3 model load. flush_to_lexicon is the natural write
     # path — migration runs at most once per session here.
     _migrate_lexicon_embeddings(lexicon, path)
+    # Phase 13 hotfix #6 (2026-05-20): retroactive cross-pair cosine merge.
+    # 兼修 batch embed 早期静默失败导致的 dirty data (entries 应合但分散) +
+    # 防同 scenario 再发 (下次 flush 必跑一遍). 计算 NxN cosine matrix, N=26
+    # 时毫秒级. 真大 lexicon (1k+) 也秒级 — 可接受.
+    _retroactive_dedup(lexicon, path, log_dir)
 
     # 收集 promoted candidates + sort by activation desc
     candidates = [
@@ -367,14 +373,21 @@ async def flush_to_lexicon(
             vecs = embedder.embed(canonicals)
             embeddings = [vec.tolist() for vec in vecs]
         except Exception as exc:
-            logging.warning(
+            # Phase 13 hotfix #6 (2026-05-20): warning → error.
+            # 旧 silent warning 让用户不知道 batch embed 失败 → entries 全 None
+            # 插入, dedup 全没 trigger. 升 error 让用户立刻看到 (console 红字),
+            # 配合 retroactive_dedup 修旧 dirty data, 双层保护.
+            # 不 raise — 保持 fallback 行为 (entries 仍能写入, 只是无 dedup),
+            # 下次 flush 时 _migrate_lexicon_embeddings 会 backfill + dedup 兜底.
+            logging.error(
                 f"flush_to_lexicon batch embed failed: "
                 f"{type(exc).__name__}: {exc}. "
-                "Falling back to embedding=None for all candidates."
+                "Falling back to embedding=None for all candidates. "
+                "(retroactive_dedup will merge on next flush 兜底, "
+                "but please check BGE-M3 setup: model download / MPS / disk.)"
             )
 
-    # Phase 13 Wave 2: audit log directory (sibling of knowledge/).
-    log_dir = storage.knowledge_dir().parent / "logs"
+    # log_dir 在前面 retroactive_dedup 处已计算, 这里复用.
 
     promoted = 0
     for node, canonical_mech, embedding in zip(
@@ -471,6 +484,139 @@ def _build_embeddings_matrix(
     else:
         matrix = np.zeros((0, EMBEDDING_DIM), dtype=np.float32)
     return matrix, idx_map
+
+
+def _retroactive_dedup(
+    lexicon: dict[str, Any],
+    path: Path | None,
+    log_dir: Path | None = None,
+    threshold: float = 0.85,
+) -> int:
+    """Phase 13 hotfix #6 (2026-05-20): cross-pair cosine merge sweep.
+
+    根因: 早期 flush 时 batch embed 静默 except (BGE-M3 首次下载未完 / MPS 初始
+    crash) → entries 全 embedding=None 插入, _upsert_var 走 hash match 全 miss,
+    全 brand new. 后续 _migrate_lexicon_embeddings backfill embedding 但
+    entries 已分散 — 没自动合. 这条 sweep 在每次 flush 时跑, 把 sim > 0.85 的
+    entry pair 合并 (chronologically: 早 first_seen 的为 winner). 兼修旧 dirty
+    data + 防同 scenario 再发.
+
+    Algorithm (greedy chronological):
+        1. 收集有 embedding 的 entry (None / 缺 key 跳过).
+        2. 按 first_seen_at asc 排序 (早的为 winner candidate).
+        3. 算 NxN cosine matrix. 遍历 j ∈ [1, N): 找最早未被吸收的 i (i<j) 满足
+           sim(i,j) > threshold → j 被 i 吸收. 找到 break.
+        4. 应用合并: 把 loser 的 source_sessions / fitness 累加进 winner.
+           winner 的 name/description/canonical 不动 (chronological 保留).
+        5. 写 audit log per merge (沿用 write_merge_audit, 跟 _upsert_var 同形).
+        6. 从 lexicon["variables"] 移除被吸收的 entry; merged > 0 时存盘.
+
+    Args:
+        lexicon: dict, mutated in-place.
+        path: 写回 location. None → 不 I/O (test-only / dry-run).
+        log_dir: audit log 目录. None → 不写 audit.
+        threshold: cosine cutoff. default 0.85 (= LEXICON_MERGE_THRESHOLD).
+
+    Returns:
+        被合并的 entry 数 (= 从 lexicon 移除的数).
+    """
+    entries = lexicon.get("variables", [])
+    if len(entries) < 2:
+        return 0
+
+    # 收集有 embedding 的 (保留原 index 用于后续 remove)
+    embedded: list[tuple[int, dict[str, Any]]] = [
+        (i, e) for i, e in enumerate(entries) if e.get("embedding")
+    ]
+    if len(embedded) < 2:
+        return 0
+
+    # 按 first_seen 升序 排 (早的 = winner)
+    embedded.sort(key=lambda x: x[1]["fitness"]["first_seen_at"])
+
+    # NxN cosine matrix
+    matrix = np.asarray([e["embedding"] for _, e in embedded], dtype=np.float32)
+    norms = np.linalg.norm(matrix, axis=1)
+    norms_safe = np.maximum(norms, 1e-9)
+    normalized = matrix / norms_safe[:, None]
+    sims = normalized @ normalized.T
+
+    N = len(embedded)
+    absorbed_into: dict[int, int] = {}  # sorted_idx_j → sorted_idx_i (winner)
+    for j in range(1, N):
+        if j in absorbed_into:
+            continue
+        for i in range(j):
+            if i in absorbed_into:
+                continue
+            if sims[i, j] > threshold:
+                absorbed_into[j] = i
+                break
+
+    if not absorbed_into:
+        return 0
+
+    # 应用 merge + 收 audit records
+    audit_records: list[dict[str, Any]] = []
+    for j, i in absorbed_into.items():
+        winner = embedded[i][1]
+        loser = embedded[j][1]
+
+        # Union source_sessions (preserve order, skip dup)
+        for sid in loser["source_sessions"]:
+            if sid not in winner["source_sessions"]:
+                winner["source_sessions"].append(sid)
+
+        # Running-avg merge fitness
+        wf = winner["fitness"]
+        lf = loser["fitness"]
+        w_count = wf["reuse_count"]
+        l_count = lf["reuse_count"]
+        new_count = w_count + l_count
+        wf["avg_essentialness"] = (
+            wf["avg_essentialness"] * w_count
+            + lf["avg_essentialness"] * l_count
+        ) / new_count
+        wf["avg_consistency"] = (
+            wf["avg_consistency"] * w_count
+            + lf["avg_consistency"] * l_count
+        ) / new_count
+        wf["reuse_count"] = new_count
+        wf["last_seen_at"] = max(wf["last_seen_at"], lf["last_seen_at"])
+
+        audit_records.append({
+            "merged_into": winner["global_id"],
+            "merged_into_canonical": winner["canonical_mechanism"][:80],
+            "merged_from": loser["canonical_mechanism"][:80],
+            "sim": float(sims[i, j]),
+            "evidence_ids": list(loser["source_sessions"]),
+        })
+
+    # Audit log
+    if log_dir is not None:
+        for rec in audit_records:
+            write_merge_audit(
+                log_dir=log_dir,
+                merged_into=rec["merged_into"],
+                merged_into_canonical=rec["merged_into_canonical"],
+                merged_from=rec["merged_from"],
+                sim=rec["sim"],
+                evidence_ids=rec["evidence_ids"],
+            )
+
+    # Remove absorbed entries (按 lexicon["variables"] 原 idx)
+    absorbed_original_indices = {embedded[j][0] for j in absorbed_into}
+    lexicon["variables"] = [
+        e for idx, e in enumerate(entries)
+        if idx not in absorbed_original_indices
+    ]
+
+    merged_count = len(absorbed_into)
+    if merged_count > 0 and path is not None:
+        lexicon["updated_at"] = _now_iso()
+        _save_lexicon(path, lexicon)
+
+    return merged_count
 
 
 def _migrate_lexicon_embeddings(

@@ -1290,3 +1290,201 @@ class TestGetLexiconTopKForCompress:
 
         result = get_lexicon_top_k_for_compress(storage, k=0)
         assert result == []
+
+
+class TestRetroactiveDedup:
+    """Phase 13 hotfix #6 (2026-05-20): retroactive cross-pair cosine merge.
+
+    根因: 早期 flush 时 batch embed 静默失败 → entries 全 embedding=None 插入,
+    无 dedup → 后续 migration backfill embedding 但 entries 已分散. 这条修
+    补丁: 每次 flush 之前主动跑一遍 cross-pair cosine, 把 sim > 0.85 的
+    entry pair 合并 (chronologically: 早 first_seen 的为 winner).
+
+    audit log 走原 write_merge_audit, 保持 forensic 一致.
+    """
+
+    def _make_entry(
+        self,
+        gid: str,
+        name: str = "n",
+        canonical: str = "c",
+        sid: str = "s_x0000001",
+        embedding: list[float] | None = None,
+        first_seen: str = "2026-05-20T00:00:00Z",
+        reuse_count: int = 1,
+        avg_essentialness: float = 0.5,
+    ) -> dict:
+        return {
+            "global_id": gid,
+            "name": name,
+            "description": "d",
+            "abstraction_level": 1,
+            "epistemic": "insight",
+            "fitness": {
+                "reuse_count": reuse_count,
+                "avg_essentialness": avg_essentialness,
+                "avg_consistency": 0.5,
+                "first_seen_at": first_seen,
+                "last_seen_at": first_seen,
+            },
+            "canonical_mechanism": canonical,
+            "source_sessions": [sid],
+            "embedding": embedding,
+        }
+
+    def _make_lexicon(self, entries):
+        return {
+            "version": 1,
+            "updated_at": "2026-05-20T00:00:00Z",
+            "variables": list(entries),
+        }
+
+    def test_high_sim_pair_merged_into_earlier_entry(self, tmp_path):
+        """2 entries with cos=1.0 → merge into the chronologically earlier one."""
+        from explain_engine.engines.lexicon import _retroactive_dedup
+
+        emb = [1.0] + [0.0] * 1023
+        # winner: earlier first_seen
+        a = self._make_entry(
+            "v_aaaa1111", name="winner", canonical="c_a", sid="s_a0000001",
+            embedding=emb, first_seen="2026-05-19T00:00:00Z",
+        )
+        b = self._make_entry(
+            "v_bbbb2222", name="loser", canonical="c_b", sid="s_b0000002",
+            embedding=emb, first_seen="2026-05-20T00:00:00Z",
+        )
+        lexicon = self._make_lexicon([a, b])
+        path = tmp_path / "variables.json"
+        log_dir = tmp_path / "logs"
+
+        merged = _retroactive_dedup(lexicon, path, log_dir)
+        assert merged == 1
+        # 1 entry left, winner kept
+        assert len(lexicon["variables"]) == 1
+        kept = lexicon["variables"][0]
+        assert kept["global_id"] == "v_aaaa1111"  # earlier first_seen wins
+        # source_sessions union (winner first, loser appended)
+        assert kept["source_sessions"] == ["s_a0000001", "s_b0000002"]
+        # reuse_count summed
+        assert kept["fitness"]["reuse_count"] == 2
+        # audit log 1 line
+        audit_logs = list(log_dir.glob("lexicon_merge_*.jsonl"))
+        assert len(audit_logs) == 1
+        import json as _json
+        rec = _json.loads(audit_logs[0].read_text(encoding="utf-8").strip())
+        assert rec["merged_into"] == "v_aaaa1111"
+        assert rec["sim"] >= 0.99
+
+    def test_low_sim_pair_not_merged(self, tmp_path):
+        """orthogonal embedding (cos=0) → no merge."""
+        from explain_engine.engines.lexicon import _retroactive_dedup
+
+        a = self._make_entry(
+            "v_a", embedding=[1.0] + [0.0] * 1023,
+        )
+        b = self._make_entry(
+            "v_b", embedding=[0.0, 1.0] + [0.0] * 1022,
+        )
+        lexicon = self._make_lexicon([a, b])
+        merged = _retroactive_dedup(lexicon, tmp_path / "variables.json", tmp_path / "logs")
+        assert merged == 0
+        assert len(lexicon["variables"]) == 2
+
+    def test_no_embedding_entries_skipped(self, tmp_path):
+        """entries 没 embedding → 不参与 dedup (legacy / migration 失败 case)."""
+        from explain_engine.engines.lexicon import _retroactive_dedup
+
+        a = self._make_entry("v_a", embedding=None)
+        b = self._make_entry("v_b", embedding=None)
+        lexicon = self._make_lexicon([a, b])
+        merged = _retroactive_dedup(lexicon, tmp_path / "variables.json", tmp_path / "logs")
+        assert merged == 0
+        assert len(lexicon["variables"]) == 2
+
+    def test_transitive_merge_three_entries(self, tmp_path):
+        """3 entries 全 cos=1.0 互相 → merge 成 1 (winner = 最早), reuse=3."""
+        from explain_engine.engines.lexicon import _retroactive_dedup
+
+        emb = [1.0] + [0.0] * 1023
+        a = self._make_entry(
+            "v_a", embedding=emb, sid="s1", first_seen="2026-05-18T00:00:00Z",
+        )
+        b = self._make_entry(
+            "v_b", embedding=emb, sid="s2", first_seen="2026-05-19T00:00:00Z",
+        )
+        c = self._make_entry(
+            "v_c", embedding=emb, sid="s3", first_seen="2026-05-20T00:00:00Z",
+        )
+        lexicon = self._make_lexicon([a, b, c])
+        merged = _retroactive_dedup(lexicon, tmp_path / "variables.json", tmp_path / "logs")
+        assert merged == 2  # b, c merged into a
+        assert len(lexicon["variables"]) == 1
+        kept = lexicon["variables"][0]
+        assert kept["global_id"] == "v_a"
+        assert sorted(kept["source_sessions"]) == ["s1", "s2", "s3"]
+        assert kept["fitness"]["reuse_count"] == 3
+
+    def test_zero_merges_no_file_write(self, tmp_path):
+        """No merge happens → lexicon file not written (避免无意义 I/O)."""
+        from explain_engine.engines.lexicon import _retroactive_dedup, _save_lexicon
+
+        a = self._make_entry("v_a", embedding=[1.0] + [0.0] * 1023)
+        lexicon = self._make_lexicon([a])
+        path = tmp_path / "variables.json"
+        _save_lexicon(path, lexicon)
+        mtime_before = path.stat().st_mtime
+        import time
+        time.sleep(0.01)
+        merged = _retroactive_dedup(lexicon, path, tmp_path / "logs")
+        assert merged == 0
+        # File not re-written
+        assert path.stat().st_mtime == mtime_before
+
+    def test_merge_preserves_winner_metadata(self, tmp_path):
+        """Winner 的 name/description/canonical 不被 loser 覆盖."""
+        from explain_engine.engines.lexicon import _retroactive_dedup
+
+        emb = [1.0] + [0.0] * 1023
+        winner = self._make_entry(
+            "v_w", name="winner_name", canonical="winner_canonical",
+            embedding=emb, first_seen="2026-05-18T00:00:00Z",
+        )
+        loser = self._make_entry(
+            "v_l", name="loser_name", canonical="loser_canonical",
+            embedding=emb, first_seen="2026-05-20T00:00:00Z",
+        )
+        lexicon = self._make_lexicon([winner, loser])
+        _retroactive_dedup(lexicon, tmp_path / "variables.json", tmp_path / "logs")
+        kept = lexicon["variables"][0]
+        assert kept["name"] == "winner_name"
+        assert kept["canonical_mechanism"] == "winner_canonical"
+
+    def test_audit_log_includes_sim_and_canonical_snippets(self, tmp_path):
+        """audit log 跟 _upsert_var merge 同形, 含 merged_into / merged_from /
+        sim / evidence_ids."""
+        import json as _json
+
+        from explain_engine.engines.lexicon import _retroactive_dedup
+
+        emb = [1.0] + [0.0] * 1023
+        a = self._make_entry(
+            "v_a", canonical="canonical A (kept)",
+            embedding=emb, first_seen="2026-05-18T00:00:00Z",
+            sid="s_aaa",
+        )
+        b = self._make_entry(
+            "v_b", canonical="canonical B (absorbed)",
+            embedding=emb, first_seen="2026-05-20T00:00:00Z",
+            sid="s_bbb",
+        )
+        lexicon = self._make_lexicon([a, b])
+        log_dir = tmp_path / "logs"
+        _retroactive_dedup(lexicon, tmp_path / "variables.json", log_dir)
+        audit_logs = list(log_dir.glob("lexicon_merge_*.jsonl"))
+        assert len(audit_logs) == 1
+        rec = _json.loads(audit_logs[0].read_text(encoding="utf-8").strip())
+        assert rec["merged_into"] == "v_a"
+        assert "canonical A" in rec["merged_into_canonical"]
+        assert "canonical B" in rec["merged_from"]
+        assert rec["sim"] >= 0.99
+        assert "s_bbb" in rec["evidence_ids"]
