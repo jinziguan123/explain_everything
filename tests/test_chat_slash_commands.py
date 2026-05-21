@@ -1666,3 +1666,46 @@ class TestSlashStageGateCounterfactual:
             "不允许" in (e.content if isinstance(e.content, str) else "")
             for e in events
         )
+
+
+class TestSlashStageGateRescore:
+    """Phase 14: /rescore allowed=None (任意 stage), success_hint=after_rescore."""
+
+    @pytest.mark.asyncio
+    async def test_rescore_allowed_at_any_stage(self, monkeypatch):
+        """allowed=None → bootstrap_pending 也允许 (不 gate)."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e000000a", stage="bootstrap_pending")
+        chat = ChatSession("s_e000000a", llm=object())  # type: ignore[arg-type]
+
+        async def fake_rescore(state, llm):
+            return {}
+        monkeypatch.setattr(
+            "explain_engine.engines.rescore.rescore_session", fake_rescore,
+        )
+
+        events = await dispatch_slash(chat, "/rescore")
+        assert not any(
+            "不允许" in (e.content if isinstance(e.content, str) else "")
+            for e in events
+        )
+
+    @pytest.mark.asyncio
+    async def test_rescore_yields_after_rescore_hint(self, monkeypatch):
+        """success path → 末加 after_rescore hint event."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_e000000b", stage="done")
+        chat = ChatSession("s_e000000b", llm=object())  # type: ignore[arg-type]
+
+        async def fake_rescore(state, llm):
+            return {"e_001": 0.8}
+        monkeypatch.setattr(
+            "explain_engine.engines.rescore.rescore_session", fake_rescore,
+        )
+
+        events = await dispatch_slash(chat, "/rescore")
+        types = [e.type for e in events]
+        assert "slash_rescore" in types
+        assert "slash_next_step_hint" in types
+        hint = next(e for e in events if e.type == "slash_next_step_hint")
+        assert "/show" in hint.content

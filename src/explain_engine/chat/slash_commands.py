@@ -1237,6 +1237,12 @@ async def _handle_counterfactual(chat: ChatSession, args: list[str]) -> list[Cha
     )]
 
 
+@with_stage_gate(
+    allowed=None,
+    success_stage=None,
+    fail_hint_key=None,
+    success_hint_key="after_rescore",
+)
 async def _handle_rescore(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     """Phase 11 Wave 3: 重评 edge.confidence (manifests_as + causes edges).
 
