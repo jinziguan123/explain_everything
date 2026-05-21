@@ -106,3 +106,41 @@ HELP_GROUPS_ZH: list[tuple[str, list[str]]] = [
     ("其他",                      ["budget", "compact", "save", "migrate"]),
     ("帮助 / 退出",               ["help", "quit"]),
 ]
+
+
+STOP_REASON_MAP: dict[str, str] = {
+    # runtime/stop.py 实际 enum (Phase 5/7/8)
+    "budget_exhausted":         "预算耗尽",
+    "no_gain_for_3_ticks":      "已停 3 步无新发现 (已收敛)",
+    "reflection_signaled_stop": "回顾反思后判定收敛",
+    "no_frontier_remaining":    "已收敛 (无更多可推进点)",
+    # design doc 假设 reasons (兼容已记入 transcript 的旧值 / 上层封装)
+    "converged":            "已收敛 (无更多可推进点)",
+    "no_meaningful_action": "无更多可推进点",
+    "max_ticks":            "达到最大推理步数",
+}
+
+
+def msg_compress_done(n_candidates: int, n_to_lexicon: int) -> str:
+    return f"归纳完成: 加了 {n_candidates} 个模式, 其中 {n_to_lexicon} 个写入概念库."
+
+
+def msg_run_done(stop_reason: str, tick: int) -> str:
+    reason_zh = STOP_REASON_MAP.get(stop_reason, stop_reason)
+    return f"推理完成: 在第 {tick} 步停止 (原因: {reason_zh})."
+
+
+def msg_rescore_done(n_edges: int, avg_conf: float) -> str:
+    return f"重评完成: {n_edges} 条因果关系, 平均可信度 {avg_conf:.2f}. 已存盘."
+
+
+def msg_save_done(sid: str) -> str:
+    return f"已存盘 session {sid} (因果图 + 对话状态 + 转录)."
+
+
+def msg_resume_already(sid: str) -> str:
+    return f"已在 session {sid}, 不切换."
+
+
+def msg_resume_switching(sid: str) -> str:
+    return f"切换到 session {sid}..."

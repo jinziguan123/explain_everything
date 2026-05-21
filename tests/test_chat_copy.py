@@ -72,3 +72,35 @@ class TestHelpGroups:
             "budget", "compact", "save", "migrate", "help", "quit",
         }
         assert expected_excl_cf.issubset(all_cmds_in_groups)
+
+
+class TestStopReasonMap:
+    def test_known_stop_reasons_translated(self):
+        from explain_engine.chat.chat_copy import STOP_REASON_MAP
+        assert "已收敛" in STOP_REASON_MAP.get("converged", "")
+        assert "预算耗尽" in STOP_REASON_MAP.get("budget_exhausted", "")
+
+
+class TestSuccessMessageTemplates:
+    def test_msg_compress_done_contains_n_and_chinese(self):
+        from explain_engine.chat.chat_copy import msg_compress_done
+        msg = msg_compress_done(n_candidates=5, n_to_lexicon=3)
+        assert "5" in msg
+        assert "3" in msg
+        assert "归纳" in msg or "模式" in msg
+        assert "概念库" in msg
+
+    def test_msg_run_done_translates_stop_reason(self):
+        from explain_engine.chat.chat_copy import msg_run_done
+        msg = msg_run_done(stop_reason="converged", tick=7)
+        assert "已收敛" in msg
+        assert "converged" not in msg
+        assert "7" in msg
+
+    def test_msg_rescore_done_includes_avg_and_count(self):
+        from explain_engine.chat.chat_copy import msg_rescore_done
+        msg = msg_rescore_done(n_edges=25, avg_conf=0.78)
+        assert "25" in msg
+        assert "0.78" in msg
+        assert "重评" in msg
+        assert "可信度" in msg
