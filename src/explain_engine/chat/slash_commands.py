@@ -242,6 +242,169 @@ def _wrap_handler(name: str, handler):
     return wrapped
 
 
+# ── Phase 16.2 Wave 5: /history slash 命令 ──
+
+_HISTORY_VALID_TYPES = {"slash", "llm_turn"}
+_HISTORY_LIMIT_MAX = 200
+_HISTORY_LIMIT_DEFAULT = 30
+
+
+def _parse_history_args(
+    args: list[str],
+) -> tuple[int, set[str] | None, str | None]:
+    """Wave 5: 解析 /history 参数, 返 (limit, types_filter_or_None, err_msg_or_None).
+
+    支持:
+    - `--limit N` (1-200 整数)
+    - `--all` (= --limit 200 快捷)
+    - `--type T1 [T2 ...]` (slash / llm_turn, 可多选, 多选等价无过滤)
+    - 不接位置参数
+
+    types_filter:
+    - None: 不过滤 (全显)
+    - set: 只显含此 type 的 entry
+    - 多选 dedup 后等价全集 → 也视作 None (无过滤)
+    """
+    from explain_engine.chat.chat_copy import (
+        err_history_limit_range,
+        err_history_limit_type,
+        err_history_positional,
+        err_history_type_invalid,
+    )
+
+    limit = _HISTORY_LIMIT_DEFAULT
+    types: set[str] | None = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--all":
+            limit = _HISTORY_LIMIT_MAX
+            i += 1
+        elif a == "--limit":
+            if i + 1 >= len(args):
+                return (0, None, err_history_limit_type())
+            try:
+                limit = int(args[i + 1])
+            except ValueError:
+                return (0, None, err_history_limit_type())
+            if limit < 1:
+                return (0, None, err_history_limit_type())
+            if limit > _HISTORY_LIMIT_MAX:
+                return (0, None, err_history_limit_range(limit))
+            i += 2
+        elif a == "--type":
+            # 收一个或多个后续 token 直到下一个 -- 开头或末尾
+            types_collected: list[str] = []
+            j = i + 1
+            while j < len(args) and not args[j].startswith("--"):
+                types_collected.append(args[j])
+                j += 1
+            if not types_collected:
+                return (0, None, err_history_type_invalid("(空)"))
+            for t in types_collected:
+                if t not in _HISTORY_VALID_TYPES:
+                    return (0, None, err_history_type_invalid(t))
+            types = set(types_collected)
+            # 多选 dedup 后若覆盖全集 → 等价无过滤
+            if types == _HISTORY_VALID_TYPES:
+                types = None
+            i = j
+        else:
+            return (0, None, err_history_positional())
+    return (limit, types, None)
+
+
+def _render_history_entry_full(entry: dict) -> str:
+    """Wave 5: 渲染单 entry, 不截断 (用于 /history 输出, 跟 banner 截断的短版区分)."""
+    from explain_engine.chat.chat_copy import (
+        HISTORY_INTERVENTION_PREFIX,
+        HISTORY_SUMMARY_PREFIX,
+        HISTORY_TYPE_PREFIX_ASSISTANT,
+        HISTORY_TYPE_PREFIX_USER,
+    )
+
+    raw_ts = entry.get("ts", "?")
+    # ISO ts "2026-05-25T14:00:00+08:00" → "2026-05-25 14:00:00"
+    ts = raw_ts[:19].replace("T", " ") if isinstance(raw_ts, str) else "?"
+    typ = entry.get("type")
+    if typ == "slash":
+        lines = [f"[{ts}] /{entry.get('cmd', '?')}"]
+        if "intervention" in entry:
+            lines.append(f"  {HISTORY_INTERVENTION_PREFIX}{entry['intervention']}")
+        lines.append(f"  {HISTORY_SUMMARY_PREFIX}{entry.get('summary', '?')}")
+        return "\n".join(lines)
+    if typ == "llm_turn":
+        return (
+            f"[{ts}] {HISTORY_TYPE_PREFIX_USER}{entry.get('user_input', '')}\n"
+            f"  {HISTORY_TYPE_PREFIX_ASSISTANT}{entry.get('assistant_text', '')}"
+        )
+    return f"[{ts}] (unknown entry type: {typ})"
+
+
+async def _handle_history(
+    chat: ChatSession, args: list[str]
+) -> list[ChatEvent]:
+    """Wave 5: `/history` — 查看本 session 操作历史 (默认最近 30 条, 上限 200).
+
+    设计 §6.2 用户接触面 + §7.6 参数边界 / §7.7 老 session 兼容.
+
+    Args:
+        --limit N (1-200): 指定显示条数
+        --all: = --limit 200 快捷
+        --type slash|llm_turn (可多选): 过滤 entry type
+        无位置参数 (位置参数 reject)
+
+    路径:
+    - ephemeral / sid 缺失 → 友好提示, 不查 storage
+    - load 失败 → slash_error event
+    - 空 history → BANNER_HISTORY_EMPTY 友好提示
+    - 正常 → header + 渲染 (旧→新) + footer
+    """
+    from explain_engine.chat.chat_copy import (
+        BANNER_HISTORY_EMPTY,
+        HISTORY_FOOTER,
+        HISTORY_HEADER,
+    )
+    from explain_engine.chat.session import ChatEvent
+
+    limit, types, err = _parse_history_args(args)
+    if err is not None:
+        return [ChatEvent(type="slash_error", content=err)]
+
+    if getattr(chat, "is_ephemeral", False) or getattr(chat, "sid", None) is None:
+        return [ChatEvent(
+            type="slash_history", content="(ephemeral 会话, 无历史可查)"
+        )]
+
+    try:
+        all_entries = chat.storage.load_repl_history(chat.sid)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"读取历史失败: {type(exc).__name__}: {exc}",
+        )]
+
+    if types is not None:
+        filtered = [e for e in all_entries if e.get("type") in types]
+    else:
+        filtered = all_entries
+
+    total = len(filtered)
+    shown_entries = filtered[-limit:] if total > limit else filtered
+
+    if not shown_entries:
+        return [ChatEvent(type="slash_history", content=BANNER_HISTORY_EMPTY)]
+
+    body = "\n\n".join(
+        _render_history_entry_full(e) for e in shown_entries
+    )
+    out = (
+        HISTORY_HEADER.format(total=total, shown=len(shown_entries))
+        + "\n\n" + body + "\n\n" + HISTORY_FOOTER
+    )
+    return [ChatEvent(type="slash_history", content=out)]
+
+
 async def _handle_quit(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     """通知 CLI 退出. 真正退出由 F.2 CLI wrapper 处理.
 

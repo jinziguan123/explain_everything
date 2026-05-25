@@ -2539,3 +2539,96 @@ class TestWrapHandler:
         # jsonl 文件不存在 — 没写任何 entry
         path = chat.storage.session_dir(chat.sid) / "repl_history.jsonl"
         assert not path.exists()
+
+
+# ─── Phase 16.2 Wave 5: /history slash 命令 test fixtures ───
+#
+# 注意 Wave 5 严格调 raw `_handle_history(chat, args)` (而非 dispatch_slash),
+# 避开 _wrap_handler 副作用 (wrapper 会写 cmd=history entry, 干扰断言 entry 数量).
+# Wave 9 e2e 才走真 wrapped /history.
+
+
+def _h_make_history_entry_slash(
+    cmd: str = "compress",
+    summary: str = "+1 L1",
+    intervention: str | None = None,
+    ts: str = "2026-05-25T14:00:00+08:00",
+    args: list[str] | None = None,
+) -> dict:
+    """造一条 type=slash entry, schema 跟 Wave 3 _build_history_entry 一致."""
+    entry: dict = {
+        "ts": ts,
+        "type": "slash",
+        "cmd": cmd,
+        "args": args or [],
+        "summary": summary,
+    }
+    if intervention is not None:
+        entry["intervention"] = intervention
+    return entry
+
+
+def _h_make_history_entry_llm(
+    user_input: str = "为什么 X?",
+    assistant_text: str = "因为 Y.",
+    ts: str = "2026-05-25T14:05:00+08:00",
+) -> dict:
+    """造一条 type=llm_turn entry (Wave 6 写入路径的样本)."""
+    return {
+        "ts": ts,
+        "type": "llm_turn",
+        "user_input": user_input,
+        "assistant_text": assistant_text,
+    }
+
+
+def _h_make_chat_with_history(
+    tmp_path, monkeypatch, entries: list[dict], sid: str = "s_test"
+):
+    """造 minimal chat object + 预填好 history entry (用真 StorageV2)."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    from explain_engine.persistence.storage_v2 import StorageV2
+    storage = StorageV2(project_id="test_proj")
+    for e in entries:
+        storage.append_repl_history(sid, e)
+
+    class _FakeChat:
+        pass
+
+    chat = _FakeChat()
+    chat.sid = sid
+    chat.storage = storage
+    chat.state = _h_make_state(nodes=[])
+    chat.is_ephemeral = False
+    return chat
+
+
+class TestHandleHistory:
+    @pytest.mark.asyncio
+    async def test_handle_history_default_shows_last_30(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.1: 默认 limit=30. 50 entry 时输出仅最后 30, header 含 'total=50 shown=30'."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        entries = [
+            _h_make_history_entry_slash(
+                cmd=f"cmd{i}",
+                ts=f"2026-05-25T14:{i:02d}:00+08:00",
+            )
+            for i in range(50)
+        ]
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, entries)
+
+        result = await _handle_history(chat, [])
+        assert len(result) == 1
+        assert result[0].type == "slash_history"
+        out = result[0].content
+        # header 含 total=50, shown=30
+        assert "50" in out
+        assert "30" in out
+        # 应渲染最后 30 entry (cmd20-cmd49), 前 20 不出现
+        assert "/cmd49" in out  # 末尾
+        assert "/cmd20" in out  # 末 30 起点
+        assert "/cmd19" not in out
+        assert "/cmd0" not in out
