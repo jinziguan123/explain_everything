@@ -42,3 +42,28 @@ class TestRenderRecentHistory:
         # footer 提示
         assert "/history" in out
         assert "/help" in out
+
+    def test_render_recent_history_max_10_caps_long_list(self) -> None:
+        """30 entry, max_n=10: 仅最后 10 (按 ts 排序后取末 10)."""
+        from explain_engine.chat.history_render import render_recent_history
+
+        # 30 entry, ts 升序构造 (HH:MM 00-29)
+        entries = [
+            {
+                "type": "slash",
+                "ts": f"2026-05-25T14:{i:02d}:00",
+                "cmd": "show",
+                "args": [],
+                "summary": f"entry-{i:02d}",
+            }
+            for i in range(30)
+        ]
+        out = render_recent_history(entries, max_n=10)
+
+        # header 显 10 (max_n cap), 非 30
+        assert "最近 10 条操作" in out
+        # 仅末 10 (entry-20 ~ entry-29) 应在, 前 20 (entry-00 ~ entry-19) 不在
+        for i in range(20, 30):
+            assert f"entry-{i:02d}" in out
+        for i in range(0, 20):
+            assert f"entry-{i:02d}" not in out
