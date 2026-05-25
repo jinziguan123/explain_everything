@@ -22,6 +22,8 @@
 
 ## Status
 
+**Phase 16 milestone (2026-05-21)** — Theory Formation (跨 session 因果模式 emergent + JEPA prediction-as-loss)。新 `engines/theory/` module: 自实现 simplified gSpan + Phase 13 embedding cluster + leave-one-session-out falsifiability + MMR diversity ranking + lazy cached。chat `/theories` `/theory <id> [reject]` + cli `explain theories` + bootstrap inject stable theory 到 LLM prompt 软引导。JEPA (a)(b)(c) 启示落地。1069 tests pass, ruff 0。
+
 **Phase 15.1 hotfix (2026-05-21)** — `/run` honor chat_state 无限预算。修 chat 两套 budget 命名相同但语义独立的 UX 坑 (`/budget` 设无限不 propagate 到 `/run` 推理 tick budget)。1007 tests pass。
 
 **Phase 15 milestone (2026-05-21)** — Chat REPL 去技术化。新建 `chat/chat_copy.py` 单一文案 source (TERMS_MAP 35 术语 / COMMAND_DESCRIPTIONS 19 命令 / HELP_GROUPS_ZH 6 分组 / STOP_REASON_MAP / HINTS_BY_KEY / STATUS_* / msg_*/err_* 模板 / zh() helper)。slash_commands / slash_stage_rules / cli / hitl/cli_interactive 全 user-visible 文本中文化, L0/L1/L2 → 现象/归纳出的模式/深层原因 等。1005 tests pass，ruff 0。
@@ -45,7 +47,46 @@ chat /new + /resume slash 命令 + prompt_toolkit REPL UX 升级。Phase 11 直�
 cross-session motif detection on lexicon graph / real Anthropic tool_use adapter
 （详见 [Phase 9 acceptance evidence](docs/plans/2026-05-17-conversational-cognitive-engine-acceptance.md)）。
 
-> **下一步候选**: Phase 16 — Theory Formation (cross-session motif detection on lexicon graph) / Multi-Perspective Runtime / Cognitive Simulation (internal rollout). 见 [技术设计v2](技术设计v2.md)。
+## Phase 16 (2026-05-21) — Theory Formation (跨 session 因果模式 emergent)
+
+把 lexicon (Phase 10) 升级为真"world model" — 跨 session graph 中 emergent recurring motif → 抽成 stable theory → 接到 reasoning loop 做 predictive prior. 落地 V2 §13 (Variable Evolution) + 哲学 §9 (Theory Formation) + JEPA 启示 a/b/c.
+
+**新基础设施**:
+
+- `src/explain_engine/engines/theory/` 10 module (~1500 行)
+  - `theory.py`: `Theory` + `Theme` frozen dataclass + `_compute_theory_id` 稳定 hash
+  - `clustering.py`: Phase 13 BGE-M3 embedding cosine union-find 聚类 (threshold 0.85)
+  - `gspan.py`: 自实现 simplified gSpan (Yan & Han 2002, ~300 行 directed in-memory)
+  - `motif_mining.py`: per-theme subgraph + 调 `gspan_mine` + chain/star/cycle 分类
+  - `falsifiability.py`: leave-one-session-out `predictive_power` (JEPA a + 哲学 §9.4)
+  - `ranking.py`: `compute_score` (0.35·freq + 0.20·complexity + 0.45·predictive) + MMR diversity + promote stable/tentative (JEPA b/c)
+  - `cache.py`: `TheoriesCache` + `get_active_theories` lazy invalidation + `reject_theory` + atomic write
+  - `recompute.py`: 7-step orchestrator (load → cluster → motif → predict → promote → rank)
+  - `loader.py`: `load_all_session_graphs`
+- `~/.explain/projects/<proj>/knowledge/theories.json` sidecar (跟 lexicon 同目录)
+
+**JEPA 启示采纳**:
+
+- (a) **prediction-as-loss / falsifiability**: `Theory.predictive_power` 字段 + leave-one-session-out 评估. ranking 公式占 0.45 权重, 跟哲学 §9.4 可证伪性接上.
+- (b) **slow-fast EMA**: `stable_theories` (跨 K=5 session window 持续) vs `tentative_theories`. bootstrap inject 只用 stable, 防 single-session 极端 reasoning 带偏.
+- (c) **VICReg variance**: MMR ranking λ=0.7 防 top-K 同 theme 重复 paraphrase.
+- (d) H-JEPA hierarchical (L0/L1/L2 时间尺度对齐) — defer Phase 17.
+
+**新 user-visible**:
+
+- chat slash: `/theories` (top-K stable theory table, 类型/模式/覆盖/准确度/状态)
+- chat slash: `/theory <id>` 详情 (theme + 因果结构 + supporting session)
+- chat slash: `/theory <id> reject` 拒绝 (后续不 bootstrap inject)
+- cli: `explain theories [--project ID] [--all] [--limit N] [--force]`
+- bootstrap prompt 加 theory section 软引导 LLM 复用已知机制 (top-5 cap, "仅供参考"防过拟合)
+
+**修复 Phase 16 实施时撞 design 漏点**:
+
+- Task 13 hotfix: chat 无 `.embedder` attr → 用 BGE-M3 `get_embedder()` singleton
+
+1069 tests pass, ruff 0. 设计 doc: [docs/plans/2026-05-21-theory-formation-design.md](docs/plans/2026-05-21-theory-formation-design.md). 实施 plan: [docs/plans/2026-05-21-theory-formation-plan.md](docs/plans/2026-05-21-theory-formation-plan.md). Acceptance: [docs/plans/2026-05-21-theory-formation-acceptance.md](docs/plans/2026-05-21-theory-formation-acceptance.md).
+
+> **下一步候选**: Phase 17 — Hierarchical L0/L1/L2 时间尺度对齐 (JEPA d) / Multi-Perspective Runtime (V2 §7) / Cognitive Simulation (V2 §8).
 
 ## Phase 15.1 hotfix (2026-05-21) — /run honor chat_state 无限预算
 
