@@ -1161,6 +1161,26 @@ class TestSlashPredict:
         assert "0.62" in c
 
     @pytest.mark.asyncio
+    async def test_handle_predict_cancel_no_intervention_metadata(self):
+        """Phase 16.2 Task 4.5: 用户 input 'q' 取消, event 不带 intervention metadata.
+
+        取消分支返 "已取消." 文案, metadata is None (而非 {"intervention": "q"}).
+        Wrapper 反解后跳过 intervention 字段写入 history.
+        """
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_cafe0045")
+        chat = ChatSession("s_cafe0045", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "q"
+        chat.input_provider = fake_provider
+
+        events = await dispatch_slash(chat, "/predict")
+        predict_evt = next(e for e in events if e.type == "slash_predict")
+        assert "已取消" in predict_evt.content
+        assert predict_evt.metadata is None
+
+    @pytest.mark.asyncio
     async def test_handle_predict_event_carries_intervention_metadata(self, monkeypatch):
         """Phase 16.2 Task 4.3: /predict 的 ChatEvent.metadata 含 intervention text.
 
