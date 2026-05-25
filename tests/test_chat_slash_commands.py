@@ -1170,8 +1170,8 @@ class TestSlashPredict:
         from dataclasses import dataclass
 
         from explain_engine.chat.session import ChatSession
-        _make_done_session("s_md40003")
-        chat = ChatSession("s_md40003", llm=object())  # type: ignore[arg-type]
+        _make_done_session("s_dead0004")
+        chat = ChatSession("s_dead0004", llm=object())  # type: ignore[arg-type]
 
         async def fake_provider(prompt):
             return "假设 JEPA 解决 c_001 + c_004"
