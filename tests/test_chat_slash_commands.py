@@ -2081,3 +2081,47 @@ class TestHelpGroupingChinese:
         # Phase 14 老 group name 应被替换
         assert "Session 推进" not in content
         assert "Inspection" not in content
+
+
+# ─── Phase 16.2 Wave 2: snapshot/delta helpers (inline state builder) ───
+
+def _h_node(nid: str, level: int):
+    from explain_engine.schema.nodes import VariableNode
+    return VariableNode(
+        id=nid, name=nid, description="d",
+        abstraction_level=level, confidence=0.7,
+        epistemic="insight" if level >= 1 else "observation",
+    )
+
+
+def _h_edge(eid: str, src: str, tgt: str, rtype: str = "manifests_as"):
+    from explain_engine.schema.edges import RelationEdge
+    return RelationEdge(
+        id=eid, source_node=src, target_node=tgt,
+        relation_type=rtype, confidence=0.7,
+        mechanism_description="m",
+    )
+
+
+def _h_make_state(
+    nodes: list[tuple[str, int]],
+    edges: list[tuple[str, str, str]] | None = None,
+):
+    from explain_engine.schema.graph import ExplanationGraph
+    from explain_engine.schema.state import CognitiveState
+    g = ExplanationGraph(root_question="q")
+    for nid, lvl in nodes:
+        g.add_node(_h_node(nid, lvl))
+    for eid, src, tgt in (edges or []):
+        g.add_edge(_h_edge(eid, src, tgt))
+    return CognitiveState(graph=g, budget_remaining=10, root_question="q")
+
+
+class TestSnapshotAndDelta:
+    def test_snapshot_graph_counts_by_level(self):
+        from explain_engine.chat.slash_commands import _snapshot_graph
+        state = _h_make_state(
+            nodes=[("p_1", 0), ("p_2", 0), ("c_1", 1)],
+            edges=[("e_1", "p_1", "c_1"), ("e_2", "p_2", "c_1"), ("e_3", "c_1", "p_1")],
+        )
+        assert _snapshot_graph(state) == {"l0": 2, "l1": 1, "l2": 0, "edges": 3}

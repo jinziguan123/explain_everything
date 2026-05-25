@@ -23,6 +23,7 @@ from __future__ import annotations
 # Phase 12 /graph: tmpdir lifecycle. aliased _atexit/_shutil/_tempfile 让
 # test 可 monkeypatch sc._atexit.register (验 atexit 注册).
 import atexit as _atexit
+import logging
 import shutil as _shutil
 import tempfile as _tempfile
 from collections.abc import Awaitable, Callable
@@ -92,6 +93,47 @@ def _render_table_to_string(table) -> str:
     buf = StringIO()
     _Console(file=buf, force_terminal=False, width=120).print(table)
     return buf.getvalue()
+
+
+# ── Phase 16.2: REPL history snapshot/delta helpers (Wave 2) ──
+
+_history_logger = logging.getLogger(__name__)
+
+
+def _snapshot_graph(state) -> dict[str, int]:
+    """Wave 2: 取 graph 4-count (l0/l1/l2/edges), 给 history wrapper 算 delta 用."""
+    g = state.graph
+    return {
+        "l0": sum(1 for n in g.nodes.values() if n.abstraction_level == 0),
+        "l1": sum(1 for n in g.nodes.values() if n.abstraction_level == 1),
+        "l2": sum(1 for n in g.nodes.values() if n.abstraction_level == 2),
+        "edges": len(g.edges),
+    }
+
+
+def _snapshot_graph_safe(state) -> dict[str, int] | None:
+    """Wave 2: snapshot 容错版 — 异常返 None, log debug. 让 wrapper 不被 graph 异常打断."""
+    try:
+        return _snapshot_graph(state)
+    except Exception as exc:
+        _history_logger.debug(f"snapshot failed: {type(exc).__name__}: {exc}")
+        return None
+
+
+def _compute_delta(before: dict | None, after: dict | None) -> str:
+    """Wave 2: 算 before/after diff → 人话 '+1 L1 / +5 现象 / +12 边'. None 输入返 '(变化未知)'."""
+    if before is None or after is None:
+        return "(变化未知)"
+    parts = []
+    if (d := after["l1"] - before["l1"]):
+        parts.append(f"{d:+d} L1")
+    if (d := after["l0"] - before["l0"]):
+        parts.append(f"{d:+d} 现象")
+    if (d := after["l2"] - before["l2"]):
+        parts.append(f"{d:+d} L2")
+    if (d := after["edges"] - before["edges"]):
+        parts.append(f"{d:+d} 边")
+    return " / ".join(parts) if parts else "无变化"
 
 
 async def _handle_quit(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
