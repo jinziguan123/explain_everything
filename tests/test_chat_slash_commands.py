@@ -2428,3 +2428,23 @@ class TestWrapHandler:
         entries = chat.storage.load_repl_history(chat.sid)
         assert len(entries) == 1
         assert entries[0]["summary"] == "(变化未知)"
+
+    @pytest.mark.asyncio
+    async def test_wrap_handler_keyboard_interrupt_propagates_no_write(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 3.8: handler 抛 KeyboardInterrupt → wrapper 不写 history, 直 propagate."""
+        from explain_engine.chat.slash_commands import _wrap_handler
+
+        chat = _h_make_chat_with_storage(tmp_path, monkeypatch)
+
+        async def fake_handler(c, args):
+            raise KeyboardInterrupt()
+
+        wrapped = _wrap_handler("intcmd", fake_handler)
+        with pytest.raises(KeyboardInterrupt):
+            await wrapped(chat, [])
+
+        # jsonl 文件不存在 — 没写任何 entry
+        path = chat.storage.session_dir(chat.sid) / "repl_history.jsonl"
+        assert not path.exists()
