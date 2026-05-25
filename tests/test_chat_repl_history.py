@@ -343,3 +343,70 @@ class TestE2EReplHistory:
         # summary delta: 加 1 L1 + 5 L0 (无 edge 加, _handle_predict mock 不加)
         assert "+1 L1" in entry["summary"]
         assert "+5 现象" in entry["summary"]
+
+    @pytest.mark.asyncio
+    async def test_e2e_resume_banner_contains_recent_ops(
+        self, monkeypatch
+    ) -> None:
+        """同 9.1 路径 (真 wrapped /predict 写 history), 再调 render_recent_history(10)
+        模拟 resume banner 拼装 → 输出应含 '最近 1 条' header + /predict cmd +
+        intervention 80 字截断 (含 '...' marker, 不含完整 long_intervention).
+        """
+        from dataclasses import dataclass, field
+
+        from explain_engine.chat.history_render import render_recent_history
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.chat.slash_commands import dispatch_slash
+        from explain_engine.persistence.storage_v2 import StorageV2
+        from explain_engine.schema.nodes import VariableNode
+        from tests.test_chat_session import _make_done_session
+
+        _make_done_session("s_e2e90002")
+        chat = ChatSession("s_e2e90002", llm=object())  # type: ignore[arg-type]
+
+        long_intervention = (
+            "假设 LeCun JEPA 真正解决了 c_001 结构先验内化深度问题 + "
+            "c_004 组合生成边界, 那么世界模型可以从纯像素预测转向抽象 latent 因果 "
+            "预测, 从根本避免生成式模型在高维像素空间的瓶颈, 这是一种 fundamentally "
+            "不同的归纳偏置策略"
+        )
+        # sanity: 必须 >80 才能验截断
+        assert len(long_intervention) > 80
+
+        async def fake_provider(prompt: str) -> str:
+            return long_intervention
+
+        chat.input_provider = fake_provider
+
+        @dataclass
+        class FakeReport:
+            new_node_ids: list = field(default_factory=list)
+            predicted_L0_ids: list = field(default_factory=list)
+            activated_existing_L0: list = field(default_factory=list)
+            propagation_acts: dict = field(default_factory=dict)
+
+        async def fake_predict(state, intervention_text, llm):
+            state.graph.add_node(VariableNode(
+                id="c_e2", name="t", description="d",
+                abstraction_level=1, confidence=0.7, epistemic="insight",
+            ))
+            return FakeReport(new_node_ids=["c_e2"])
+
+        monkeypatch.setattr(
+            "explain_engine.engines.prediction.predict", fake_predict
+        )
+
+        await dispatch_slash(chat, "/predict")
+
+        storage = StorageV2()
+        history = storage.load_repl_history("s_e2e90002")
+        banner = render_recent_history(history, max_n=10)
+
+        # header 显实际数 (1 条)
+        assert "最近 1 条操作" in banner
+        # cmd 出现
+        assert "/predict" in banner
+        # intervention 80 字截 — 含 '...' 截断 marker
+        assert "..." in banner
+        # 完整 long_intervention 不应整段出现 (verify 截断生效)
+        assert long_intervention not in banner
