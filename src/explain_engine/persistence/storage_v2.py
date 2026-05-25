@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def compute_project_id() -> str:
@@ -142,6 +145,32 @@ class StorageV2:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def load_repl_history(self, sid: str) -> list[dict[str, Any]]:
+        path = self.session_dir(sid) / "repl_history.jsonl"
+        if not path.exists():
+            return []
+        out: list[dict[str, Any]] = []
+        warn_count = 0
+        total_corrupt = 0
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError as e:
+                total_corrupt += 1
+                if warn_count < 5:
+                    logger.warning(
+                        f"repl_history.jsonl line {i+1} corrupt, skip: {e}"
+                    )
+                    warn_count += 1
+        if total_corrupt > 5:
+            logger.warning(
+                f"repl_history.jsonl total {total_corrupt} corrupt lines"
+            )
+        return out
 
     # ── list sessions ──
     def list_sessions(self) -> list[str]:

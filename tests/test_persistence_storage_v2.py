@@ -162,3 +162,12 @@ class TestReplHistoryAppend:
         # 同时验证 round-trip 正确
         parsed = json.loads(raw.splitlines()[0])
         assert parsed == entry
+
+
+class TestReplHistoryLoad:
+    def test_load_repl_history_missing_returns_empty(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+        storage = StorageV2(project_id="testproj")
+        # session 目录甚至不存在 — 模拟全新 / 老 session
+        out = storage.load_repl_history("s_nonexistent")
+        assert out == []
