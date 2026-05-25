@@ -2712,3 +2712,34 @@ class TestHandleHistory:
         for i in range(3):
             assert f"问题 {i}" not in out
             assert f"回答 {i}" not in out
+
+    @pytest.mark.asyncio
+    async def test_handle_history_type_multi_equals_no_filter(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.5: --type slash llm_turn (多选 = 全集) → 等价无 --type, 全 8 entry 都显."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        entries: list[dict] = []
+        for i in range(5):
+            entries.append(_h_make_history_entry_slash(
+                cmd=f"cmdslash{i}",
+                ts=f"2026-05-25T14:{i:02d}:00+08:00",
+            ))
+        for i in range(3):
+            entries.append(_h_make_history_entry_llm(
+                user_input=f"问题 {i}",
+                assistant_text=f"回答 {i}",
+                ts=f"2026-05-25T15:{i:02d}:00+08:00",
+            ))
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, entries)
+
+        result = await _handle_history(chat, ["--type", "slash", "llm_turn"])
+        out = result[0].content
+        # 全 5 slash 都在
+        for i in range(5):
+            assert f"/cmdslash{i}" in out
+        # 全 3 llm_turn 都在
+        for i in range(3):
+            assert f"问题 {i}" in out
+            assert f"回答 {i}" in out
