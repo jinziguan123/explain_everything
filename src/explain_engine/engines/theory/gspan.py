@@ -245,3 +245,117 @@ def _count_support(
             inv = {v: k for k, v in mapping.items()}
             found.append((gid, inv))
     return len(found), found
+
+
+def _subgraph_size(code: list[DFSEdge]) -> int:
+    """node 数 (DFS tree 中的 distinct idx)."""
+    idxs: set[int] = set()
+    for e in code:
+        idxs.add(e.from_idx)
+        idxs.add(e.to_idx)
+    return len(idxs)
+
+
+def _dfs_extend(
+    current_code: list[DFSEdge],
+    graphs: list[tuple[str, nx.DiGraph]],
+    min_support: int,
+    min_size: int,
+    max_size: int,
+    output: list[list[DFSEdge]],
+) -> None:
+    """gSpan DFS recursion. canonical check 防重复枚举, anti-monotone pruning.
+
+    流程:
+      1. canonical check (Task 5) — 非 min DFS code 直接 prune (避免重复枚举)
+      2. 若 size ≥ min_size, 加 output
+      3. 若 size ≥ max_size, stop
+      4. support count (Task 6) — < min_support 停 (anti-monotone)
+      5. 枚举 rightmost extension (Task 6), recurse 每个 freq ≥ min_support 的 ext
+    """
+    if not _is_minimum_dfs_code(current_code):
+        return
+    if _subgraph_size(current_code) >= min_size:
+        output.append(list(current_code))
+    if _subgraph_size(current_code) >= max_size:
+        return
+
+    support_count, embeddings_per_graph = _count_support(current_code, graphs)
+    if support_count < min_support:
+        return
+
+    # 1:1 with graphs: support 之内 → 真 embedding, 之外 → 空 dict (_enumerate 内会 skip)
+    gid_to_emb = dict(embeddings_per_graph)
+    embeddings = [gid_to_emb.get(gid, {}) for gid, _ in graphs]
+
+    extensions = _enumerate_rightmost_extensions(current_code, graphs, embeddings)
+
+    for ext in extensions:
+        new_code = [*current_code, ext]
+        new_support, _ = _count_support(new_code, graphs)
+        if new_support >= min_support:
+            _dfs_extend(new_code, graphs, min_support, min_size, max_size, output)
+
+
+def gspan_mine(
+    graphs: list[tuple[str, nx.DiGraph]],
+    min_support: int,
+    min_size: int = 2,
+    max_size: int = 5,
+    is_directed: bool = True,
+) -> list[FrequentSubgraph]:
+    """Yan & Han 2002 gSpan, 简化为 directed + in-memory.
+
+    Args:
+        graphs: [(graph_id, nx.DiGraph)] — node/edge 用 "label" attribute.
+        min_support: 至少出现在多少 graph (frequency threshold).
+        min_size: motif 至少几个 node (默认 2 = single-edge).
+        max_size: motif 最多几个 node (默认 5, 防 explosion).
+        is_directed: 当前 MVP 只支持 directed.
+
+    Returns: FrequentSubgraph list, 每含 nodes/edges/support_count/embeddings_in_graphs.
+    """
+    if not is_directed:
+        raise NotImplementedError("MVP: only directed graph supported")
+
+    freq_1edges = _count_frequent_edges(graphs, min_support)
+    # sort seed deterministically for stable output
+    freq_1edges_sorted = sorted(freq_1edges, key=lambda x: x[0])
+    all_frequent: list[list[DFSEdge]] = []
+
+    for (from_lbl, edge_lbl, to_lbl), _ in freq_1edges_sorted:
+        seed = [DFSEdge(0, 1, from_lbl, edge_lbl, to_lbl)]
+        _dfs_extend(seed, graphs, min_support, min_size, max_size, all_frequent)
+
+    # Decode DFS code → FrequentSubgraph
+    result: list[FrequentSubgraph] = []
+    for code in all_frequent:
+        node_idxs: set[int] = set()
+        for e in code:
+            node_idxs.add(e.from_idx)
+            node_idxs.add(e.to_idx)
+        nodes = tuple(f"n{i}" for i in sorted(node_idxs))
+        edges = tuple((f"n{e.from_idx}", f"n{e.to_idx}", e.edge_label) for e in code)
+        support_count, embeddings = _count_support(code, graphs)
+        # embeddings: [(gid, {motif_idx: graph_node})] → ({"n{i}": graph_node})
+        embeddings_renamed = tuple(
+            (gid, {f"n{i}": gn for i, gn in emb.items()})
+            for gid, emb in embeddings
+        )
+        result.append(FrequentSubgraph(
+            nodes=nodes,
+            edges=edges,
+            support_count=support_count,
+            embeddings_in_graphs=embeddings_renamed,
+        ))
+
+    # Dedup — 不同 seed 可能扩出同 motif (e.g. A→B→C 从 (A,e,B) 跟 (B,e,C) 都可达)
+    seen_keys: set = set()
+    deduped: list[FrequentSubgraph] = []
+    for fs in result:
+        key = tuple(sorted(fs.edges))
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(fs)
+    return deduped

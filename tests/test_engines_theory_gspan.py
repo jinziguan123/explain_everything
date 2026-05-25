@@ -127,3 +127,73 @@ class TestCountSupport:
         support, embeddings = _count_support(motif_code, graphs)
         assert support == 2
         assert len(embeddings) == 2
+
+
+class TestGspanMineIntegration:
+    def _make_graph(self, edges):
+        g = nx.DiGraph()
+        seen = set()
+        for src, src_lbl, tgt, tgt_lbl, edge_lbl in edges:
+            if src not in seen:
+                g.add_node(src, label=src_lbl)
+                seen.add(src)
+            if tgt not in seen:
+                g.add_node(tgt, label=tgt_lbl)
+                seen.add(tgt)
+            g.add_edge(src, tgt, label=edge_lbl)
+        return g
+
+    def test_finds_frequent_chain_size_3(self):
+        from explain_engine.engines.theory.gspan import gspan_mine
+        # 3 graph, 都含 A → B → C chain
+        graphs = [
+            ("g0", self._make_graph([("a", "A", "b", "B", "e"), ("b", "B", "c", "C", "e")])),
+            ("g1", self._make_graph([("x", "A", "y", "B", "e"), ("y", "B", "z", "C", "e")])),
+            ("g2", self._make_graph([("p", "A", "q", "B", "e"), ("q", "B", "r", "C", "e")])),
+        ]
+        result = gspan_mine(graphs, min_support=3, min_size=3, max_size=5)
+        # 应找出 chain motif (3 nodes A→B→C)
+        assert any(len(fs.nodes) == 3 and fs.support_count == 3 for fs in result)
+
+    def test_noise_graph_not_in_support(self):
+        from explain_engine.engines.theory.gspan import gspan_mine
+        graphs = [
+            ("g0", self._make_graph([("a", "A", "b", "B", "e")])),
+            ("g1", self._make_graph([("x", "A", "y", "B", "e")])),
+            ("g2", self._make_graph([("p", "X", "q", "Y", "e")])),  # noise
+        ]
+        result = gspan_mine(graphs, min_support=2)
+        # (A,e,B) freq=2 应在; noise (X,e,Y) freq=1 不应在.
+        # FrequentSubgraph.edges 只含 motif-local id + edge_label, 不含 node label,
+        # 所以校验改为: 至少 1 motif 在 g0/g1 出现, 且没有任何 motif 在 g2 出现.
+        assert len(result) >= 1
+        for fs in result:
+            gids_in_embeddings = {gid for gid, _ in fs.embeddings_in_graphs}
+            assert "g2" not in gids_in_embeddings
+            # 至少有 1 个 freq>=2 的 motif (来自 g0+g1)
+        assert any(fs.support_count >= 2 for fs in result)
+
+    def test_min_support_3_with_only_2_graphs_returns_empty(self):
+        from explain_engine.engines.theory.gspan import gspan_mine
+        graphs = [
+            ("g0", self._make_graph([("a", "A", "b", "B", "e")])),
+            ("g1", self._make_graph([("x", "A", "y", "B", "e")])),
+        ]
+        result = gspan_mine(graphs, min_support=3)
+        assert result == []
+
+    def test_max_size_caps_motif(self):
+        from explain_engine.engines.theory.gspan import gspan_mine
+        # 都含 5-node chain, 但 max_size=3
+        graphs = [
+            ("g0", self._make_graph([
+                ("a", "A", "b", "B", "e"), ("b", "B", "c", "C", "e"),
+                ("c", "C", "d", "D", "e"), ("d", "D", "e_node", "E", "e"),
+            ])),
+            ("g1", self._make_graph([
+                ("a", "A", "b", "B", "e"), ("b", "B", "c", "C", "e"),
+                ("c", "C", "d", "D", "e"), ("d", "D", "e_node", "E", "e"),
+            ])),
+        ]
+        result = gspan_mine(graphs, min_support=2, max_size=3)
+        assert all(len(fs.nodes) <= 3 for fs in result)
