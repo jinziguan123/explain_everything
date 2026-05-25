@@ -2319,3 +2319,30 @@ class TestWrapHandler:
         assert len(entries) == 1
         assert entries[0]["intervention"] == "假设 X 增加"
         assert entries[0]["cmd"] == "predict"
+
+    @pytest.mark.asyncio
+    async def test_wrap_handler_no_metadata_no_intervention_key(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 3.4: handler 返 event 无 metadata → entry dict 不含 'intervention' key.
+
+        关键: 验 key absent (而非 None) — schema 设计要求字段省略, 不写 null.
+        """
+        from explain_engine.chat.slash_commands import _wrap_handler
+
+        chat = _h_make_chat_with_storage(tmp_path, monkeypatch)
+
+        async def fake_handler(c, args):
+            # 无 metadata 参数 → 默 None
+            return [_FakeEvent(type="slash_show", content="ok")]
+
+        wrapped = _wrap_handler("show", fake_handler)
+        await wrapped(chat, [])
+
+        entries = chat.storage.load_repl_history(chat.sid)
+        assert len(entries) == 1
+        e = entries[0]
+        assert "intervention" not in e
+        # 反 KeyError 验; 也 sanity check 不等于 None
+        with pytest.raises(KeyError):
+            _ = e["intervention"]
