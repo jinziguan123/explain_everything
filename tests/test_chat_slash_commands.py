@@ -2157,3 +2157,10 @@ class TestSnapshotAndDelta:
         before = {"l0": 21, "l1": 5, "l2": 12, "edges": 89}
         after = {"l0": 21, "l1": 5, "l2": 12, "edges": 89}
         assert _compute_delta(before, after) == "无变化"
+
+    def test_compute_delta_multi_field_order(self):
+        from explain_engine.chat.slash_commands import _compute_delta
+        before = {"l0": 0, "l1": 0, "l2": 0, "edges": 0}
+        after = {"l0": 5, "l1": 1, "l2": 12, "edges": 37}
+        # 顺序: L1 → 现象 → L2 → 边 (跟 impl 排列一致)
+        assert _compute_delta(before, after) == "+1 L1 / +5 现象 / +12 L2 / +37 边"
