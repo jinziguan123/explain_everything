@@ -410,3 +410,64 @@ class TestE2EReplHistory:
         assert "..." in banner
         # 完整 long_intervention 不应整段出现 (verify 截断生效)
         assert long_intervention not in banner
+
+    @pytest.mark.asyncio
+    async def test_e2e_history_command_after_session_with_ops(
+        self, monkeypatch
+    ) -> None:
+        """串调 /show + /check + /predict (各经 wrapper), 然后直调 _handle_history
+        (raw, 不再经 wrapper 避免又加 1 entry) 输出含 3 entry + cmd names.
+
+        /show /check readonly 廉价不需 mock; 仅 /predict 需 mock prediction_predict.
+        """
+        from dataclasses import dataclass, field
+
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.chat.slash_commands import (
+            _handle_history,
+            dispatch_slash,
+        )
+        from explain_engine.schema.nodes import VariableNode
+        from tests.test_chat_session import _make_done_session
+
+        _make_done_session("s_e2e90003")
+        chat = ChatSession("s_e2e90003", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt: str) -> str:
+            return "如果 X 增加"
+
+        chat.input_provider = fake_provider
+
+        @dataclass
+        class FakeReport:
+            new_node_ids: list = field(default_factory=list)
+            predicted_L0_ids: list = field(default_factory=list)
+            activated_existing_L0: list = field(default_factory=list)
+            propagation_acts: dict = field(default_factory=dict)
+
+        async def fake_predict(state, intervention_text, llm):
+            state.graph.add_node(VariableNode(
+                id="c_e3", name="t", description="d",
+                abstraction_level=1, confidence=0.7, epistemic="insight",
+            ))
+            return FakeReport(new_node_ids=["c_e3"])
+
+        monkeypatch.setattr(
+            "explain_engine.engines.prediction.predict", fake_predict
+        )
+
+        # 串 3 个 wrapped 命令, 各自经 dispatch_slash 走 _wrap_handler 写 entry
+        await dispatch_slash(chat, "/show")
+        await dispatch_slash(chat, "/check")
+        await dispatch_slash(chat, "/predict")
+
+        # 直调 raw _handle_history 跳过 wrapper, 避免又加 1 entry
+        events = await _handle_history(chat, [])
+        assert len(events) == 1
+        out = events[0].content
+        # 3 个 cmd 都应在输出 (slash entry 用 '/cmd' 前缀)
+        assert "/show" in out
+        assert "/check" in out
+        assert "/predict" in out
+        # header 总数应显 3
+        assert "本 session 共 3 条" in out or "共 3 条" in out
