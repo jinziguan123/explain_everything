@@ -2860,3 +2860,29 @@ class TestHandleHistory:
         # 友好提示用 chat_copy 常量, 含 "无历史"
         assert result[0].content == BANNER_HISTORY_EMPTY
         assert "无历史" in result[0].content
+
+    @pytest.mark.asyncio
+    async def test_handle_history_intervention_full_not_truncated(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.13: 500 字 intervention 在 /history 完整显, 不截 80 字 (跟 banner 区分)."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        long_intervention = "假设干预" + "X" * 496  # 500 字
+        assert len(long_intervention) == 500
+        entries = [
+            _h_make_history_entry_slash(
+                cmd="predict",
+                summary="+1 L1 / +5 现象 / +12 边",
+                intervention=long_intervention,
+                ts="2026-05-25T14:20:45+08:00",
+            )
+        ]
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, entries)
+
+        result = await _handle_history(chat, [])
+        out = result[0].content
+        # 完整 500 字 intervention 都在
+        assert long_intervention in out
+        # 不应有截断标志 "..."
+        assert "..." not in out
