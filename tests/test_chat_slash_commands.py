@@ -2403,3 +2403,28 @@ class TestWrapHandler:
         warn_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("append_repl_history failed" in m for m in warn_msgs)
         assert any("safecmd" in m for m in warn_msgs)
+
+    @pytest.mark.asyncio
+    async def test_wrap_handler_snapshot_failure_summary_is_unknown(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 3.7: monkeypatch _snapshot_graph 抛 → summary 退化为 '(变化未知)'."""
+        from explain_engine.chat import slash_commands as sc
+        from explain_engine.chat.slash_commands import _wrap_handler
+
+        chat = _h_make_chat_with_storage(tmp_path, monkeypatch)
+
+        def broken_snapshot(state):
+            raise RuntimeError("graph corrupted")
+
+        monkeypatch.setattr(sc, "_snapshot_graph", broken_snapshot)
+
+        async def fake_handler(c, args):
+            return [_FakeEvent(type="slash_ok", content="x")]
+
+        wrapped = _wrap_handler("snapfail", fake_handler)
+        await wrapped(chat, [])
+
+        entries = chat.storage.load_repl_history(chat.sid)
+        assert len(entries) == 1
+        assert entries[0]["summary"] == "(变化未知)"
