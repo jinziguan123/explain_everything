@@ -248,3 +248,14 @@ HINTS_BY_KEY: dict[str, str] = {
 BANNER_HISTORY_HEADER = "─── 最近 {n} 条操作 (旧 → 新) ───"
 BANNER_HISTORY_EMPTY = "(本 session 无历史操作记录)"
 BANNER_HISTORY_FOOTER = "输 /history 看完整历史, /help 看所有命令"
+
+
+# ── Phase 16.2: /history 命令文案 ──
+
+HISTORY_HEADER = "本 session 共 {total} 条历史记录, 显示最近 {shown} 条 (旧 → 新):"
+HISTORY_FOOTER = "(输入 /history --type slash 仅看命令, --type llm_turn 仅看对话, --limit N 调数量)"
+HISTORY_TYPE_PREFIX_USER = "你: "
+HISTORY_TYPE_PREFIX_ASSISTANT = "Claude: "
+HISTORY_INTERVENTION_PREFIX = "假设: "
+HISTORY_SUMMARY_PREFIX = "概要: "
+HISTORY_FAILED_SUMMARY = "(执行失败: {error_type})"

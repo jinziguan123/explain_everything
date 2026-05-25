@@ -236,3 +236,36 @@ class TestHistoryCopy:
         import re
         for c in (BANNER_HISTORY_HEADER, BANNER_HISTORY_EMPTY, BANNER_HISTORY_FOOTER):
             assert re.search(r"[一-鿿]", c)
+
+    def test_chat_copy_history_command_constants_exist(self):
+        from explain_engine.chat.chat_copy import (
+            HISTORY_FAILED_SUMMARY,
+            HISTORY_FOOTER,
+            HISTORY_HEADER,
+            HISTORY_INTERVENTION_PREFIX,
+            HISTORY_SUMMARY_PREFIX,
+            HISTORY_TYPE_PREFIX_ASSISTANT,
+            HISTORY_TYPE_PREFIX_USER,
+        )
+        all_consts = (
+            HISTORY_HEADER, HISTORY_FOOTER,
+            HISTORY_TYPE_PREFIX_USER, HISTORY_TYPE_PREFIX_ASSISTANT,
+            HISTORY_INTERVENTION_PREFIX, HISTORY_SUMMARY_PREFIX,
+            HISTORY_FAILED_SUMMARY,
+        )
+        for c in all_consts:
+            assert isinstance(c, str)
+            assert len(c) > 0
+        # placeholders
+        assert "{total}" in HISTORY_HEADER and "{shown}" in HISTORY_HEADER
+        assert "{error_type}" in HISTORY_FAILED_SUMMARY
+        # 中文 (ASSISTANT_PREFIX 是英文 brand "Claude: " 跳过)
+        import re
+        zh_required = (
+            HISTORY_HEADER, HISTORY_FOOTER,
+            HISTORY_TYPE_PREFIX_USER,
+            HISTORY_INTERVENTION_PREFIX, HISTORY_SUMMARY_PREFIX,
+            HISTORY_FAILED_SUMMARY,
+        )
+        for c in zh_required:
+            assert re.search(r"[一-鿿]", c)
