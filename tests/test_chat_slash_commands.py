@@ -2845,3 +2845,18 @@ class TestHandleHistory:
         result = await _handle_history(chat, ["foo"])
         assert result[0].type == "slash_error"
         assert "位置参数" in result[0].content
+
+    @pytest.mark.asyncio
+    async def test_handle_history_empty_session(self, tmp_path, monkeypatch):
+        """Task 5.12: load 返 [] → slash_history event 含 BANNER_HISTORY_EMPTY 文案."""
+        from explain_engine.chat.chat_copy import BANNER_HISTORY_EMPTY
+        from explain_engine.chat.slash_commands import _handle_history
+
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, [])
+
+        result = await _handle_history(chat, [])
+        assert len(result) == 1
+        assert result[0].type == "slash_history"
+        # 友好提示用 chat_copy 常量, 含 "无历史"
+        assert result[0].content == BANNER_HISTORY_EMPTY
+        assert "无历史" in result[0].content
