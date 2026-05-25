@@ -471,3 +471,27 @@ class TestE2EReplHistory:
         assert "/predict" in out
         # header 总数应显 3
         assert "本 session 共 3 条" in out or "共 3 条" in out
+
+    def test_e2e_old_session_no_repl_history_resume_friendly(self) -> None:
+        """模拟 Phase 16.2 前创的老 session: sid 目录有 metadata.json + graph.json,
+        无 repl_history.jsonl. load_repl_history 应返 [] (storage 已 if not exists
+        路径), render_recent_history([]) 应返 BANNER_HISTORY_EMPTY 友好提示而不 crash.
+
+        覆盖 design §6.1 边界 case "无 history (老 session 或新空 session)".
+        """
+        from explain_engine.chat.chat_copy import BANNER_HISTORY_EMPTY
+        from explain_engine.chat.history_render import render_recent_history
+        from explain_engine.persistence.storage_v2 import StorageV2
+        from tests.test_chat_session import _make_done_session
+
+        # _make_done_session 只创 metadata + graph, 不写 repl_history.jsonl
+        # — 等价 Phase 16.2 之前老 session 状态.
+        _make_done_session("s_e2e90004")
+
+        storage = StorageV2()
+        history = storage.load_repl_history("s_e2e90004")
+        assert history == []
+
+        banner = render_recent_history(history, max_n=10)
+        # BANNER_HISTORY_EMPTY 文案应在 (友好提示, 不 crash)
+        assert BANNER_HISTORY_EMPTY in banner
