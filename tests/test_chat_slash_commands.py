@@ -2369,3 +2369,37 @@ class TestWrapHandler:
         assert e["cmd"] == "brokencmd"
         assert e["error"] == "ValueError: boom"
         assert e["summary"] == "(执行失败: ValueError)"
+
+    @pytest.mark.asyncio
+    async def test_wrap_handler_append_failure_logs_warn_not_raise(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Task 3.6: storage.append_repl_history 抛 IOError → wrapper 吞 + log warn, 上层不见."""
+        import logging
+
+        from explain_engine.chat.slash_commands import _wrap_handler
+
+        chat = _h_make_chat_with_storage(tmp_path, monkeypatch)
+
+        # Monkeypatch storage.append_repl_history 抛 IOError
+        def broken_append(sid, entry):
+            raise OSError("disk full")
+
+        chat.storage.append_repl_history = broken_append
+
+        async def fake_handler(c, args):
+            return [_FakeEvent(type="slash_ok", content="x")]
+
+        wrapped = _wrap_handler("safecmd", fake_handler)
+        # 调用不应 raise IOError
+        with caplog.at_level(logging.WARNING, logger="explain_engine.chat.slash_commands"):
+            result = await wrapped(chat, [])
+
+        # handler 结果仍透传给上层
+        assert len(result) == 1
+        assert result[0].type == "slash_ok"
+
+        # caplog 含 warn
+        warn_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("append_repl_history failed" in m for m in warn_msgs)
+        assert any("safecmd" in m for m in warn_msgs)
