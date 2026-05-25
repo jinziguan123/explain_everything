@@ -117,3 +117,31 @@ class TestRenderRecentHistory:
         # 应有 '假设:' prefix + '...' 尾
         assert "假设:" in out
         assert "..." in out
+
+    def test_render_recent_history_llm_turn_truncated_60(self) -> None:
+        """llm_turn user_input/assistant_text 各 200 字, banner 各截 60 字 + '...'."""
+        from explain_engine.chat.history_render import render_recent_history
+
+        long_user = "U" * 200
+        long_asst = "C" * 200
+        entries = [
+            {
+                "type": "llm_turn",
+                "ts": "2026-05-25T14:14:00",
+                "user_input": long_user,
+                "assistant_text": long_asst,
+            }
+        ]
+        out = render_recent_history(entries, max_n=10)
+
+        # user_input 截 60 字: 60 个 U 应在, 200 个 U 不在
+        assert "U" * 60 in out
+        assert long_user not in out
+        # assistant_text 截 60 字: 60 个 C 应在, 200 个 C 不在
+        assert "C" * 60 in out
+        assert long_asst not in out
+        # 含 '你:' + 'Claude:' prefix
+        assert "你:" in out
+        assert "Claude:" in out
+        # 截断标记
+        assert "..." in out
