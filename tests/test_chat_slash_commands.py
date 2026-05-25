@@ -2125,3 +2125,8 @@ class TestSnapshotAndDelta:
             edges=[("e_1", "p_1", "c_1"), ("e_2", "p_2", "c_1"), ("e_3", "c_1", "p_1")],
         )
         assert _snapshot_graph(state) == {"l0": 2, "l1": 1, "l2": 0, "edges": 3}
+
+    def test_snapshot_graph_empty_graph_returns_zeros(self):
+        from explain_engine.chat.slash_commands import _snapshot_graph
+        state = _h_make_state(nodes=[])
+        assert _snapshot_graph(state) == {"l0": 0, "l1": 0, "l2": 0, "edges": 0}
