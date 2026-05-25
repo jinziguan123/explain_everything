@@ -86,6 +86,7 @@ COMMAND_DESCRIPTIONS: dict[str, str] = {
     "lexicon":  "查看跨 session 累积的概念库",
     "theories": "查看跨 session 发现的稳定因果模式",
     "theory":   "看某 theory 详情 / 拒绝它 (/theory <id> [reject])",
+    "history":  "查看本 session 操作历史 (默认最近 30 条)",
 
     # 其他
     "budget":  "查看 / 设置 LLM 调用预算",
@@ -259,3 +260,19 @@ HISTORY_TYPE_PREFIX_ASSISTANT = "Claude: "
 HISTORY_INTERVENTION_PREFIX = "假设: "
 HISTORY_SUMMARY_PREFIX = "概要: "
 HISTORY_FAILED_SUMMARY = "(执行失败: {error_type})"
+
+
+def err_history_limit_range(v) -> str:
+    return f"错误: --limit 上限 200, 当前传入 {v}."
+
+
+def err_history_limit_type() -> str:
+    return "错误: --limit 需为 1-200 整数."
+
+
+def err_history_type_invalid(v) -> str:
+    return f"错误: --type 取值为 slash / llm_turn (可多选, 空格分隔). 收到: {v!r}"
+
+
+def err_history_positional() -> str:
+    return "错误: /history 不接位置参数, 用 --limit / --type."

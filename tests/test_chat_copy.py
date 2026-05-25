@@ -269,3 +269,31 @@ class TestHistoryCopy:
         )
         for c in zh_required:
             assert re.search(r"[一-鿿]", c)
+
+    def test_chat_copy_command_descriptions_has_history(self):
+        from explain_engine.chat.chat_copy import COMMAND_DESCRIPTIONS
+        assert "history" in COMMAND_DESCRIPTIONS
+        desc = COMMAND_DESCRIPTIONS["history"]
+        assert isinstance(desc, str) and len(desc) <= 50
+        import re
+        assert re.search(r"[一-鿿]", desc)
+
+    def test_chat_copy_history_err_funcs_callable(self):
+        from explain_engine.chat.chat_copy import (
+            err_history_limit_range,
+            err_history_limit_type,
+            err_history_positional,
+            err_history_type_invalid,
+        )
+        # limit_range 含传入值
+        m = err_history_limit_range(500)
+        assert "500" in m and "200" in m
+        # limit_type 含 1-200 提示
+        m = err_history_limit_type()
+        assert "1-200" in m
+        # type_invalid 含传入值 + slash / llm_turn 关键词
+        m = err_history_type_invalid("foo")
+        assert "foo" in m and "slash" in m and "llm_turn" in m
+        # positional 含 --limit / --type 关键词
+        m = err_history_positional()
+        assert "--limit" in m and "--type" in m
