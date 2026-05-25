@@ -2802,3 +2802,17 @@ class TestHandleHistory:
         result_neg = await _handle_history(chat, ["--limit", "-1"])
         assert result_neg[0].type == "slash_error"
         assert "1-200" in result_neg[0].content
+
+    @pytest.mark.asyncio
+    async def test_handle_history_limit_above_200(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.9: --limit 201 (超上限) → slash_error, content 含 '上限 200' + 实际值."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, [])
+
+        result = await _handle_history(chat, ["--limit", "201"])
+        assert result[0].type == "slash_error"
+        assert "上限 200" in result[0].content
+        assert "201" in result[0].content
