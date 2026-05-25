@@ -2768,3 +2768,18 @@ class TestHandleHistory:
         assert "/cmda" in out
         assert "问题 X" not in out
         assert "回答 Y" not in out
+
+    @pytest.mark.asyncio
+    async def test_handle_history_limit_invalid_int(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.7: --limit abc 非整数 → slash_error, content 含 '需为 1-200 整数'."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, [])
+
+        result = await _handle_history(chat, ["--limit", "abc"])
+        assert len(result) == 1
+        assert result[0].type == "slash_error"
+        assert "1-200" in result[0].content
+        assert "整数" in result[0].content
