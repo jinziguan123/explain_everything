@@ -67,3 +67,28 @@ class TestRenderRecentHistory:
             assert f"entry-{i:02d}" in out
         for i in range(0, 20):
             assert f"entry-{i:02d}" not in out
+
+    def test_render_recent_history_old_to_new_order(self) -> None:
+        """打乱时序 list 输入, 输出按 ts 升序 (旧 → 新)."""
+        from explain_engine.chat.history_render import render_recent_history
+
+        # 故意逆序 + 中间穿插
+        entries = [
+            {"type": "slash", "ts": "2026-05-25T14:30:00", "cmd": "save",
+             "args": [], "summary": "third"},
+            {"type": "slash", "ts": "2026-05-25T14:08:00", "cmd": "compress",
+             "args": [], "summary": "first"},
+            {"type": "slash", "ts": "2026-05-25T14:20:00", "cmd": "predict",
+             "args": [], "summary": "second"},
+        ]
+        out = render_recent_history(entries, max_n=10)
+
+        # 检查在输出中的相对顺序: first 在 second 前, second 在 third 前
+        idx_first = out.find("first")
+        idx_second = out.find("second")
+        idx_third = out.find("third")
+        assert idx_first != -1 and idx_second != -1 and idx_third != -1
+        assert idx_first < idx_second < idx_third, (
+            f"expected 旧→新, got first={idx_first} second={idx_second} "
+            f"third={idx_third}"
+        )
