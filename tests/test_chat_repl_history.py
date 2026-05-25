@@ -145,3 +145,24 @@ class TestRenderRecentHistory:
         assert "Claude:" in out
         # 截断标记
         assert "..." in out
+
+    def test_render_recent_history_error_entry_marker(self) -> None:
+        """error entry: summary='(执行失败: LLMError)' + error 字段, banner 显失败 marker."""
+        from explain_engine.chat.history_render import render_recent_history
+
+        entries = [
+            {
+                "type": "slash",
+                "ts": "2026-05-25T14:30:00",
+                "cmd": "predict",
+                "args": [],
+                "summary": "(执行失败: LLMError)",
+                "error": "LLMError: rate limit",
+            }
+        ]
+        out = render_recent_history(entries, max_n=10)
+
+        # summary 透传 — 用户重启后 banner 能看到失败比缺记录有价值
+        assert "(执行失败: LLMError)" in out
+        # cmd 仍在
+        assert "predict" in out
