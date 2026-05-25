@@ -2179,3 +2179,13 @@ class TestSnapshotAndDelta:
             result = _snapshot_graph_safe(_BrokenState())
         assert result is None
         assert any("snapshot failed" in r.message for r in caplog.records)
+
+    def test_compute_delta_handles_none_inputs(self):
+        from explain_engine.chat.slash_commands import _compute_delta
+        valid = {"l0": 0, "l1": 5, "l2": 0, "edges": 0}
+        # before=None
+        assert _compute_delta(None, valid) == "(变化未知)"
+        # after=None
+        assert _compute_delta(valid, None) == "(变化未知)"
+        # 两个都 None
+        assert _compute_delta(None, None) == "(变化未知)"
