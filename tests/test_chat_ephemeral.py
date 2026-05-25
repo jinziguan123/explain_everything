@@ -52,7 +52,7 @@ class TestPromoteToPersistent:
         from explain_engine.persistence.storage_v2 import StorageV2
         from explain_engine.schema.nodes import VariableNode
 
-        async def fake_bootstrap(question, llm, lexicon=None, lexicon_top_k=20):
+        async def fake_bootstrap(question, llm, lexicon=None, lexicon_top_k=20, **kwargs):
             return [
                 VariableNode(
                     id="p_001",
@@ -100,7 +100,7 @@ class TestPromoteToPersistent:
         from explain_engine.persistence.storage_v2 import StorageV2
         from explain_engine.schema.nodes import VariableNode
 
-        async def fake_bootstrap(question, llm, lexicon=None, lexicon_top_k=20):
+        async def fake_bootstrap(question, llm, lexicon=None, lexicon_top_k=20, **kwargs):
             return [
                 VariableNode(
                     id="p_001",
