@@ -1,18 +1,22 @@
-"""Phase 16.2 Wave 7: render_recent_history banner 渲染单元 + 集成测试.
+"""Phase 16.2 Wave 7 + Wave 9: render_recent_history banner + e2e 集成测试.
 
 design: docs/plans/2026-05-25-repl-history-persistence-design.md §6.1
-plan: docs/plans/2026-05-25-repl-history-persistence-plan.md Wave 7
+plan: docs/plans/2026-05-25-repl-history-persistence-plan.md Wave 7 + Wave 9
 
-测的是纯函数 render_recent_history(entries, max_n) -> str —
+Wave 7 — 纯函数 render_recent_history(entries, max_n) -> str:
 - 旧 → 新排序 (按 ts 升序)
 - intervention 截 80 字, llm_turn user/assistant 各截 60 字
 - 空 list → BANNER_HISTORY_EMPTY
 - error entry summary 透传 (展示失败标记)
 
-Wave 9 e2e 在另文件 (类 TestE2EReplHistoryFlow), 本文件仅 string-level.
+Wave 9 — e2e (TestE2EReplHistory): 真 StorageV2 + tmp EXPLAIN_HOME (conftest
+autouse isolated_explain_home) + mock 单 engine 函数, 走真 wrapped handler
+经 dispatch_slash → 验 repl_history.jsonl 真有 entry + banner 真拼.
 """
 
 from __future__ import annotations
+
+import pytest
 
 
 class TestRenderRecentHistory:
@@ -244,3 +248,98 @@ class TestResumeBannerIntegration:
         assert "JEPA 论文的关键思想?" in full_banner
         assert "Claude:" in full_banner
         assert "/history" in full_banner
+
+
+class TestE2EReplHistory:
+    """Wave 9: 端到端 smoke — 真 StorageV2 + tmp EXPLAIN_HOME (autouse fixture)
+    + 走真 wrapped handler 经 dispatch_slash, 验整链路 history 持久化 + 回读 + 渲染.
+
+    不 mock storage 也不 mock _wrap_handler — 只 mock 真正贵 (LLM 调) 的 engine
+    函数 (prediction_predict). /show /check 走真路径不需 mock.
+    """
+
+    @pytest.mark.asyncio
+    async def test_e2e_slash_predict_writes_history_visible_on_resume(
+        self, monkeypatch
+    ) -> None:
+        """走真 wrapped /predict (经 _wrap_handler) → repl_history 有 1 entry,
+        intervention 完整保留 + summary 含 '+1 L1' / '+5 现象' 等 delta 文案.
+
+        关键链路: dispatch_slash → DEFAULT_COMMANDS[predict] → _wrap_handler
+          → snapshot before → _handle_predict (mock predict) → snapshot after
+          → _build_history_entry → storage.append_repl_history → load 回 1 entry.
+        """
+        from dataclasses import dataclass, field
+
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.chat.slash_commands import dispatch_slash
+        from explain_engine.persistence.storage_v2 import StorageV2
+        from explain_engine.schema.nodes import VariableNode
+        from tests.test_chat_session import _make_done_session
+
+        _make_done_session("s_e2e90001")
+        # ChatSession.__init__ 不允许 llm 为 None 时调 /predict, 传 object() 占位
+        # — mock 的 prediction_predict 不会 touch llm 内部.
+        chat = ChatSession("s_e2e90001", llm=object())  # type: ignore[arg-type]
+
+        long_intervention = (
+            "假设 LeCun JEPA 真正解决了 c_001 结构先验内化深度问题 + "
+            "c_004 组合生成边界, 那么世界模型可以从纯像素预测转向抽象 latent 因果 "
+            "预测, 从根本避免生成式模型在高维像素空间的瓶颈, 这是一种 fundamentally "
+            "不同的归纳偏置策略"
+        )
+
+        async def fake_provider(prompt: str) -> str:
+            return long_intervention
+
+        chat.input_provider = fake_provider
+
+        @dataclass
+        class FakeReport:
+            new_node_ids: list = field(default_factory=list)
+            predicted_L0_ids: list = field(default_factory=list)
+            activated_existing_L0: list = field(default_factory=list)
+            propagation_acts: dict = field(default_factory=dict)
+
+        async def fake_predict(state, intervention_text, llm):
+            state.graph.add_node(VariableNode(
+                id="c_e1", name="t", description="d",
+                abstraction_level=1, confidence=0.7, epistemic="insight",
+            ))
+            for i in range(5):
+                state.graph.add_node(VariableNode(
+                    id=f"p_e{i}", name=f"p{i}", description="d",
+                    abstraction_level=0, confidence=0.7, epistemic="observation",
+                ))
+            return FakeReport(
+                new_node_ids=["c_e1"],
+                predicted_L0_ids=[f"p_e{i}" for i in range(5)],
+                activated_existing_L0=[],
+                propagation_acts={},
+            )
+
+        monkeypatch.setattr(
+            "explain_engine.engines.prediction.predict", fake_predict
+        )
+
+        events = await dispatch_slash(chat, "/predict")
+        # handler 应正常返回 (无 stage gate 失败 / 无 _ephemeral_reject)
+        assert any(e.type == "slash_predict" for e in events), (
+            f"expected slash_predict event, got types: {[e.type for e in events]}"
+        )
+
+        storage = StorageV2()  # env-based, 同 chat.storage 看一致 project_id
+        history = storage.load_repl_history("s_e2e90001")
+        slash_entries = [
+            e for e in history
+            if e.get("type") == "slash" and e.get("cmd") == "predict"
+        ]
+        assert len(slash_entries) == 1, (
+            f"expected 1 predict entry, got {len(slash_entries)}: {history}"
+        )
+        entry = slash_entries[0]
+        # intervention 应完整保存 (jsonl 不截)
+        assert entry["intervention"] == long_intervention
+        # summary delta: 加 1 L1 + 5 L0 (无 edge 加, _handle_predict mock 不加)
+        assert "+1 L1" in entry["summary"]
+        assert "+5 现象" in entry["summary"]
