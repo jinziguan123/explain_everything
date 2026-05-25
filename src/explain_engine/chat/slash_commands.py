@@ -41,6 +41,7 @@ from explain_engine.chat.chat_copy import (
     STATUS_PREDICT,
     STATUS_RESCORE,
     STATUS_RUN,
+    STATUS_THEORIES_COMPUTE,
     err_ephemeral_reject,
     err_failed,
     err_no_llm,
@@ -49,6 +50,8 @@ from explain_engine.chat.chat_copy import (
     msg_resume_already,
     msg_resume_switching,
     msg_run_done,
+    msg_theories_cold_start,
+    msg_theories_no_motif_found,
     zh,
 )
 from explain_engine.chat.slash_stage_rules import with_stage_gate
@@ -1382,6 +1385,93 @@ async def _handle_lexicon(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     )]
 
 
+async def _handle_theories(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 16 Task 13: /theories — 显跨 session 因果模式 (theory list).
+
+    Read-only cross-session inspect (跟 /list /lexicon 一致, ephemeral 也 work).
+    无 mutate, 不 persist (recompute 自动 atomic write theories.json).
+
+    Args:
+      --all      : 同时显 tentative (default 只 stable)
+      --limit=N  : top-N (default 10)
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.engines.theory.cache import get_active_theories
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    show_all = "--all" in args
+    limit_arg = 10
+    for a in args:
+        if a.startswith("--limit="):
+            try:
+                limit_arg = int(a.split("=", 1)[1])
+            except (ValueError, IndexError):
+                pass
+
+    storage = StorageV2()
+    # ChatSession / EphemeralChatSession 都没 .embedder field — 走 stale path
+    # (cache miss + embedder=None 返 stale cache, recompute 等下次有 embedder).
+    embedder = getattr(chat, "embedder", None)
+
+    try:
+        with Console().status(STATUS_THEORIES_COMPUTE):
+            cache = get_active_theories(storage, embedder=embedder)
+    except Exception as exc:
+        return [ChatEvent(type="slash_error", content=err_failed("theories", exc))]
+
+    n_sessions = len(cache.session_ids_snapshot)
+    if n_sessions < cache.cold_start_threshold:
+        return [ChatEvent(
+            type="slash_theories",
+            content=msg_theories_cold_start(n_sessions, cache.cold_start_threshold),
+        )]
+
+    all_theories = list(cache.stable_theories)
+    if show_all:
+        all_theories.extend(cache.tentative_theories)
+    visible = [t for t in all_theories if t.id not in cache.rejected_theory_ids][:limit_arg]
+
+    if not visible:
+        return [ChatEvent(
+            type="slash_theories",
+            content=msg_theories_no_motif_found(n_sessions),
+        )]
+
+    type_zh_map = {"chain": "因果链", "star": "星型", "cycle": "环路"}
+    table = Table(
+        title=(
+            f"跨 session 因果模式 (stable: {len(cache.stable_theories)}, "
+            f"tentative: {len(cache.tentative_theories)}, "
+            f"rejected: {len(cache.rejected_theory_ids)})"
+        )
+    )
+    table.add_column("ID", style="cyan")
+    table.add_column("类型")
+    table.add_column("模式", style="bold", max_width=50)
+    table.add_column("覆盖 session", justify="right")
+    table.add_column("预测准确度", justify="right")
+    table.add_column("状态")
+
+    for t in visible:
+        type_zh = type_zh_map.get(t.motif_type, t.motif_type)
+        status_zh = "已稳定" if t.stability_status == "stable" else "待观察"
+        rejected_mark = " (已拒绝)" if t.id in cache.rejected_theory_ids else ""
+        table.add_row(
+            t.id, type_zh, t.natural_language_summary,
+            f"{len(t.supporting_sessions)}/{n_sessions}",
+            f"{t.predictive_power:.0%}",
+            status_zh + rejected_mark,
+        )
+
+    return [ChatEvent(
+        type="slash_theories",
+        content=_render_table_to_string(table),
+    )]
+
+
 async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     """Phase 11 Wave 4: 一次性迁老 sessions/*.json → storage_v2 layout.
 
@@ -1483,6 +1573,8 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     # Phase 11 Wave 4: 3 cross-session slash (不依赖 single session, ephemeral 也 work).
     SlashCommand("list",           COMMAND_DESCRIPTIONS["list"],           _handle_list),
     SlashCommand("lexicon",        COMMAND_DESCRIPTIONS["lexicon"],        _handle_lexicon),
+    # Phase 16 Task 13: /theories cross-session inspect (跨 session theory list).
+    SlashCommand("theories",       COMMAND_DESCRIPTIONS["theories"],       _handle_theories),
     SlashCommand("migrate",        COMMAND_DESCRIPTIONS["migrate"],        _handle_migrate),
 )
 
