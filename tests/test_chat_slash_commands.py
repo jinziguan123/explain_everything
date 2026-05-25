@@ -2346,3 +2346,26 @@ class TestWrapHandler:
         # 反 KeyError 验; 也 sanity check 不等于 None
         with pytest.raises(KeyError):
             _ = e["intervention"]
+
+    @pytest.mark.asyncio
+    async def test_wrap_handler_handler_exception_writes_error_entry_then_raises(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 3.5: handler 抛 ValueError → wrapper 先写 entry (含 error 字段), 再 raise."""
+        from explain_engine.chat.slash_commands import _wrap_handler
+
+        chat = _h_make_chat_with_storage(tmp_path, monkeypatch)
+
+        async def fake_handler(c, args):
+            raise ValueError("boom")
+
+        wrapped = _wrap_handler("brokencmd", fake_handler)
+        with pytest.raises(ValueError, match="boom"):
+            await wrapped(chat, [])
+
+        entries = chat.storage.load_repl_history(chat.sid)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["cmd"] == "brokencmd"
+        assert e["error"] == "ValueError: boom"
+        assert e["summary"] == "(执行失败: ValueError)"
