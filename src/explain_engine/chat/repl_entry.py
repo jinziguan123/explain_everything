@@ -112,6 +112,11 @@ async def enter_repl_async() -> None:
                             console.print(
                                 f"[green]切换至 session {new_sid}.[/green]"
                             )
+                            # Phase 16.2.1 hotfix: 切 session 也显 history 段
+                            from explain_engine.chat.history_render import (
+                                print_history_section,
+                            )
+                            print_history_section(console, chat)
                         except Exception as exc:
                             console.print(
                                 f"[red]切换失败: {type(exc).__name__}: {exc}[/red]"
@@ -190,6 +195,11 @@ async def enter_repl_async() -> None:
                             console.print(
                                 f"[green]切换至 session {new_sid}.[/green]"
                             )
+                            # Phase 16.2.1 hotfix: 切 session 也显 history 段
+                            from explain_engine.chat.history_render import (
+                                print_history_section,
+                            )
+                            print_history_section(console, chat)
                         except Exception as exc:
                             console.print(
                                 f"[red]切换失败: {type(exc).__name__}: {exc}[/red]"

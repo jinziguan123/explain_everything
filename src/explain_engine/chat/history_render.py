@@ -95,3 +95,24 @@ def render_recent_history(entries: list[dict], max_n: int = 10) -> str:
     header = BANNER_HISTORY_HEADER.format(n=len(shown))
     body = "\n".join(_render_history_entry_short(e) for e in shown)
     return f"\n  {header}\n{body}\n\n  {BANNER_HISTORY_FOOTER}\n"
+
+
+def print_history_section(console, chat) -> None:
+    """Resume / switch session 后渲染 history 段到 console. 失败 silent + log warn.
+
+    用途: cli._run_chat_repl_async 启动 chat + repl_entry.py /resume 切 session 后
+    两个路径都调本 helper, 不重复 try/except inline.
+
+    - chat 需含 .storage (StorageV2) + .sid (str).
+    - history 缺失 / 损坏 → render_recent_history 退化成 "(无历史)" 段, 不抛.
+    - 任何 unexpected 异常 → silent skip + log warn, 不影响 chat 启动/切换.
+    """
+    import logging
+    try:
+        history_entries = chat.storage.load_repl_history(chat.sid)
+        console.print(render_recent_history(history_entries, max_n=10))
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            f"resume banner history section failed for {getattr(chat, 'sid', '?')}: "
+            f"{type(exc).__name__}: {exc}"
+        )
