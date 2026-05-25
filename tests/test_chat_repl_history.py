@@ -197,3 +197,50 @@ class TestRenderRecentHistory:
         # summary 原样透传 (Wave 3.7 snapshot 失败 fallback 文案)
         assert "(变化未知)" in out
         assert "rescore" in out
+
+
+class TestResumeBannerIntegration:
+    """Wave 7 Task 7.9: string-level — render_recent_history 拼出 banner section."""
+
+    def test_resume_banner_includes_recent_history_section(self) -> None:
+        """模拟 resume 入口拼 banner: 已恢复 session line + render_recent_history.
+
+        验输出整段含 banner '已恢复 session' line + '最近 N 条操作' section.
+        不调真 cli.py (cli 是 typer + click runtime), 只验拼装等价行为.
+        """
+        from explain_engine.chat.history_render import render_recent_history
+
+        # 模拟 cli._run_chat_repl_async 内的 banner 拼装 (1 行 Loaded + history 段)
+        sid = "s_df84e637"
+        existing_banner = (
+            f"Loaded session {sid}. "
+            f"Type /help for commands. /quit to exit. ctrl+o toggle log."
+        )
+        history = [
+            {
+                "type": "slash",
+                "ts": "2026-05-25T14:08:00",
+                "cmd": "compress",
+                "args": [],
+                "summary": "+4 L1 / +12 边",
+            },
+            {
+                "type": "llm_turn",
+                "ts": "2026-05-25T14:14:00",
+                "user_input": "JEPA 论文的关键思想?",
+                "assistant_text": "JEPA 论文核心是 abstract causal structure...",
+            },
+        ]
+        history_section = render_recent_history(history, max_n=10)
+        full_banner = existing_banner + history_section
+
+        # 既有 banner 段保留
+        assert sid in full_banner
+        assert "Loaded session" in full_banner
+        # 新加 history section 内容: header + 2 个 entry + footer
+        assert "最近 2 条操作" in full_banner
+        assert "compress" in full_banner
+        assert "+4 L1" in full_banner
+        assert "JEPA 论文的关键思想?" in full_banner
+        assert "Claude:" in full_banner
+        assert "/history" in full_banner
