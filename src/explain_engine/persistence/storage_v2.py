@@ -136,6 +136,13 @@ class StorageV2:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
+    # ── repl_history.jsonl (Phase 16.2: append-only, display-only, 不进 LLM context) ──
+    def append_repl_history(self, sid: str, entry: dict[str, Any]) -> None:
+        path = self.session_dir(sid) / "repl_history.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
     # ── list sessions ──
     def list_sessions(self) -> list[str]:
         sessions_root = self.project_dir() / "sessions"

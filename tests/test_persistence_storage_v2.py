@@ -105,3 +105,22 @@ class TestStorageV2:
         monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
         s = StorageV2()
         assert s.load_chat_state("s_001") is None
+
+
+class TestReplHistoryAppend:
+    def test_append_repl_history_creates_file(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+        storage = StorageV2(project_id="testproj")
+        entry = {
+            "ts": "2026-05-25T14:00:00+08:00",
+            "type": "slash",
+            "cmd": "compress",
+            "args": [],
+            "summary": "+4 L1",
+        }
+        storage.append_repl_history("s_abc", entry)
+        path = storage.session_dir("s_abc") / "repl_history.jsonl"
+        assert path.exists()
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        assert json.loads(lines[0]) == entry
