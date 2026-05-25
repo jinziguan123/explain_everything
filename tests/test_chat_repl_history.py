@@ -166,3 +166,15 @@ class TestRenderRecentHistory:
         assert "(执行失败: LLMError)" in out
         # cmd 仍在
         assert "predict" in out
+
+    def test_render_recent_history_empty_friendly_msg(self) -> None:
+        """空 list, 输出含 BANNER_HISTORY_EMPTY 文本."""
+        from explain_engine.chat.chat_copy import BANNER_HISTORY_EMPTY
+        from explain_engine.chat.history_render import render_recent_history
+
+        out = render_recent_history([], max_n=10)
+
+        assert BANNER_HISTORY_EMPTY in out
+        # 不应有 header / footer (空 path 走的是友好提示分支)
+        assert "最近" not in out  # header 不出现
+        assert "/history" not in out  # footer 不出现
