@@ -2681,3 +2681,34 @@ class TestHandleHistory:
             assert f"/cmd{i}" in out
         # header: total=7 shown=7 (limit > total 时, shown 是 total)
         assert "7" in out
+
+    @pytest.mark.asyncio
+    async def test_handle_history_type_slash_filters(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.4: --type slash 过滤. 5 slash + 3 llm_turn 混 → 仅 5 slash."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        entries: list[dict] = []
+        for i in range(5):
+            entries.append(_h_make_history_entry_slash(
+                cmd=f"cmdslash{i}",
+                ts=f"2026-05-25T14:{i:02d}:00+08:00",
+            ))
+        for i in range(3):
+            entries.append(_h_make_history_entry_llm(
+                user_input=f"问题 {i}",
+                assistant_text=f"回答 {i}",
+                ts=f"2026-05-25T15:{i:02d}:00+08:00",
+            ))
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, entries)
+
+        result = await _handle_history(chat, ["--type", "slash"])
+        out = result[0].content
+        # 5 slash 都在
+        for i in range(5):
+            assert f"/cmdslash{i}" in out
+        # 3 llm_turn 不在 (user_input/assistant_text 文案应缺失)
+        for i in range(3):
+            assert f"问题 {i}" not in out
+            assert f"回答 {i}" not in out
