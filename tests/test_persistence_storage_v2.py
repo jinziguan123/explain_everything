@@ -124,3 +124,19 @@ class TestReplHistoryAppend:
         lines = path.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1
         assert json.loads(lines[0]) == entry
+
+    def test_append_repl_history_appends_not_overwrites(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+        storage = StorageV2(project_id="testproj")
+        entries = [
+            {"ts": "2026-05-25T14:00:00+08:00", "type": "slash", "cmd": "compress", "args": [], "summary": "+4 L1"},
+            {"ts": "2026-05-25T14:01:00+08:00", "type": "slash", "cmd": "run", "args": [], "summary": "+12 L2"},
+            {"ts": "2026-05-25T14:02:00+08:00", "type": "slash", "cmd": "rescore", "args": [], "summary": "无变化"},
+        ]
+        for e in entries:
+            storage.append_repl_history("s_abc", e)
+        path = storage.session_dir("s_abc") / "repl_history.jsonl"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 3
+        parsed = [json.loads(line) for line in lines]
+        assert parsed == entries  # 顺序保持, 内容一致
