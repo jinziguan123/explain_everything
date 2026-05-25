@@ -267,3 +267,10 @@ class TestChatEventMetadata:
     def test_chat_event_metadata_optional_default_none(self):
         e = ChatEvent(type="slash_show", content="hello")
         assert e.metadata is None
+
+    def test_chat_event_metadata_explicit_dict(self):
+        e = ChatEvent(type="slash_predict", content="x", metadata={"intervention": "假设 X"})
+        assert e.metadata == {"intervention": "假设 X"}
+        # 多 key 也行
+        e2 = ChatEvent(type="x", content="y", metadata={"a": 1, "b": 2})
+        assert e2.metadata == {"a": 1, "b": 2}
