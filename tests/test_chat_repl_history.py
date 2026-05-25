@@ -92,3 +92,28 @@ class TestRenderRecentHistory:
             f"expected 旧→新, got first={idx_first} second={idx_second} "
             f"third={idx_third}"
         )
+
+    def test_render_recent_history_intervention_truncated_80(self) -> None:
+        """intervention 500 字, banner 第二行截 80 字 + '...', 不含原 100~500 字段."""
+        from explain_engine.chat.history_render import render_recent_history
+
+        long_iv = "A" * 500
+        entries = [
+            {
+                "type": "slash",
+                "ts": "2026-05-25T14:20:00",
+                "cmd": "predict",
+                "args": [],
+                "summary": "+1 L1",
+                "intervention": long_iv,
+            }
+        ]
+        out = render_recent_history(entries, max_n=10)
+
+        # 首 80 字应在 (开头连续 A)
+        assert "A" * 80 in out
+        # 但 500 字全文不应在 (verify 截断)
+        assert long_iv not in out
+        # 应有 '假设:' prefix + '...' 尾
+        assert "假设:" in out
+        assert "..." in out
