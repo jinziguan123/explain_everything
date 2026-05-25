@@ -2136,3 +2136,9 @@ class TestSnapshotAndDelta:
         before = {"l0": 0, "l1": 5, "l2": 0, "edges": 0}
         after = {"l0": 0, "l1": 6, "l2": 0, "edges": 0}
         assert _compute_delta(before, after) == "+1 L1"
+
+    def test_compute_delta_negative(self):
+        from explain_engine.chat.slash_commands import _compute_delta
+        before = {"l0": 0, "l1": 5, "l2": 0, "edges": 0}
+        after = {"l0": 0, "l1": 3, "l2": 0, "edges": 0}
+        assert _compute_delta(before, after) == "-2 L1"
