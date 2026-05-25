@@ -2142,3 +2142,12 @@ class TestSnapshotAndDelta:
         before = {"l0": 0, "l1": 5, "l2": 0, "edges": 0}
         after = {"l0": 0, "l1": 3, "l2": 0, "edges": 0}
         assert _compute_delta(before, after) == "-2 L1"
+
+    def test_compute_delta_zero_omitted(self):
+        from explain_engine.chat.slash_commands import _compute_delta
+        before = {"l0": 0, "l1": 5, "l2": 0, "edges": 0}
+        after = {"l0": 5, "l1": 5, "l2": 0, "edges": 0}
+        # l1/l2/edges 不变 → 仅 "+5 现象" 单字段, l1/l2/edges 项不出现
+        result = _compute_delta(before, after)
+        assert result == "+5 现象"
+        assert "L1" not in result and "L2" not in result and "边" not in result
