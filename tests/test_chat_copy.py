@@ -188,3 +188,35 @@ class TestStatusAndInfoConstants:
         for s in (INFO_INSIGHT_PENDING_RESUME, INFO_MID_STAGE_SAVED):
             assert "[dim]" in s
             assert "[/dim]" in s
+
+
+class TestTheoryCopy:
+    def test_command_descriptions_theories(self):
+        from explain_engine.chat.chat_copy import COMMAND_DESCRIPTIONS
+        assert "theories" in COMMAND_DESCRIPTIONS
+        assert "theory" in COMMAND_DESCRIPTIONS
+        for k in ("theories", "theory"):
+            assert len(COMMAND_DESCRIPTIONS[k]) <= 50
+            import re
+            assert re.search(r'[一-鿿]', COMMAND_DESCRIPTIONS[k])
+
+    def test_status_theories_compute_markup(self):
+        from explain_engine.chat.chat_copy import STATUS_THEORIES_COMPUTE
+        assert "[bold green]" in STATUS_THEORIES_COMPUTE
+        assert "分析" in STATUS_THEORIES_COMPUTE
+
+    def test_msg_theories_cold_start_numbers(self):
+        from explain_engine.chat.chat_copy import msg_theories_cold_start
+        m = msg_theories_cold_start(2, 3)
+        assert "2" in m and "3" in m and "session" in m
+
+    def test_msg_theory_rejected_id(self):
+        from explain_engine.chat.chat_copy import msg_theory_rejected
+        assert "t_abc123" in msg_theory_rejected("t_abc123")
+        assert "拒绝" in msg_theory_rejected("t_abc123")
+
+    def test_err_theory_not_found_id(self):
+        from explain_engine.chat.chat_copy import err_theory_not_found
+        m = err_theory_not_found("t_xyz")
+        assert "t_xyz" in m
+        assert "/theories" in m

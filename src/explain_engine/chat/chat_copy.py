@@ -80,10 +80,12 @@ COMMAND_DESCRIPTIONS: dict[str, str] = {
     "check": "查看接受度评估报告 (跟 /show 信息侧重不同)",
 
     # 管理 session
-    "new":     "重置当前 chat, 回到刚启动的空白状态",
-    "resume":  "切换到历史 session",
-    "list":    "列出当前项目所有 session",
-    "lexicon": "查看跨 session 累积的概念库",
+    "new":      "重置当前 chat, 回到刚启动的空白状态",
+    "resume":   "切换到历史 session",
+    "list":     "列出当前项目所有 session",
+    "lexicon":  "查看跨 session 累积的概念库",
+    "theories": "查看跨 session 发现的稳定因果模式",
+    "theory":   "看某 theory 详情 / 拒绝它 (/theory <id> [reject])",
 
     # 其他
     "budget":  "查看 / 设置 LLM 调用预算",
@@ -101,7 +103,7 @@ HELP_GROUPS_ZH: list[tuple[str, list[str]]] = [
     ("推进 session",              ["compress", "run", "rescore"]),
     ("干预分析 (需先 /compress)", ["predict", "counterfactual"]),
     ("查看状态 (只读)",           ["show", "graph", "check"]),
-    ("管理 session",              ["new", "resume", "list", "lexicon"]),
+    ("管理 session",              ["new", "resume", "list", "lexicon", "theories", "theory"]),
     ("其他",                      ["budget", "compact", "save", "migrate"]),
     ("帮助 / 退出",               ["help", "quit"]),
 ]
@@ -181,6 +183,25 @@ def err_stage_not_allowed(cmd: str, current_stage: str, allowed: list[str]) -> s
     )
 
 
+def msg_theories_cold_start(current: int, needed: int) -> str:
+    return f"需累积 ≥ {needed} 个 session 才能形成 theory. 当前: {current}/{needed}."
+
+
+def msg_theories_no_motif_found(n_sessions: int) -> str:
+    return f"已分析 {n_sessions} 个 session, 未发现重复出现的因果模式. 跑更多 session 试试."
+
+
+def msg_theory_rejected(theory_id: str) -> str:
+    return f"已拒绝 theory {theory_id}, 后续不再用于 bootstrap inject."
+
+
+def err_theory_not_found(theory_id: str) -> str:
+    return (
+        f"theory {theory_id} 不存在, 可能 cache 已 invalidate. "
+        f"先跑 /theories 看当前 list."
+    )
+
+
 STATUS_COMPRESS_PROPOSE = "[bold green]正在归纳模式...[/bold green]"
 STATUS_COMPRESS_SCORE   = "[bold green]正在评分候选模式...[/bold green]"
 STATUS_LEXICON_FLUSH    = "[bold green]正在存盘到概念库...[/bold green]"
@@ -188,6 +209,7 @@ STATUS_RUN              = "[bold green]正在自动推理 (扩展 / 反思 / 衰
 STATUS_PREDICT          = "[bold green]正在预测干预影响...[/bold green]"
 STATUS_COUNTERFACTUAL   = "[bold green]正在做反事实分析...[/bold green]"
 STATUS_RESCORE          = "[bold green]正在重评因果关系...[/bold green]"
+STATUS_THEORIES_COMPUTE = "[bold green]正在分析跨 session 模式...[/bold green]"
 
 INFO_INSIGHT_PENDING_RESUME = "[dim](检测到中途取消, 跳过 LLM 直接进入审查)[/dim]"
 INFO_MID_STAGE_SAVED        = "[dim](中间状态已保存, 取消审查可下次重入跳过 LLM)[/dim]"
