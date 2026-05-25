@@ -2816,3 +2816,19 @@ class TestHandleHistory:
         assert result[0].type == "slash_error"
         assert "上限 200" in result[0].content
         assert "201" in result[0].content
+
+    @pytest.mark.asyncio
+    async def test_handle_history_type_invalid_value(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.10: --type foo (非 slash/llm_turn) → slash_error 含 'slash / llm_turn'."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, [])
+
+        result = await _handle_history(chat, ["--type", "foo"])
+        assert result[0].type == "slash_error"
+        assert "slash" in result[0].content
+        assert "llm_turn" in result[0].content
+        # 含 invalid 值, 用 repr 显示
+        assert "foo" in result[0].content
