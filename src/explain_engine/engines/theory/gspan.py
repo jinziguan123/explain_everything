@@ -142,3 +142,106 @@ def _enumerate_dfs_codes_from(g: nx.DiGraph, start) -> list[DFSEdge]:
 
     visit(start)
     return code
+
+
+def _rightmost_path(code: list[DFSEdge]) -> list[int]:
+    """gSpan §4.2: rightmost path 是从 root (idx 0) 沿 forward edge 到最新 added 节点的路径.
+
+    forward edge: to_idx > from_idx.
+    """
+    if not code:
+        return [0]
+    # 最新 added forward edge 的 to_idx
+    forward_edges = [e for e in code if e.to_idx > e.from_idx]
+    if not forward_edges:
+        return [0]
+    rightmost_node = max(e.to_idx for e in forward_edges)
+    # 沿 forward edge 回溯到 0
+    path = [rightmost_node]
+    cur = rightmost_node
+    while cur != 0:
+        prev = [e for e in code if e.to_idx == cur and e.to_idx > e.from_idx]
+        if not prev:
+            break
+        cur = prev[0].from_idx
+        path.insert(0, cur)
+    return path
+
+
+def _enumerate_rightmost_extensions(
+    code: list[DFSEdge],
+    graphs: list[tuple[str, nx.DiGraph]],
+    embeddings: list[dict],  # 每 graph 一个 motif_idx → graph_node 映射
+) -> list[DFSEdge]:
+    """gSpan §4.2: 只扩展 rightmost path 上的节点 (避免重复枚举).
+
+    MVP: 只支持 forward extension (从 rightmost path 节点新加未访问子节点).
+    backward extension (cycle 形成) 由 Task 7 _dfs_extend 内单独处理.
+    """
+    rmpath = _rightmost_path(code)
+    if code:
+        next_idx = max(max(e.from_idx, e.to_idx) for e in code) + 1
+    else:
+        next_idx = 1
+
+    candidates: list[DFSEdge] = []
+    seen: set = set()
+
+    for graph_idx, (_gid, g) in enumerate(graphs):
+        if graph_idx >= len(embeddings):
+            continue
+        emb = embeddings[graph_idx]
+        for motif_node in rmpath:
+            if motif_node not in emb:
+                continue
+            graph_node = emb[motif_node]
+            if graph_node not in g.nodes:
+                continue
+            for _, nbr, edata in g.out_edges(graph_node, data=True):
+                if nbr in emb.values():
+                    continue  # 已 mapped, skip (backward 单独处理)
+                nbr_label = g.nodes[nbr].get("label", "")
+                edge_label = edata.get("label", "")
+                from_label = g.nodes[graph_node].get("label", "")
+                ext_key = (motif_node, from_label, edge_label, nbr_label)
+                if ext_key in seen:
+                    continue
+                seen.add(ext_key)
+                candidates.append(DFSEdge(
+                    from_idx=motif_node, to_idx=next_idx,
+                    from_label=from_label, edge_label=edge_label, to_label=nbr_label,
+                ))
+    return candidates
+
+
+def _count_support(
+    motif_code: list[DFSEdge],
+    graphs: list[tuple[str, nx.DiGraph]],
+) -> tuple[int, list[tuple[str, dict]]]:
+    """对 motif_code 跑子图同构, 数它出现在多少 graph + 记录 embedding.
+
+    Returns: (support_count, [(graph_id, {motif_idx: graph_node})])
+    """
+    # 用 code 重建 motif graph
+    motif_g = nx.DiGraph()
+    node_labels: dict[int, str] = {}
+    for e in motif_code:
+        node_labels[e.from_idx] = e.from_label
+        node_labels[e.to_idx] = e.to_label
+        motif_g.add_edge(e.from_idx, e.to_idx, label=e.edge_label)
+    for nid, lbl in node_labels.items():
+        motif_g.nodes[nid]["label"] = lbl
+
+    found: list[tuple[str, dict]] = []
+    for gid, g in graphs:
+        matcher = nx.algorithms.isomorphism.DiGraphMatcher(
+            g, motif_g,
+            node_match=lambda a, b: a.get("label") == b.get("label"),
+            edge_match=lambda a, b: a.get("label") == b.get("label"),
+        )
+        if matcher.subgraph_is_isomorphic():
+            # mapping is graph_node → motif_idx, 反转为 motif_idx → graph_node
+            mapping = matcher.mapping  # type: ignore
+            inv = {v: k for k, v in mapping.items()}
+            found.append((gid, inv))
+    return len(found), found

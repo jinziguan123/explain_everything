@@ -80,3 +80,50 @@ class TestIsMinimumDFSCode:
         # A → B → C, DFS code [(0,1,A,e,B), (1,2,B,e,C)] 是 min
         code = [DFSEdge(0, 1, "A", "e", "B"), DFSEdge(1, 2, "B", "e", "C")]
         assert _is_minimum_dfs_code(code) is True
+
+
+class TestRightmostExtensions:
+    def test_single_node_seed_has_extensions(self):
+        """seed code = [(0,1,A,e,B)], rightmost path = [0, 1].
+        从 0 或 1 出去找新 edge → extension.
+        """
+        from explain_engine.engines.theory.gspan import (
+            DFSEdge,
+            _enumerate_rightmost_extensions,
+        )
+        # Graph 0: A → B → C
+        g = nx.DiGraph()
+        g.add_node("a", label="A")
+        g.add_node("b", label="B")
+        g.add_node("c", label="C")
+        g.add_edge("a", "b", label="e")
+        g.add_edge("b", "c", label="e")
+
+        seed = [DFSEdge(0, 1, "A", "e", "B")]
+        embedding = {0: "a", 1: "b"}  # motif_idx → graph_node
+        extensions = _enumerate_rightmost_extensions(seed, [("g0", g)], [embedding])
+
+        # 应找到 forward extension (1, 2, B, e, C)
+        assert len(extensions) >= 1
+        assert any(ext.from_idx == 1 and ext.to_label == "C" for ext in extensions)
+
+
+class TestCountSupport:
+    def test_support_count_across_graphs(self):
+        """同 motif 出现在 2 个 graph → support = 2."""
+        from explain_engine.engines.theory.gspan import DFSEdge, _count_support
+        # 2 graph, 都含 A → B
+        g0 = nx.DiGraph()
+        g0.add_node("x", label="A")
+        g0.add_node("y", label="B")
+        g0.add_edge("x", "y", label="e")
+        g1 = nx.DiGraph()
+        g1.add_node("p", label="A")
+        g1.add_node("q", label="B")
+        g1.add_edge("p", "q", label="e")
+
+        motif_code = [DFSEdge(0, 1, "A", "e", "B")]
+        graphs = [("g0", g0), ("g1", g1)]
+        support, embeddings = _count_support(motif_code, graphs)
+        assert support == 2
+        assert len(embeddings) == 2
