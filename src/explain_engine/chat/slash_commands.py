@@ -45,6 +45,7 @@ from explain_engine.chat.chat_copy import (
     err_ephemeral_reject,
     err_failed,
     err_no_llm,
+    err_theory_not_found,
     msg_compress_done,
     msg_rescore_done,
     msg_resume_already,
@@ -52,6 +53,7 @@ from explain_engine.chat.chat_copy import (
     msg_run_done,
     msg_theories_cold_start,
     msg_theories_no_motif_found,
+    msg_theory_rejected,
     zh,
 )
 from explain_engine.chat.slash_stage_rules import with_stage_gate
@@ -1478,6 +1480,117 @@ async def _handle_theories(chat: ChatSession, args: list[str]) -> list[ChatEvent
     )]
 
 
+async def _handle_theory(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 16 Task 14: /theory <id> [reject] — 看 theory 详情 / 拒绝它.
+
+    Usage:
+        /theory <id>           显详情 (subgraph + theme list + supporting session)
+        /theory <id> reject    加入 rejected_theory_ids, 后续不 bootstrap inject
+
+    Reject 模式:
+    - reject_theory(storage, id) 返 True (存在 + mark, 含 idempotent) 或 False
+      (不存在). False → err_theory_not_found.
+    - 不加 confirm prompt (plan 没要求, idempotent so 误操作 cost 低).
+
+    详情模式:
+    - 走 BGE-M3 singleton (跟 Task 13 同款) get_embedder() 拿 cache.
+    - cache 内无 theory_id → err_theory_not_found.
+    - 渲: 自然语言描述 / 类型 (因果链/星型/环路) / 状态 (已稳定 / 待观察 / 已拒绝)
+      / 覆盖 session 数 / 预测准确度 / 首次+最近 session / theme list (含
+      前 5 member preview) / 因果边 (zh(relation_type)) / 支撑 session list
+      (前 10 + 总数).
+    """
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.engines.theory.cache import (
+        get_active_theories,
+        reject_theory,
+    )
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    if not args:
+        return [ChatEvent(
+            type="slash_error",
+            content="用法: /theory <id> [reject]",
+        )]
+
+    theory_id = args[0]
+    is_reject = len(args) > 1 and args[1] == "reject"
+
+    storage = StorageV2()
+
+    if is_reject:
+        try:
+            ok = reject_theory(storage, theory_id)
+        except Exception as exc:
+            return [ChatEvent(type="slash_error", content=err_failed("theory", exc))]
+        if not ok:
+            return [ChatEvent(type="slash_error", content=err_theory_not_found(theory_id))]
+        return [ChatEvent(type="slash_theory", content=msg_theory_rejected(theory_id))]
+
+    # 详情模式 — 同 Task 13 用 BGE-M3 singleton (chat 无 .embedder attr).
+    # EXPLAIN_EMBEDDING_DISABLED=1 (test env) → embedder=None → 走 stale cache.
+    embedder: object | None
+    try:
+        from explain_engine.embedding.bge_m3 import get_embedder
+        embedder = get_embedder()
+    except Exception:
+        embedder = None
+
+    try:
+        cache = get_active_theories(storage, embedder=embedder)
+    except Exception as exc:
+        return [ChatEvent(type="slash_error", content=err_failed("theory", exc))]
+
+    all_theories = cache.stable_theories + cache.tentative_theories
+    theory = next((t for t in all_theories if t.id == theory_id), None)
+    if theory is None:
+        return [ChatEvent(type="slash_error", content=err_theory_not_found(theory_id))]
+
+    # 渲染详情
+    type_zh_map = {"chain": "因果链", "star": "星型", "cycle": "环路"}
+    motif_type_zh = type_zh_map.get(theory.motif_type, theory.motif_type)
+    status_zh = "已稳定" if theory.stability_status == "stable" else "待观察"
+    if theory.id in cache.rejected_theory_ids:
+        status_zh += " (已拒绝)"
+
+    lines = [
+        f"=== Theory {theory.id} ===",
+        f"模式: {theory.natural_language_summary}",
+        f"类型: {motif_type_zh}",
+        f"状态: {status_zh}",
+        f"覆盖 session: {len(theory.supporting_sessions)}/{len(cache.session_ids_snapshot)}",
+        f"预测准确度: {theory.predictive_power:.0%}",
+        f"首次发现: {theory.first_seen_session}",
+        f"最近出现: {theory.last_seen_session}",
+        "",
+        "=== 涉及的 theme ===",
+    ]
+
+    theme_by_id = {th.id: th for th in cache.themes}
+    for theme_id in theory.theme_ids:
+        th = theme_by_id.get(theme_id)
+        if th is not None:
+            members_preview = ", ".join(th.member_global_ids[:5])
+            if len(th.member_global_ids) > 5:
+                members_preview += f"... (共 {len(th.member_global_ids)} 个)"
+            lines.append(
+                f"  · {th.name} (含 {len(th.member_global_ids)} 个变量: {members_preview})"
+            )
+    lines.append("")
+    lines.append("=== 因果结构 ===")
+    for src, tgt, rel in theory.edges:
+        rel_zh = zh(rel)
+        lines.append(f"  {src} {rel_zh} {tgt}")
+    lines.append("")
+    lines.append("=== 支撑 session ===")
+    for sid in theory.supporting_sessions[:10]:
+        lines.append(f"  · {sid}")
+    if len(theory.supporting_sessions) > 10:
+        lines.append(f"  ... 还有 {len(theory.supporting_sessions) - 10} 个")
+
+    return [ChatEvent(type="slash_theory", content="\n".join(lines))]
+
+
 async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     """Phase 11 Wave 4: 一次性迁老 sessions/*.json → storage_v2 layout.
 
@@ -1581,6 +1694,8 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("lexicon",        COMMAND_DESCRIPTIONS["lexicon"],        _handle_lexicon),
     # Phase 16 Task 13: /theories cross-session inspect (跨 session theory list).
     SlashCommand("theories",       COMMAND_DESCRIPTIONS["theories"],       _handle_theories),
+    # Phase 16 Task 14: /theory <id> [reject] — 看详情 / 拒绝某 theory.
+    SlashCommand("theory",         COMMAND_DESCRIPTIONS["theory"],         _handle_theory),
     SlashCommand("migrate",        COMMAND_DESCRIPTIONS["migrate"],        _handle_migrate),
 )
 
