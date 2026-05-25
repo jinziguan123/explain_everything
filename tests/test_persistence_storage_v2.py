@@ -190,3 +190,21 @@ class TestReplHistoryLoad:
         assert len(out) == 3
         assert [e["cmd"] for e in out] == ["a", "b", "c"]
         assert any("corrupt" in r.message for r in caplog.records)
+
+    def test_load_repl_history_skips_blank_lines(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+        storage = StorageV2(project_id="testproj")
+        path = storage.session_dir("s_abc") / "repl_history.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 混合: 合法 + 空行 + 仅空格行 + 仅 tab 行 + 合法
+        path.write_text(
+            '{"type":"slash","cmd":"a"}\n'
+            '\n'
+            '   \n'
+            '\t\n'
+            '{"type":"slash","cmd":"b"}\n',
+            encoding="utf-8",
+        )
+        out = storage.load_repl_history("s_abc")
+        assert len(out) == 2
+        assert [e["cmd"] for e in out] == ["a", "b"]
