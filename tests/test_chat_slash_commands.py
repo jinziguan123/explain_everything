@@ -2832,3 +2832,16 @@ class TestHandleHistory:
         assert "llm_turn" in result[0].content
         # 含 invalid 值, 用 repr 显示
         assert "foo" in result[0].content
+
+    @pytest.mark.asyncio
+    async def test_handle_history_positional_arg_rejected(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.11: 位置参数 'foo' → slash_error 含 '不接位置参数'."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, [])
+
+        result = await _handle_history(chat, ["foo"])
+        assert result[0].type == "slash_error"
+        assert "位置参数" in result[0].content
