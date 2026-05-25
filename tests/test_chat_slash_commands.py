@@ -2886,3 +2886,31 @@ class TestHandleHistory:
         assert long_intervention in out
         # 不应有截断标志 "..."
         assert "..." not in out
+
+    @pytest.mark.asyncio
+    async def test_handle_history_llm_turn_full_not_truncated(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.14: 200 字 user_input + 200 字 assistant_text 在 /history 完整显, 不截 60 字."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        long_user = "问题前缀" + "A" * 196  # 200 字
+        long_assistant = "回答前缀" + "B" * 196  # 200 字
+        assert len(long_user) == 200
+        assert len(long_assistant) == 200
+        entries = [
+            _h_make_history_entry_llm(
+                user_input=long_user,
+                assistant_text=long_assistant,
+                ts="2026-05-25T14:27:09+08:00",
+            )
+        ]
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, entries)
+
+        result = await _handle_history(chat, [])
+        out = result[0].content
+        # 完整文本都在
+        assert long_user in out
+        assert long_assistant in out
+        # 不应有截断 "..."
+        assert "..." not in out
