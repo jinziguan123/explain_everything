@@ -297,6 +297,30 @@ class TestLLMTurnHistory:
         assert llm_turn_entries[0]["user_input"] == "问题 Y"
         assert llm_turn_entries[0]["assistant_text"] == "回答 X"
 
+    @pytest.mark.asyncio
+    async def test_process_user_turn_llm_failure_no_append(self, monkeypatch):
+        """LLM 异常: query_loop 中途 raise → async generator propagate, append 点不到, jsonl 空."""
+        from explain_engine.chat.loop import AssistantTextEvent
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        _make_done_session("s_aaa10062")
+        chat = ChatSession("s_aaa10062")
+
+        async def fake_query_loop(chat_arg, llm_arg):
+            yield AssistantTextEvent(content="部分回答")
+            raise RuntimeError("LLM 挂了")
+
+        monkeypatch.setattr("explain_engine.chat.loop.query_loop", fake_query_loop)
+
+        with pytest.raises(RuntimeError, match="LLM 挂了"):
+            async for _ev in chat.handle_user_input("问题", llm=object()):  # type: ignore[arg-type]
+                pass
+
+        storage = StorageV2(project_id="test_proj")
+        history = storage.load_repl_history("s_aaa10062")
+        llm_turn = [e for e in history if e.get("type") == "llm_turn"]
+        assert llm_turn == [], "LLM 异常分支不应写 llm_turn entry"
+
     def test_chat_event_metadata_explicit_dict(self):
         e = ChatEvent(type="slash_predict", content="x", metadata={"intervention": "假设 X"})
         assert e.metadata == {"intervention": "假设 X"}
