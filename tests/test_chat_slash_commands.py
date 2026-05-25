@@ -2130,3 +2130,9 @@ class TestSnapshotAndDelta:
         from explain_engine.chat.slash_commands import _snapshot_graph
         state = _h_make_state(nodes=[])
         assert _snapshot_graph(state) == {"l0": 0, "l1": 0, "l2": 0, "edges": 0}
+
+    def test_compute_delta_positive_l1(self):
+        from explain_engine.chat.slash_commands import _compute_delta
+        before = {"l0": 0, "l1": 5, "l2": 0, "edges": 0}
+        after = {"l0": 0, "l1": 6, "l2": 0, "edges": 0}
+        assert _compute_delta(before, after) == "+1 L1"
