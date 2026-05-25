@@ -19,6 +19,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC
 from typing import TYPE_CHECKING, Any
 
 from explain_engine.chat.budget import BudgetCounter
@@ -292,8 +293,31 @@ class ChatSession:
             # C.2: dispatch 到 query_loop (LLM ↔ tools while-loop).
             # local import 避 circular: loop.py imports ChatEvent from this module.
             from explain_engine.chat.loop import query_loop
+            # Phase 16.2 Wave 6: 累 assistant_text 各 chunk, 末尾拼写 llm_turn 入
+            # repl_history.jsonl. LLM 异常 / SIGINT 不到 append 点 (设计契约).
+            _assistant_chunks: list[str] = []
             async for ev in query_loop(self, llm):
+                if getattr(ev, "type", None) == "assistant_text":
+                    _assistant_chunks.append(getattr(ev, "content", "") or "")
                 yield ev
+
+            # Phase 16.2 Wave 6: append llm_turn entry to repl_history.jsonl.
+            # 仅 LLM 全 yield 完才写; ephemeral / sid=None 跳过; storage 失败 silent.
+            if not getattr(self, "is_ephemeral", False) and self.sid is not None:
+                from datetime import datetime
+                try:
+                    self.storage.append_repl_history(self.sid, {
+                        "ts": datetime.now(UTC).astimezone().isoformat(),
+                        "type": "llm_turn",
+                        "user_input": text,
+                        "assistant_text": "".join(_assistant_chunks),
+                    })
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"append llm_turn history failed for {self.sid}: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
 
             # Wave D.2 fix · post-turn hooks. 两点修复:
             # C1: lifecycle BEFORE reflect — 对齐 runtime.py:86-89 契约

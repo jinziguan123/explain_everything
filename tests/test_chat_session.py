@@ -268,6 +268,35 @@ class TestChatEventMetadata:
         e = ChatEvent(type="slash_show", content="hello")
         assert e.metadata is None
 
+
+class TestLLMTurnHistory:
+    """Phase 16.2 Wave 6: handle_user_input 完整结束后 append llm_turn entry."""
+
+    @pytest.mark.asyncio
+    async def test_process_user_turn_appends_llm_turn_history(self, monkeypatch):
+        from explain_engine.chat.loop import AssistantTextEvent
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        _make_done_session("s_aaa10061")
+        chat = ChatSession("s_aaa10061")
+
+        async def fake_query_loop(chat_arg, llm_arg):
+            yield AssistantTextEvent(content="回答 X")
+
+        monkeypatch.setattr("explain_engine.chat.loop.query_loop", fake_query_loop)
+
+        events: list[ChatEvent] = []
+        async for ev in chat.handle_user_input("问题 Y", llm=object()):  # type: ignore[arg-type]
+            events.append(ev)
+
+        # repl_history 应有 1 个 llm_turn entry
+        storage = StorageV2(project_id="test_proj")
+        history = storage.load_repl_history("s_aaa10061")
+        llm_turn_entries = [e for e in history if e.get("type") == "llm_turn"]
+        assert len(llm_turn_entries) == 1
+        assert llm_turn_entries[0]["user_input"] == "问题 Y"
+        assert llm_turn_entries[0]["assistant_text"] == "回答 X"
+
     def test_chat_event_metadata_explicit_dict(self):
         e = ChatEvent(type="slash_predict", content="x", metadata={"intervention": "假设 X"})
         assert e.metadata == {"intervention": "假设 X"}
