@@ -241,3 +241,10 @@ HINTS_BY_KEY: dict[str, str] = {
         "▸ 因果关系可信度已重评. /show 看变化, /run 重跑推理."
     ),
 }
+
+
+# ── Phase 16.2: REPL History Persistence — Banner 文案 ──
+
+BANNER_HISTORY_HEADER = "─── 最近 {n} 条操作 (旧 → 新) ───"
+BANNER_HISTORY_EMPTY = "(本 session 无历史操作记录)"
+BANNER_HISTORY_FOOTER = "输 /history 看完整历史, /help 看所有命令"

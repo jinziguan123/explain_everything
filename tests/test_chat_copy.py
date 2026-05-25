@@ -220,3 +220,19 @@ class TestTheoryCopy:
         m = err_theory_not_found("t_xyz")
         assert "t_xyz" in m
         assert "/theories" in m
+
+
+class TestHistoryCopy:
+    def test_chat_copy_banner_history_constants_exist(self):
+        from explain_engine.chat.chat_copy import (
+            BANNER_HISTORY_EMPTY,
+            BANNER_HISTORY_FOOTER,
+            BANNER_HISTORY_HEADER,
+        )
+        for c in (BANNER_HISTORY_HEADER, BANNER_HISTORY_EMPTY, BANNER_HISTORY_FOOTER):
+            assert isinstance(c, str)
+            assert len(c) > 0
+        assert "{n}" in BANNER_HISTORY_HEADER
+        import re
+        for c in (BANNER_HISTORY_HEADER, BANNER_HISTORY_EMPTY, BANNER_HISTORY_FOOTER):
+            assert re.search(r"[一-鿿]", c)
