@@ -22,8 +22,14 @@
 
 ## Status
 
+**Phase 15.1 hotfix (2026-05-21)** — `/run` honor chat_state 无限预算。修 chat 两套 budget 命名相同但语义独立的 UX 坑 (`/budget` 设无限不 propagate 到 `/run` 推理 tick budget)。1007 tests pass。
+
+**Phase 15 milestone (2026-05-21)** — Chat REPL 去技术化。新建 `chat/chat_copy.py` 单一文案 source (TERMS_MAP 35 术语 / COMMAND_DESCRIPTIONS 19 命令 / HELP_GROUPS_ZH 6 分组 / STOP_REASON_MAP / HINTS_BY_KEY / STATUS_* / msg_*/err_* 模板 / zh() helper)。slash_commands / slash_stage_rules / cli / hitl/cli_interactive 全 user-visible 文本中文化, L0/L1/L2 → 现象/归纳出的模式/深层原因 等。1005 tests pass，ruff 0。
+
+**Phase 14 milestone (2026-05-21)** — Chat Stage Flow + Next-Step Hints。chat slash (`/compress` `/run` `/predict` `/counterfactual` `/rescore`) 接 stage gate decorator 闭环 stage 流转 (bp → ip → done → converged) + 6 个 next-step hint 引导用户走 flow + `/help` 6 分组渲染 + `/compress` mid-stage persist (中断重跑跳过 LLM)。969 tests pass，ruff 0。
+
 **Phase 13 milestone (2026-05-20)** — Variable Embedding (Candidate E, Medium scope)。lexicon 用 BGE-M3 dense embedding (Apple MPS + fp16) 解 LLM 措辞漂移导致的同概念 split, /compress 加 Top-K pre-filter + 后处理 dedup 统计。
-912 tests pass，ruff 0。Phase 0-13 全部实施完。下一步: Phase 14 Theory Formation (cross-session motif detection) 或 Multi-Perspective Runtime。
+912 tests pass，ruff 0。
 
 **Phase 12 milestone (2026-05-19)** — /show + /graph Detail (`/show` 全展开 graph 4 section + 新加 `/graph` graphviz inline 渲染)。
 866 tests pass，ruff 0。
@@ -38,6 +44,98 @@
 chat /new + /resume slash 命令 + prompt_toolkit REPL UX 升级。Phase 11 直接 motivation：
 cross-session motif detection on lexicon graph / real Anthropic tool_use adapter
 （详见 [Phase 9 acceptance evidence](docs/plans/2026-05-17-conversational-cognitive-engine-acceptance.md)）。
+
+> **下一步候选**: Phase 16 — Theory Formation (cross-session motif detection on lexicon graph) / Multi-Perspective Runtime / Cognitive Simulation (internal rollout). 见 [技术设计v2](技术设计v2.md)。
+
+## Phase 15.1 hotfix (2026-05-21) — /run honor chat_state 无限预算
+
+修 Phase 11 起遗留的 UX 坑: chat 两套 budget 命名都是 `budget` 但语义独立 —
+
+- `chat_state.budget_per_turn_limit` / `budget_per_session_limit` (LLM 调用数, `/budget` 改这个)
+- `CognitiveState.budget_remaining` (runtime 推理 tick 数, `/run` 看这个)
+
+用户 `/budget` 设无限 → `/run` 仍撞 `预算耗尽` (`tick=5`), 违反 "一处设全场动" mental model。
+
+**Fix** ([slash_commands.py `_handle_run`](src/explain_engine/chat/slash_commands.py)):
+
+```python
+if chat.chat_state.budget_per_session_limit == 0:  # 用户 /budget 设无限
+    budget = 10**9                                  # 实际等价无限给 runtime
+else:
+    budget = max(chat.state.budget_remaining, 1)    # 老行为, 兼容
+```
+
+1 行 code 改动 + 2 test case (unlimited honor / finite 老行为). 不动 schema / runtime / persistence.
+
+完整 budget 体系 (cli vs chat 两套) 文档: [docs/plans/2026-05-21-budget-architecture.md](docs/plans/2026-05-21-budget-architecture.md)。
+
+## Phase 15 (2026-05-21) — Chat REPL 去技术化 (中文化)
+
+Chat REPL 内 user-visible 文本全中文化, 去 35 个技术术语 (L0/L1/L2 / abstraction / propagation / lexicon / HITL / reasoning loop / multi-signal / etc.)。**19 个 slash 命令名保留英文** (muscle memory), 但 desc / status / 完成 msg / 错误 / hint 全统一引 `chat/chat_copy.py` 中文模板。
+
+**新基础设施**:
+
+- `src/explain_engine/chat/chat_copy.py` — 单一文案 source (~220 行):
+  - `TERMS_MAP` (35 术语英→中映射) + `zh()` helper (fallback 返原词)
+  - `COMMAND_DESCRIPTIONS` (19 命令中文 desc, ≤50 字)
+  - `HELP_GROUPS_ZH` (6 中文分组: 推进 session / 干预分析 / 查看状态 / 管理 session / 其他 / 帮助退出)
+  - `STOP_REASON_MAP` (7 stop_reason 翻译, 含 runtime 4 实际 enum + 3 兼容 alias)
+  - `HINTS_BY_KEY` (6 next-step hint 去 jargon 重写)
+  - `STATUS_*` / `INFO_*` (Rich markup status spinner + dim info)
+  - `msg_compress_done` / `msg_run_done` / `msg_rescore_done` / `msg_save_done` / `msg_resume_*` (成功模板)
+  - `err_failed` / `err_no_llm` / `err_ephemeral_reject` / `err_stage_not_allowed` (错误模板)
+
+**改 5 个 src 文件引模板**: `chat/slash_commands.py` (19 handler) / `chat/slash_stage_rules.py` (stage gate err + HINTS_BY_KEY import) / `cli.py` (`_render_event` budget_exhausted 中文化) / `hitl/cli_interactive.py` (5 HITL 入口 prompt 中文化, k/e/d/v/a/r/q 按键保留 + 加中文标签)。
+
+**Engine 内部代码 0 改动** — `abstraction_level=0/1/2` / `manifests_as` / 等 field name 不动 (内部 ref / cross-session compat), 仅 user-facing 翻。
+
+**关键中文化样本**:
+
+| 老 (英文 jargon) | 新 (中文直观) |
+|---|---|
+| `Compress 当前 session (propose_candidates + HITL + lexicon).` | `把多个现象归纳成模式 (建 session 后第一步)` |
+| `[L0 Observations] (3)` | `[现象] (3)` |
+| `[L1 Concepts] (2)` | `[归纳出的模式] (2)` |
+| `[L2 Drivers] (1)` | `[深层原因] (1)` |
+| `=== Multi-signal acceptance ===` | `=== 接受度评估 ===` |
+| `avg_consistency: 0.7` | `一致性: 0.7` |
+| `Goodbye. Session saved.` | `再见, session 已存盘.` |
+| `Budget exhausted (per_turn).` | `预算耗尽 (本轮).` |
+| `/run 在当前 stage='bootstrap_pending' 不允许 (需 stage ∈ ['done'])` | `/run 在当前阶段 (等待启动) 不能跑 — 需要阶段为: 已归纳.` |
+| `\[k]eep / \[e]dit / \[d]rop` HITL prompt | `\[k] 保留 / \[e] 编辑 / \[d] 删除` |
+
+**TDD 流程**: 19 个 task, 每 task 失败 test → 实装 → 验证 → commit。1005 tests pass, ruff 0。
+
+文档:
+- design: [docs/plans/2026-05-21-chat-dejargon-design.md](docs/plans/2026-05-21-chat-dejargon-design.md)
+- plan: [docs/plans/2026-05-21-chat-dejargon-plan.md](docs/plans/2026-05-21-chat-dejargon-plan.md)
+- acceptance: [docs/plans/2026-05-21-chat-dejargon-acceptance.md](docs/plans/2026-05-21-chat-dejargon-acceptance.md) (11 步 manual smoke)
+
+## Phase 14 (2026-05-21) — Chat Stage Flow + Next-Step Hints
+
+修 chat REPL 内 stage 流转不闭环 + 缺自动化引导 2 个 UX 缺陷:
+
+**Stage gate decorator** (`chat/slash_stage_rules.py:with_stage_gate`):
+- 5 个 mutating slash (`/compress` `/run` `/predict` `/counterfactual` `/rescore`) 接装饰器
+- 4 步: ① stage check ② handler 调用 ③ stage transition + persist ④ success/fail hint
+- `bp → ip → done → converged` stage 在 chat 内全闭环 (跟 cli 子命令对齐)
+- 跳 stage 命令 (e.g. `bp` 跑 `/run`) 显式拒 + 给清晰 stage 错误
+
+**6 个 next-step hint** (rule-based, 0 LLM cost):
+- `need_promote_first` / `need_compress_first` (gate fail)
+- `after_compress` / `after_run` / `after_inference` / `after_rescore` (success)
+- 引导用户走完整 flow (`/compress` → `/run` → `/predict` 等)
+
+**`/help` 6 分组渲染**: 19 命令按用途分组 (推进 session / 干预 / inspection / 管理 / 其他 / 帮助退出), 帮用户记忆 + 概览能力。
+
+**`/compress` mid-stage resilience**: `propose+score` 完后 set `insight_pending` + 立刻持久化, 中断重跑下次 (`ip` stage 入口) 跳过 LLM 直接进 HITL review。
+
+969 tests pass, ruff 0。
+
+文档:
+- design: [docs/plans/2026-05-21-chat-stage-and-hints-design.md](docs/plans/2026-05-21-chat-stage-and-hints-design.md)
+- plan: [docs/plans/2026-05-21-chat-stage-and-hints-plan.md](docs/plans/2026-05-21-chat-stage-and-hints-plan.md)
+- acceptance: [docs/plans/2026-05-21-chat-stage-and-hints-acceptance.md](docs/plans/2026-05-21-chat-stage-and-hints-acceptance.md)
 
 ## Phase 13 (2026-05-20) — Variable Embedding (Candidate E)
 
