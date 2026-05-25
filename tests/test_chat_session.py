@@ -345,6 +345,45 @@ class TestLLMTurnHistory:
         llm_turn = [e for e in history if e.get("type") == "llm_turn"]
         assert llm_turn == [], "SIGINT 中断不应写 llm_turn entry"
 
+    @pytest.mark.asyncio
+    async def test_process_user_turn_tool_use_intermediate_not_appended(self, monkeypatch):
+        """多轮 LLM ↔ tool: query_loop yield N 个 assistant_text + tool_use events,
+        最终 jsonl 仅 1 个 llm_turn entry, assistant_text 是 N 个 text chunks join,
+        tool_use events 不入 history."""
+        from explain_engine.chat.loop import (
+            AssistantTextEvent,
+            ToolResultEvent,
+            ToolUseEvent,
+        )
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        _make_done_session("s_aaa10064")
+        chat = ChatSession("s_aaa10064")
+
+        async def fake_query_loop(chat_arg, llm_arg):
+            yield AssistantTextEvent(content="先看看 ")
+            yield ToolUseEvent(content={"tool": "search", "args": {}})
+            yield ToolResultEvent(content={"result": "..."})
+            yield AssistantTextEvent(content="然后分析 ")
+            yield ToolUseEvent(content={"tool": "calc", "args": {}})
+            yield ToolResultEvent(content={"result": "42"})
+            yield AssistantTextEvent(content="最终答案是 42.")
+
+        monkeypatch.setattr("explain_engine.chat.loop.query_loop", fake_query_loop)
+
+        async for _ev in chat.handle_user_input("用工具算", llm=object()):  # type: ignore[arg-type]
+            pass
+
+        storage = StorageV2(project_id="test_proj")
+        history = storage.load_repl_history("s_aaa10064")
+        llm_turn = [e for e in history if e.get("type") == "llm_turn"]
+        # 仅 1 entry (不是 7 个 events 各 1 个)
+        assert len(llm_turn) == 1
+        # assistant_text 是 3 chunks 的 join (tool_use 不入)
+        assert llm_turn[0]["assistant_text"] == "先看看 然后分析 最终答案是 42."
+        # tool_use 没污染
+        assert "tool" not in llm_turn[0]["assistant_text"]
+
     def test_chat_event_metadata_explicit_dict(self):
         e = ChatEvent(type="slash_predict", content="x", metadata={"intervention": "假设 X"})
         assert e.metadata == {"intervention": "假设 X"}
