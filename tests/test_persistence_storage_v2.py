@@ -208,3 +208,26 @@ class TestReplHistoryLoad:
         out = storage.load_repl_history("s_abc")
         assert len(out) == 2
         assert [e["cmd"] for e in out] == ["a", "b"]
+
+    def test_load_repl_history_corrupt_rate_limit_warn(self, tmp_path, monkeypatch, caplog) -> None:
+        monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+        storage = StorageV2(project_id="testproj")
+        path = storage.session_dir("s_abc") / "repl_history.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 100 行全坏 JSON
+        path.write_text("\n".join("not json " + str(i) for i in range(100)) + "\n", encoding="utf-8")
+        with caplog.at_level(logging.WARNING, logger="explain_engine.persistence.storage_v2"):
+            out = storage.load_repl_history("s_abc")
+        assert out == []
+        # rate-limit: 前 5 行各 1 条详细 warning + 第 6 条 summary "total 100 corrupt"
+        warning_msgs = [
+            r.message for r in caplog.records
+            if r.levelname == "WARNING" and r.name == "explain_engine.persistence.storage_v2"
+        ]
+        assert len(warning_msgs) == 6
+        # 前 5 条应含 "corrupt, skip"
+        per_line = [m for m in warning_msgs if "skip" in m]
+        assert len(per_line) == 5
+        # summary 含 "total 100"
+        summary = [m for m in warning_msgs if "total" in m and "100" in m]
+        assert len(summary) == 1
