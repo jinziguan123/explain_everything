@@ -236,6 +236,9 @@ def _wrap_handler(name: str, handler):
         _safe_append_history(chat, entry)
         return result
 
+    # 暴露原 handler 给 test/inspection (e.g. /cf alias 验跟 /counterfactual 同
+    # underlying handler 而非同 wrapped instance).
+    wrapped.__wrapped__ = handler
     return wrapped
 
 
@@ -1816,32 +1819,36 @@ async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]
 
 # Registry — 17 default slash commands + 1 alias (/cf → counterfactual).
 # 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作 → engines → cross-session"分组.
+#
+# Phase 16.2 Wave 3: 所有 handler 经 _wrap_handler 包装 — 自动 snapshot graph
+# 前后 diff 算 delta + 写 repl_history.jsonl entry (ephemeral / sid=None 时
+# noop, 仅调原 handler). 21 个 handler 本身完全不知道 wrapper 存在, 零侵入.
 DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
-    SlashCommand("quit",           COMMAND_DESCRIPTIONS["quit"],           _handle_quit),
-    SlashCommand("help",           COMMAND_DESCRIPTIONS["help"],           _handle_help),
-    SlashCommand("show",           COMMAND_DESCRIPTIONS["show"],           _handle_show),
-    SlashCommand("graph",          COMMAND_DESCRIPTIONS["graph"],          _handle_graph),
-    SlashCommand("budget",         COMMAND_DESCRIPTIONS["budget"],         _handle_budget),
-    SlashCommand("compact",        COMMAND_DESCRIPTIONS["compact"],        _handle_compact),
-    SlashCommand("save",           COMMAND_DESCRIPTIONS["save"],           _handle_save),
-    SlashCommand("new",            COMMAND_DESCRIPTIONS["new"],            _handle_new),
-    SlashCommand("resume",         COMMAND_DESCRIPTIONS["resume"],         _handle_resume),
+    SlashCommand("quit",           COMMAND_DESCRIPTIONS["quit"],           _wrap_handler("quit", _handle_quit)),
+    SlashCommand("help",           COMMAND_DESCRIPTIONS["help"],           _wrap_handler("help", _handle_help)),
+    SlashCommand("show",           COMMAND_DESCRIPTIONS["show"],           _wrap_handler("show", _handle_show)),
+    SlashCommand("graph",          COMMAND_DESCRIPTIONS["graph"],          _wrap_handler("graph", _handle_graph)),
+    SlashCommand("budget",         COMMAND_DESCRIPTIONS["budget"],         _wrap_handler("budget", _handle_budget)),
+    SlashCommand("compact",        COMMAND_DESCRIPTIONS["compact"],        _wrap_handler("compact", _handle_compact)),
+    SlashCommand("save",           COMMAND_DESCRIPTIONS["save"],           _wrap_handler("save", _handle_save)),
+    SlashCommand("new",            COMMAND_DESCRIPTIONS["new"],            _wrap_handler("new", _handle_new)),
+    SlashCommand("resume",         COMMAND_DESCRIPTIONS["resume"],         _wrap_handler("resume", _handle_resume)),
     # Phase 11 Wave 3: 6 single-session engines slash + /cf alias.
-    SlashCommand("compress",       COMMAND_DESCRIPTIONS["compress"],       _handle_compress),
-    SlashCommand("run",            COMMAND_DESCRIPTIONS["run"],            _handle_run),
-    SlashCommand("check",          COMMAND_DESCRIPTIONS["check"],          _handle_check),
-    SlashCommand("predict",        COMMAND_DESCRIPTIONS["predict"],        _handle_predict),
-    SlashCommand("counterfactual", COMMAND_DESCRIPTIONS["counterfactual"], _handle_counterfactual),
-    SlashCommand("cf",             COMMAND_DESCRIPTIONS["cf"],             _handle_counterfactual),
-    SlashCommand("rescore",        COMMAND_DESCRIPTIONS["rescore"],        _handle_rescore),
+    SlashCommand("compress",       COMMAND_DESCRIPTIONS["compress"],       _wrap_handler("compress", _handle_compress)),
+    SlashCommand("run",            COMMAND_DESCRIPTIONS["run"],            _wrap_handler("run", _handle_run)),
+    SlashCommand("check",          COMMAND_DESCRIPTIONS["check"],          _wrap_handler("check", _handle_check)),
+    SlashCommand("predict",        COMMAND_DESCRIPTIONS["predict"],        _wrap_handler("predict", _handle_predict)),
+    SlashCommand("counterfactual", COMMAND_DESCRIPTIONS["counterfactual"], _wrap_handler("counterfactual", _handle_counterfactual)),
+    SlashCommand("cf",             COMMAND_DESCRIPTIONS["cf"],             _wrap_handler("cf", _handle_counterfactual)),
+    SlashCommand("rescore",        COMMAND_DESCRIPTIONS["rescore"],        _wrap_handler("rescore", _handle_rescore)),
     # Phase 11 Wave 4: 3 cross-session slash (不依赖 single session, ephemeral 也 work).
-    SlashCommand("list",           COMMAND_DESCRIPTIONS["list"],           _handle_list),
-    SlashCommand("lexicon",        COMMAND_DESCRIPTIONS["lexicon"],        _handle_lexicon),
+    SlashCommand("list",           COMMAND_DESCRIPTIONS["list"],           _wrap_handler("list", _handle_list)),
+    SlashCommand("lexicon",        COMMAND_DESCRIPTIONS["lexicon"],        _wrap_handler("lexicon", _handle_lexicon)),
     # Phase 16 Task 13: /theories cross-session inspect (跨 session theory list).
-    SlashCommand("theories",       COMMAND_DESCRIPTIONS["theories"],       _handle_theories),
+    SlashCommand("theories",       COMMAND_DESCRIPTIONS["theories"],       _wrap_handler("theories", _handle_theories)),
     # Phase 16 Task 14: /theory <id> [reject] — 看详情 / 拒绝某 theory.
-    SlashCommand("theory",         COMMAND_DESCRIPTIONS["theory"],         _handle_theory),
-    SlashCommand("migrate",        COMMAND_DESCRIPTIONS["migrate"],        _handle_migrate),
+    SlashCommand("theory",         COMMAND_DESCRIPTIONS["theory"],         _wrap_handler("theory", _handle_theory)),
+    SlashCommand("migrate",        COMMAND_DESCRIPTIONS["migrate"],        _wrap_handler("migrate", _handle_migrate)),
 )
 
 

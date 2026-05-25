@@ -1231,12 +1231,17 @@ class TestSlashCounterfactual:
 
     @pytest.mark.asyncio
     async def test_cf_alias_in_default_commands(self):
-        """/cf 注册了, 且 handler 跟 /counterfactual 同 (alias 契约)."""
+        """/cf 注册了, 且底层 handler 跟 /counterfactual 同 (alias 契约).
+
+        Phase 16.2 Wave 3.9 后两 SlashCommand 各自经 _wrap_handler 单独包装
+        (cf entry.cmd="cf", counterfactual entry.cmd="counterfactual"), wrapped
+        是不同 instance, 但 wrapper 暴露 __wrapped__ 指向原 handler 验等价.
+        """
         cf_cmd = _command_by_name("cf")
         counterfactual_cmd = _command_by_name("counterfactual")
         assert cf_cmd is not None
         assert counterfactual_cmd is not None
-        assert cf_cmd.handler is counterfactual_cmd.handler
+        assert cf_cmd.handler.__wrapped__ is counterfactual_cmd.handler.__wrapped__
 
 
 class TestSlashRescore:
