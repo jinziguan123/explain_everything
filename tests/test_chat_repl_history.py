@@ -178,3 +178,22 @@ class TestRenderRecentHistory:
         # 不应有 header / footer (空 path 走的是友好提示分支)
         assert "最近" not in out  # header 不出现
         assert "/history" not in out  # footer 不出现
+
+    def test_render_recent_history_unknown_delta(self) -> None:
+        """entry summary='(变化未知)' (snapshot 失败 fallback), banner 原样显."""
+        from explain_engine.chat.history_render import render_recent_history
+
+        entries = [
+            {
+                "type": "slash",
+                "ts": "2026-05-25T14:11:00",
+                "cmd": "rescore",
+                "args": [],
+                "summary": "(变化未知)",
+            }
+        ]
+        out = render_recent_history(entries, max_n=10)
+
+        # summary 原样透传 (Wave 3.7 snapshot 失败 fallback 文案)
+        assert "(变化未知)" in out
+        assert "rescore" in out
