@@ -2258,3 +2258,38 @@ class TestWrapHandler:
         assert "intervention" not in e
         assert "error" not in e
         assert "ts" in e
+
+    @pytest.mark.asyncio
+    async def test_wrap_handler_passes_through_args_and_result(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 3.2: wrapped(chat, args) 跟原 handler 完全等价 (events + 收 args 透传)."""
+        from explain_engine.chat.slash_commands import _wrap_handler
+
+        chat = _h_make_chat_with_storage(tmp_path, monkeypatch)
+        received_args: list = []
+        sentinel_events = [
+            _FakeEvent(type="slash_a", content="x"),
+            _FakeEvent(type="slash_b", content={"k": 1}),
+        ]
+
+        async def fake_handler(c, args):
+            received_args.append(list(args))
+            return sentinel_events
+
+        wrapped = _wrap_handler("passthrough", fake_handler)
+        result = await wrapped(chat, ["a", "b"])
+
+        # 1. args 完整透传到 handler
+        assert received_args == [["a", "b"]]
+        # 2. 返回值 (events list 对象) 透传不变
+        assert result is sentinel_events
+        assert len(result) == 2
+        assert result[0].type == "slash_a"
+        assert result[1].type == "slash_b"
+
+        # entry args 字段也应是原 args
+        entries = chat.storage.load_repl_history(chat.sid)
+        assert len(entries) == 1
+        assert entries[0]["args"] == ["a", "b"]
+        assert entries[0]["cmd"] == "passthrough"
