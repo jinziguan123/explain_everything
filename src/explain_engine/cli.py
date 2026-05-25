@@ -1272,5 +1272,80 @@ def lexicon(
     console.print(table)
 
 
+@app.command()
+def theories(
+    project: str | None = typer.Option(None, "--project", help="项目 ID, 默 cwd"),
+    show_all: bool = typer.Option(False, "--all", help="显 stable + tentative"),
+    limit: int = typer.Option(10, "--limit", min=1, max=50),
+    force_recompute: bool = typer.Option(
+        False, "--force", help="强制重算 cache"
+    ),
+) -> None:
+    """显跨 session 因果模式 (Phase 16 Theory Formation, cross-session inspect)."""
+    from explain_engine.engines.theory.cache import get_active_theories
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2(project_id=project) if project else StorageV2()
+
+    # Try BGE-M3 singleton, fallback None (test env disable / load fail)
+    embedder: object | None
+    try:
+        from explain_engine.embedding.bge_m3 import get_embedder
+        embedder = get_embedder()
+    except Exception:
+        embedder = None
+
+    with console.status("[bold green]正在分析跨 session 模式..."):
+        cache = get_active_theories(
+            storage, embedder=embedder, force_recompute=force_recompute,
+        )
+
+    n_sessions = len(cache.session_ids_snapshot)
+    if n_sessions < cache.cold_start_threshold:
+        console.print(
+            f"需累积 ≥ {cache.cold_start_threshold} 个 session 才能形成 theory. "
+            f"当前: {n_sessions}/{cache.cold_start_threshold}."
+        )
+        return
+
+    all_theories = list(cache.stable_theories)
+    if show_all:
+        all_theories.extend(cache.tentative_theories)
+    visible = [
+        t for t in all_theories if t.id not in cache.rejected_theory_ids
+    ][:limit]
+
+    if not visible:
+        console.print(
+            f"已分析 {n_sessions} 个 session, 未发现重复出现的因果模式."
+        )
+        return
+
+    type_zh_map = {"chain": "因果链", "star": "星型", "cycle": "环路"}
+    table = Table(title=(
+        f"跨 session 因果模式 (stable: {len(cache.stable_theories)}, "
+        f"tentative: {len(cache.tentative_theories)}, "
+        f"rejected: {len(cache.rejected_theory_ids)})"
+    ))
+    table.add_column("ID", style="cyan")
+    table.add_column("类型")
+    table.add_column("模式", style="bold", max_width=50)
+    table.add_column("覆盖 session", justify="right")
+    table.add_column("预测准确度", justify="right")
+    table.add_column("状态")
+
+    for t in visible:
+        type_zh = type_zh_map.get(t.motif_type, t.motif_type)
+        status_zh = "已稳定" if t.stability_status == "stable" else "待观察"
+        rejected_mark = " (已拒绝)" if t.id in cache.rejected_theory_ids else ""
+        table.add_row(
+            t.id, type_zh, t.natural_language_summary,
+            f"{len(t.supporting_sessions)}/{n_sessions}",
+            f"{t.predictive_power:.0%}",
+            status_zh + rejected_mark,
+        )
+    console.print(table)
+
+
 if __name__ == "__main__":
     app()
