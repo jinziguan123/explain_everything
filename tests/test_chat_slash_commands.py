@@ -2164,3 +2164,18 @@ class TestSnapshotAndDelta:
         after = {"l0": 5, "l1": 1, "l2": 12, "edges": 37}
         # 顺序: L1 → 现象 → L2 → 边 (跟 impl 排列一致)
         assert _compute_delta(before, after) == "+1 L1 / +5 现象 / +12 L2 / +37 边"
+
+    def test_snapshot_safe_returns_none_on_exception(self, caplog):
+        import logging
+
+        from explain_engine.chat.slash_commands import _snapshot_graph_safe
+
+        class _BrokenState:
+            @property
+            def graph(self):
+                raise RuntimeError("boom")
+
+        with caplog.at_level(logging.DEBUG, logger="explain_engine.chat.slash_commands"):
+            result = _snapshot_graph_safe(_BrokenState())
+        assert result is None
+        assert any("snapshot failed" in r.message for r in caplog.records)
