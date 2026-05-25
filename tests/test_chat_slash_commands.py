@@ -2743,3 +2743,28 @@ class TestHandleHistory:
         for i in range(3):
             assert f"问题 {i}" in out
             assert f"回答 {i}" in out
+
+    @pytest.mark.asyncio
+    async def test_handle_history_type_dedup(self, tmp_path, monkeypatch):
+        """Task 5.6: --type slash slash (重复) → dedup 后等价 --type slash, 仅 slash."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        entries = [
+            _h_make_history_entry_slash(
+                cmd="cmda",
+                ts="2026-05-25T14:00:00+08:00",
+            ),
+            _h_make_history_entry_llm(
+                user_input="问题 X",
+                assistant_text="回答 Y",
+                ts="2026-05-25T14:05:00+08:00",
+            ),
+        ]
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, entries)
+
+        result = await _handle_history(chat, ["--type", "slash", "slash"])
+        out = result[0].content
+        # slash 在, llm_turn 不在 (因 dedup 后仍仅 slash)
+        assert "/cmda" in out
+        assert "问题 X" not in out
+        assert "回答 Y" not in out
