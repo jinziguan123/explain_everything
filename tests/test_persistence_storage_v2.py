@@ -1,6 +1,7 @@
 """Wave A.1: storage_v2 project-based persistence tests."""
 
 import json
+import logging
 
 import pytest
 
@@ -171,3 +172,21 @@ class TestReplHistoryLoad:
         # session 目录甚至不存在 — 模拟全新 / 老 session
         out = storage.load_repl_history("s_nonexistent")
         assert out == []
+
+    def test_load_repl_history_skips_corrupt_lines(self, tmp_path, monkeypatch, caplog) -> None:
+        monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+        storage = StorageV2(project_id="testproj")
+        path = storage.session_dir("s_abc") / "repl_history.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            '{"type":"slash","cmd":"a"}\n'
+            'not valid json\n'
+            '{"type":"slash","cmd":"b"}\n'
+            '{"type":"slash","cmd":"c"}\n',
+            encoding="utf-8",
+        )
+        with caplog.at_level(logging.WARNING):
+            out = storage.load_repl_history("s_abc")
+        assert len(out) == 3
+        assert [e["cmd"] for e in out] == ["a", "b", "c"]
+        assert any("corrupt" in r.message for r in caplog.records)
