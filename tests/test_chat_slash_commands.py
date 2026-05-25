@@ -2151,3 +2151,9 @@ class TestSnapshotAndDelta:
         result = _compute_delta(before, after)
         assert result == "+5 现象"
         assert "L1" not in result and "L2" not in result and "边" not in result
+
+    def test_compute_delta_no_change(self):
+        from explain_engine.chat.slash_commands import _compute_delta
+        before = {"l0": 21, "l1": 5, "l2": 12, "edges": 89}
+        after = {"l0": 21, "l1": 5, "l2": 12, "edges": 89}
+        assert _compute_delta(before, after) == "无变化"
