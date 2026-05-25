@@ -2189,3 +2189,72 @@ class TestSnapshotAndDelta:
         assert _compute_delta(valid, None) == "(变化未知)"
         # 两个都 None
         assert _compute_delta(None, None) == "(变化未知)"
+
+
+# ─── Phase 16.2 Wave 3: dispatcher _wrap_handler test fixtures ───
+#
+# 用 _FakeEvent 替代真 ChatEvent — ChatEvent.metadata 字段 Wave 4 才加,
+# Wave 3 wrapper 用 getattr(evt, "metadata", None) 兼容, 此处 fake 提供
+# .metadata 属性让 Task 3.3/3.4 测 metadata 反解.
+
+
+class _FakeEvent:
+    """Minimal ChatEvent-like 双子, 让 Wave 3 test 不依赖 Wave 4 ChatEvent.metadata."""
+
+    def __init__(self, type, content=None, metadata=None):
+        self.type = type
+        self.content = content
+        self.metadata = metadata
+
+
+def _h_make_chat_with_storage(tmp_path, monkeypatch, state=None, sid="s_test"):
+    """造一个 minimal 'chat-like' object 让 _wrap_handler 能跑.
+
+    不构 ChatSession (重) — wrapper 只用 chat.sid / chat.storage / chat.state /
+    chat.is_ephemeral, fake object 提供这 4 属性即可.
+    """
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    from explain_engine.persistence.storage_v2 import StorageV2
+    storage = StorageV2(project_id="test_proj")
+    if state is None:
+        state = _h_make_state(nodes=[])
+
+    class _FakeChat:
+        pass
+
+    chat = _FakeChat()
+    chat.sid = sid
+    chat.storage = storage
+    chat.state = state
+    chat.is_ephemeral = False
+    return chat
+
+
+class TestWrapHandler:
+    @pytest.mark.asyncio
+    async def test_wrap_handler_writes_entry_on_success(self, tmp_path, monkeypatch):
+        """Task 3.1: handler 改 graph +1 现象 → wrapper 写 entry, summary 含 '+1 现象'."""
+        from explain_engine.chat.slash_commands import _wrap_handler
+
+        chat = _h_make_chat_with_storage(tmp_path, monkeypatch)
+
+        async def fake_handler(c, args):
+            # 改 graph 加 1 L0 (现象)
+            c.state.graph.add_node(_h_node("p_new", 0))
+            return [_FakeEvent(type="slash_fake", content="ok")]
+
+        wrapped = _wrap_handler("fakecmd", fake_handler)
+        result = await wrapped(chat, [])
+        assert len(result) == 1
+        assert result[0].type == "slash_fake"
+
+        entries = chat.storage.load_repl_history(chat.sid)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["type"] == "slash"
+        assert e["cmd"] == "fakecmd"
+        assert e["args"] == []
+        assert "+1 现象" in e["summary"]
+        assert "intervention" not in e
+        assert "error" not in e
+        assert "ts" in e

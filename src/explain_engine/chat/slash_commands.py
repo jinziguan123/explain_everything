@@ -28,6 +28,7 @@ import shutil as _shutil
 import tempfile as _tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC
 from typing import TYPE_CHECKING
 
 from explain_engine.chat.chat_copy import (
@@ -134,6 +135,108 @@ def _compute_delta(before: dict | None, after: dict | None) -> str:
     if (d := after["edges"] - before["edges"]):
         parts.append(f"{d:+d} 边")
     return " / ".join(parts) if parts else "无变化"
+
+
+# ── Phase 16.2 Wave 3: dispatcher wrapper (history sidecar) ──
+
+
+def _extract_intervention(events) -> str | None:
+    """Wave 3: 从 handler 返回的 list[ChatEvent] 反解 intervention text.
+
+    仅 /predict /counterfactual 在 return 时往 event 塞 metadata={"intervention": ...}
+    (Wave 4 落地). 此处用 getattr 兼容老 ChatEvent (无 metadata 属性).
+    """
+    if not events:
+        return None
+    for evt in events:
+        meta = getattr(evt, "metadata", None)
+        if meta and "intervention" in meta:
+            return meta["intervention"]
+    return None
+
+
+def _build_history_entry(
+    name: str,
+    args: list[str],
+    before: dict | None,
+    after: dict | None,
+    intervention: str | None,
+    error: str | None,
+) -> dict:
+    """Wave 3: 拼 repl_history.jsonl entry dict (design §5.2 type=slash schema).
+
+    error 非 None 时 summary 退化为 '(执行失败: ErrType)', error 字段塞 entry.
+    intervention 非 None 时塞 entry (仅 predict/counterfactual). 否则字段省略 (不写 None).
+    """
+    from datetime import datetime
+
+    ts = datetime.now(UTC).astimezone().isoformat()
+    if error is None:
+        summary = _compute_delta(before, after)
+    else:
+        summary = f"(执行失败: {error.split(':', 1)[0]})"
+    entry: dict = {
+        "ts": ts,
+        "type": "slash",
+        "cmd": name,
+        "args": list(args),
+        "summary": summary,
+    }
+    if intervention is not None:
+        entry["intervention"] = intervention
+    if error is not None:
+        entry["error"] = error
+    return entry
+
+
+def _safe_append_history(chat, entry: dict) -> None:
+    """Wave 3: storage.append_repl_history 失败 silent + log warn (设计 §7.1 降级).
+
+    任何 IO/permission/disk full 错都不该 propagate, history 是 nice-to-have.
+    """
+    try:
+        chat.storage.append_repl_history(chat.sid, entry)
+    except Exception as exc:
+        _history_logger.warning(
+            f"append_repl_history failed for /{entry.get('cmd')}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
+def _wrap_handler(name: str, handler):
+    """Wave 3: 中央 wrapper — snapshot before → handler → snapshot after → 写 entry.
+
+    设计 §4.1 + §4.4 + §7:
+    - 21 个 handler 零感知 wrapper 存在 (DEFAULT_COMMANDS 注册时一次套).
+    - ephemeral / sid is None 时跳 history 写入 (无 sidecar 可写), 但仍正常调 handler.
+    - KeyboardInterrupt 直 propagate, 不写 history (用户主动放弃, design §7.5).
+    - 其他 Exception: 先写 error entry, 再 raise (用户重启后 banner 可见失败记录).
+    - storage 写失败 silent + log (_safe_append_history).
+    """
+    async def wrapped(chat, args):
+        # ephemeral 没 sid / storage, 跳 history (但 handler 仍调).
+        if getattr(chat, "is_ephemeral", False) or getattr(chat, "sid", None) is None:
+            return await handler(chat, args)
+
+        before = _snapshot_graph_safe(chat.state)
+        try:
+            result = await handler(chat, args)
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            after = _snapshot_graph_safe(chat.state)
+            error_repr = f"{type(exc).__name__}: {exc}"
+            entry = _build_history_entry(name, args, before, after, None, error_repr)
+            _safe_append_history(chat, entry)
+            raise
+
+        after = _snapshot_graph_safe(chat.state)
+        intervention = _extract_intervention(result)
+        entry = _build_history_entry(name, args, before, after, intervention, None)
+        _safe_append_history(chat, entry)
+        return result
+
+    return wrapped
 
 
 async def _handle_quit(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
