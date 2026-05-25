@@ -1278,6 +1278,37 @@ class TestSlashCounterfactual:
         assert counterfactual_cmd is not None
         assert cf_cmd.handler.__wrapped__ is counterfactual_cmd.handler.__wrapped__
 
+    @pytest.mark.asyncio
+    async def test_handle_counterfactual_event_carries_intervention_metadata(self, monkeypatch):
+        """Phase 16.2 Task 4.4: /counterfactual ChatEvent.metadata 含 intervention."""
+        from dataclasses import dataclass
+
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_beef0044")
+        chat = ChatSession("s_beef0044", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "若用 X 替代 Y"
+        chat.input_provider = fake_provider
+
+        @dataclass
+        class FakeCFReport:
+            removed_node_ids: list
+            added_node_ids: list
+            activation_diff: dict
+            alt_narrative: str = ""
+
+        async def fake_substitute(state, intervention_text, llm):
+            return FakeCFReport([], [], {})
+
+        monkeypatch.setattr(
+            "explain_engine.engines.counterfactual.substitute", fake_substitute
+        )
+
+        events = await dispatch_slash(chat, "/counterfactual")
+        cf_evt = next(e for e in events if e.type == "slash_counterfactual")
+        assert cf_evt.metadata == {"intervention": "若用 X 替代 Y"}
+
 
 class TestSlashRescore:
     """Phase 11 Wave 3: /rescore."""

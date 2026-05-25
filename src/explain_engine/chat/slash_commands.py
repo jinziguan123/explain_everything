@@ -1395,6 +1395,7 @@ async def _handle_counterfactual(chat: ChatSession, args: list[str]) -> list[Cha
     return [ChatEvent(
         type="slash_counterfactual",
         content="\n".join(content_lines),
+        metadata={"intervention": intervention},
     )]
 
 
