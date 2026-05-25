@@ -119,6 +119,10 @@ class ChatEvent:
 
     type: str
     content: Any = None
+    metadata: dict | None = None
+    # Phase 16.2 Wave 4: optional metadata, 仅 /predict /counterfactual 等需要
+    # wrapper 反解信息时由 handler 显式塞 (例 {"intervention": text}). 其他 19
+    # 个 handler 完全不感知该字段. _wrap_handler 用 getattr 兼容老 event.
 
 
 class ChatSession:

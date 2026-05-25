@@ -259,3 +259,11 @@ class TestMakeDoneSessionFixture:
     def test_stage_param_creates_converged(self):
         _make_done_session("s_fff00004", stage="converged")
         assert SessionStore().load("s_fff00004").meta.stage == "converged"
+
+
+class TestChatEventMetadata:
+    """Phase 16.2 Wave 4: ChatEvent.metadata optional 字段 — wrapper 反解 intervention 用."""
+
+    def test_chat_event_metadata_optional_default_none(self):
+        e = ChatEvent(type="slash_show", content="hello")
+        assert e.metadata is None
