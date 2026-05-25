@@ -2783,3 +2783,22 @@ class TestHandleHistory:
         assert result[0].type == "slash_error"
         assert "1-200" in result[0].content
         assert "整数" in result[0].content
+
+    @pytest.mark.asyncio
+    async def test_handle_history_limit_zero_or_negative(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.8: --limit 0 / --limit -1 都 reject (limit < 1)."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, [])
+
+        # 0
+        result0 = await _handle_history(chat, ["--limit", "0"])
+        assert result0[0].type == "slash_error"
+        assert "1-200" in result0[0].content
+
+        # -1
+        result_neg = await _handle_history(chat, ["--limit", "-1"])
+        assert result_neg[0].type == "slash_error"
+        assert "1-200" in result_neg[0].content
