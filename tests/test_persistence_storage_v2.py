@@ -140,3 +140,25 @@ class TestReplHistoryAppend:
         assert len(lines) == 3
         parsed = [json.loads(line) for line in lines]
         assert parsed == entries  # 顺序保持, 内容一致
+
+    def test_append_repl_history_ensure_ascii_false(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+        storage = StorageV2(project_id="testproj")
+        entry = {
+            "ts": "2026-05-25T14:00:00+08:00",
+            "type": "slash",
+            "cmd": "predict",
+            "args": [],
+            "intervention": "假设 JEPA 真正解决了组合生成能力涌现边界",
+            "summary": "+1 L1 / +5 现象",
+        }
+        storage.append_repl_history("s_abc", entry)
+        path = storage.session_dir("s_abc") / "repl_history.jsonl"
+        raw = path.read_text(encoding="utf-8")
+        # 关键: 原 unicode 中文不被 escape 成 \u 序列
+        assert "假设 JEPA" in raw
+        assert "组合生成能力涌现边界" in raw
+        assert "\\u" not in raw  # 排除 别 这种 escape
+        # 同时验证 round-trip 正确
+        parsed = json.loads(raw.splitlines()[0])
+        assert parsed == entry
