@@ -54,3 +54,29 @@ class TestCountFrequentEdges:
         g2 = self._make_graph([("p", "C", "q", "D", "causes")])
         result = _count_frequent_edges([("g0", g0), ("g1", g1), ("g2", g2)], min_support=2)
         assert len(result) == 1  # 只 (A, causes, B) 满足 freq=2
+
+
+class TestIsMinimumDFSCode:
+    def test_single_edge_is_canonical(self):
+        from explain_engine.engines.theory.gspan import DFSEdge, _is_minimum_dfs_code
+        code = [DFSEdge(0, 1, "A", "causes", "B")]
+        assert _is_minimum_dfs_code(code) is True
+
+    def test_two_isomorphic_codes_only_min_passes(self):
+        """同一 subgraph 可有多种 DFS 顺序, gSpan 取字典序最小的为 canonical.
+
+        Graph: A → B, A → C
+        Code 1: [(0,1,A,e,B), (0,2,A,e,C)]  ← min DFS code (B 先 visit, 字典序更小)
+        Code 2: [(0,1,A,e,C), (0,2,A,e,B)]  ← 非 min
+        """
+        from explain_engine.engines.theory.gspan import DFSEdge, _is_minimum_dfs_code
+        code_min = [DFSEdge(0, 1, "A", "e", "B"), DFSEdge(0, 2, "A", "e", "C")]
+        code_non_min = [DFSEdge(0, 1, "A", "e", "C"), DFSEdge(0, 2, "A", "e", "B")]
+        assert _is_minimum_dfs_code(code_min) is True
+        assert _is_minimum_dfs_code(code_non_min) is False
+
+    def test_chain_canonical(self):
+        from explain_engine.engines.theory.gspan import DFSEdge, _is_minimum_dfs_code
+        # A → B → C, DFS code [(0,1,A,e,B), (1,2,B,e,C)] 是 min
+        code = [DFSEdge(0, 1, "A", "e", "B"), DFSEdge(1, 2, "B", "e", "C")]
+        assert _is_minimum_dfs_code(code) is True

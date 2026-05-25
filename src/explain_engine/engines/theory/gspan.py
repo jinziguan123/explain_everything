@@ -62,3 +62,83 @@ def _count_frequent_edges(
                 seen_in_this_graph.add(template)
     return [(tpl, len(gids)) for tpl, gids in edge_to_graphs.items()
             if len(gids) >= min_support]
+
+
+def _is_minimum_dfs_code(code: list[DFSEdge]) -> bool:
+    """gSpan §4.1: 判 code 是否为该 subgraph 所有 isomorphic DFS code 中字典序最小者.
+
+    简化策略 (MVP, ≤ 5 node 时正确):
+      1. 用 code 重建 subgraph (nodes + edges)
+      2. 从每个 node 起始, 按 label 排序确定性 DFS 生成 1 candidate code
+      3. 取字典序最小的, 跟 input code 比
+
+    完整 gSpan 用 incremental DFS code generation (Yan & Han §4.1) 加速;
+    MVP 暴力即可. 我们 motif ≤ 5 node, 起始点 ≤ 5, 每条 candidate code O(N).
+    """
+    if not code:
+        return True
+
+    # Step 1: 用 code 重建 subgraph
+    g = nx.DiGraph()
+    node_labels: dict[int, str] = {}
+    for e in code:
+        if e.from_idx not in node_labels:
+            node_labels[e.from_idx] = e.from_label
+        if e.to_idx not in node_labels:
+            node_labels[e.to_idx] = e.to_label
+        g.add_edge(e.from_idx, e.to_idx, label=e.edge_label)
+    for nid, lbl in node_labels.items():
+        g.nodes[nid]["label"] = lbl
+
+    # Step 2: 从每个 node 起始, 跑 deterministic DFS 生 candidate code
+    all_candidates: list[list[DFSEdge]] = []
+    for start in g.nodes:
+        candidate = _enumerate_dfs_codes_from(g, start)
+        if candidate:
+            all_candidates.append(candidate)
+
+    # Step 3: 字典序最小
+    canonical_keys = sorted(_dfs_code_tuple(c) for c in all_candidates)
+    return _dfs_code_tuple(code) == canonical_keys[0]
+
+
+def _dfs_code_tuple(code: list[DFSEdge]) -> tuple:
+    return tuple((e.from_idx, e.to_idx, e.from_label, e.edge_label, e.to_label) for e in code)
+
+
+def _enumerate_dfs_codes_from(g: nx.DiGraph, start) -> list[DFSEdge]:
+    """从 start 跑 deterministic DFS 生 1 candidate DFS code.
+
+    分叉时按 (to_label, edge_label, to_node) 排序选 (deterministic).
+    MVP: 每 start 1 个 candidate, 不全枚举 isomorphism (≤ 5 node 时正确).
+    """
+    visited: dict = {start: 0}
+    code: list[DFSEdge] = []
+
+    def visit(node) -> None:
+        # 出边按 (to_label, edge_label, to_node) 排序
+        edges = sorted(
+            g.out_edges(node, data=True),
+            key=lambda x: (g.nodes[x[1]].get("label", ""), x[2].get("label", ""), x[1]),
+        )
+        for _, nbr, edata in edges:
+            from_idx = visited[node]
+            from_label = g.nodes[node].get("label", "")
+            edge_label = edata.get("label", "")
+            to_label = g.nodes[nbr].get("label", "")
+            if nbr not in visited:
+                visited[nbr] = len(visited)
+                code.append(DFSEdge(
+                    from_idx=from_idx, to_idx=visited[nbr],
+                    from_label=from_label, edge_label=edge_label, to_label=to_label,
+                ))
+                visit(nbr)
+            else:
+                # backward edge (cycle)
+                code.append(DFSEdge(
+                    from_idx=from_idx, to_idx=visited[nbr],
+                    from_label=from_label, edge_label=edge_label, to_label=to_label,
+                ))
+
+    visit(start)
+    return code
