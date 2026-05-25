@@ -2656,3 +2656,28 @@ class TestHandleHistory:
         assert "/cmd14" not in out
         # 数实际渲染条数
         assert out.count("[2026-05-25") == 5
+
+    @pytest.mark.asyncio
+    async def test_handle_history_limit_exceeds_total(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 5.3: --limit 100 但只有 7 entry → 输出 7 + total=7 shown=7."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        entries = [
+            _h_make_history_entry_slash(
+                cmd=f"cmd{i}",
+                ts=f"2026-05-25T14:{i:02d}:00+08:00",
+            )
+            for i in range(7)
+        ]
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, entries)
+
+        result = await _handle_history(chat, ["--limit", "100"])
+        out = result[0].content
+        # 全 7 entry 应渲染, 不挂掉
+        assert out.count("[2026-05-25") == 7
+        for i in range(7):
+            assert f"/cmd{i}" in out
+        # header: total=7 shown=7 (limit > total 时, shown 是 total)
+        assert "7" in out
