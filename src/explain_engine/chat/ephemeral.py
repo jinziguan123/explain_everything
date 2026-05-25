@@ -90,6 +90,28 @@ class EphemeralChatSession:
         lexicon_data = _load_lexicon(lexicon_path)
         lexicon = lexicon_data["variables"]
 
+        # Phase 16: 取 stable theories (filter rejected), fallback 空 list 不阻塞
+        stable_theories: list = []
+        try:
+            from explain_engine.engines.theory.cache import get_active_theories
+
+            try:
+                from explain_engine.embedding.bge_m3 import get_embedder
+                embedder = get_embedder()
+            except Exception:
+                embedder = None  # BGE-M3 unavailable → stale cache OK
+            cache = get_active_theories(self.storage, embedder=embedder)
+            stable_theories = [
+                t for t in cache.stable_theories
+                if t.id not in cache.rejected_theory_ids
+            ]
+        except Exception as exc:
+            import logging
+            logging.warning(
+                f"Phase 16 theory cache load failed: {type(exc).__name__}: {exc}"
+            )
+            stable_theories = []  # 失败不阻塞 bootstrap
+
         # bootstrap (raise → caller 留 ephemeral; ephemeral.state 不动)
         # 2026-05-19 polish: Rich Status spinner LLM 调用期间反馈 (5-15s)
         from rich.console import Console
@@ -100,6 +122,7 @@ class EphemeralChatSession:
                 llm,
                 lexicon=lexicon if lexicon else None,
                 lexicon_top_k=20,
+                theories=stable_theories,  # Phase 16
             )
 
         # HITL — Wave 1 stub: 全 accept. Wave 2 接 input_provider + k/e/d.
