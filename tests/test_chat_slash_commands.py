@@ -2293,3 +2293,29 @@ class TestWrapHandler:
         assert len(entries) == 1
         assert entries[0]["args"] == ["a", "b"]
         assert entries[0]["cmd"] == "passthrough"
+
+    @pytest.mark.asyncio
+    async def test_wrap_handler_reads_intervention_from_metadata(
+        self, tmp_path, monkeypatch
+    ):
+        """Task 3.3: handler 返 event 含 metadata={'intervention':...} → entry 含 intervention 字段."""
+        from explain_engine.chat.slash_commands import _wrap_handler
+
+        chat = _h_make_chat_with_storage(tmp_path, monkeypatch)
+
+        async def fake_handler(c, args):
+            return [
+                _FakeEvent(
+                    type="slash_predict",
+                    content="预测结果...",
+                    metadata={"intervention": "假设 X 增加"},
+                )
+            ]
+
+        wrapped = _wrap_handler("predict", fake_handler)
+        await wrapped(chat, [])
+
+        entries = chat.storage.load_repl_history(chat.sid)
+        assert len(entries) == 1
+        assert entries[0]["intervention"] == "假设 X 增加"
+        assert entries[0]["cmd"] == "predict"
