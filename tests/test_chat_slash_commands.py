@@ -1160,6 +1160,41 @@ class TestSlashPredict:
         # Format: 0.62 浮点显示
         assert "0.62" in c
 
+    @pytest.mark.asyncio
+    async def test_handle_predict_event_carries_intervention_metadata(self, monkeypatch):
+        """Phase 16.2 Task 4.3: /predict 的 ChatEvent.metadata 含 intervention text.
+
+        wrapper (Wave 3) 反解 metadata.intervention 写到 repl_history entry, 让
+        resume banner / /history 命令显示完整假设文本.
+        """
+        from dataclasses import dataclass
+
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_md40003")
+        chat = ChatSession("s_md40003", llm=object())  # type: ignore[arg-type]
+
+        async def fake_provider(prompt):
+            return "假设 JEPA 解决 c_001 + c_004"
+        chat.input_provider = fake_provider
+
+        @dataclass
+        class FakeReport:
+            new_node_ids: list
+            predicted_L0_ids: list
+            activated_existing_L0: list
+            propagation_acts: dict
+
+        async def fake_predict(state, intervention_text, llm):
+            return FakeReport([], [], [], {})
+
+        monkeypatch.setattr(
+            "explain_engine.engines.prediction.predict", fake_predict
+        )
+
+        events = await dispatch_slash(chat, "/predict")
+        predict_evt = next(e for e in events if e.type == "slash_predict")
+        assert predict_evt.metadata == {"intervention": "假设 JEPA 解决 c_001 + c_004"}
+
 
 class TestSlashCounterfactual:
     """Phase 11 Wave 3: /counterfactual + /cf alias.

@@ -1318,6 +1318,7 @@ async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]
             f"  影响最大的 3 个中间节点 (正负号 = 激活变化方向):\n"
             f"{prop_lines}"
         ),
+        metadata={"intervention": intervention},
     )]
 
 
