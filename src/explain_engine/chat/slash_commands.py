@@ -1412,9 +1412,15 @@ async def _handle_theories(chat: ChatSession, args: list[str]) -> list[ChatEvent
                 pass
 
     storage = StorageV2()
-    # ChatSession / EphemeralChatSession 都没 .embedder field — 走 stale path
-    # (cache miss + embedder=None 返 stale cache, recompute 等下次有 embedder).
-    embedder = getattr(chat, "embedder", None)
+    # Phase 16 design hotfix: ChatSession 无 .embedder attr 但 BGE-M3 是 process
+    # singleton — 用 get_embedder() 拿. EXPLAIN_EMBEDDING_DISABLED=1 (test env)
+    # 或 load 失败 → fallback None (走 stale cache, plan §5.4 degraded mode).
+    embedder: object | None
+    try:
+        from explain_engine.embedding.bge_m3 import get_embedder
+        embedder = get_embedder()
+    except Exception:
+        embedder = None
 
     try:
         with Console().status(STATUS_THEORIES_COMPUTE):
