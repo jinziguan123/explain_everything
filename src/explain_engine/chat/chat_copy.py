@@ -104,7 +104,7 @@ HELP_GROUPS_ZH: list[tuple[str, list[str]]] = [
     ("推进 session",              ["compress", "run", "rescore"]),
     ("干预分析 (需先 /compress)", ["predict", "counterfactual"]),
     ("查看状态 (只读)",           ["show", "graph", "check"]),
-    ("管理 session",              ["new", "resume", "list", "lexicon", "theories", "theory"]),
+    ("管理 session",              ["new", "resume", "list", "lexicon", "theories", "theory", "history"]),
     ("其他",                      ["budget", "compact", "save", "migrate"]),
     ("帮助 / 退出",               ["help", "quit"]),
 ]

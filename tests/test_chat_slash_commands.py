@@ -1400,10 +1400,10 @@ class TestWave3Registry:
         for name in ["compress", "run", "check", "predict", "counterfactual", "rescore", "cf"]:
             assert name in names, f"/{name} not registered"
 
-    def test_total_count_is_21(self):
+    def test_total_count_is_22(self):
         """8 base + 6 Wave 3 + 1 alias (cf) + 3 Wave 4 + 1 Phase 12 (graph) +
-        2 Phase 16 (theories + theory) = 21."""
-        assert len(DEFAULT_COMMANDS) == 21
+        2 Phase 16 (theories + theory) + 1 Phase 16.2 (history) = 22."""
+        assert len(DEFAULT_COMMANDS) == 22
 
     def test_help_lists_all_wave3_commands(self):
         """/help 自动遍历 DEFAULT_COMMANDS — 验 Wave 3 6+1 都列出."""
@@ -2101,6 +2101,7 @@ class TestHelpGrouping:
             "compress", "run", "rescore", "predict", "counterfactual",
             "show", "graph", "check", "new", "resume", "list", "lexicon",
             "budget", "compact", "save", "migrate", "help", "quit",
+            "history",  # Phase 16.2 Wave 5: /history 注册到 session 管理组
         ):
             assert f"/{cmd}" in content, f"missing /{cmd}"
 
@@ -2914,3 +2915,38 @@ class TestHandleHistory:
         assert long_assistant in out
         # 不应有截断 "..."
         assert "..." not in out
+
+    def test_history_registered_in_default_commands(self):
+        """Task 5.15: /history 注册到 DEFAULT_COMMANDS, 走 _wrap_handler 包装.
+
+        验:
+        1. 名字存在
+        2. description 跟 COMMAND_DESCRIPTIONS["history"] 一致
+        3. handler 是 wrapped (有 __wrapped__ 属性指向 _handle_history)
+        """
+        from explain_engine.chat.chat_copy import COMMAND_DESCRIPTIONS
+        from explain_engine.chat.slash_commands import (
+            DEFAULT_COMMANDS,
+            _handle_history,
+        )
+
+        cmd = next((c for c in DEFAULT_COMMANDS if c.name == "history"), None)
+        assert cmd is not None, "history 未注册到 DEFAULT_COMMANDS"
+        assert cmd.description == COMMAND_DESCRIPTIONS["history"]
+        # _wrap_handler 包装后 .__wrapped__ 指原 handler
+        assert getattr(cmd.handler, "__wrapped__", None) is _handle_history
+
+    def test_history_in_help_group_session_management(self):
+        """Task 5.15: history 加入 HELP_GROUPS_ZH '管理 session' 组."""
+        from explain_engine.chat.chat_copy import HELP_GROUPS_ZH
+
+        # 找 'session 管理' / '管理 session' 组
+        session_group = next(
+            (
+                cmds for name, cmds in HELP_GROUPS_ZH
+                if "管理" in name and "session" in name
+            ),
+            None,
+        )
+        assert session_group is not None, "未找到 '管理 session' 组"
+        assert "history" in session_group

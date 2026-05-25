@@ -2013,6 +2013,8 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("theories",       COMMAND_DESCRIPTIONS["theories"],       _wrap_handler("theories", _handle_theories)),
     # Phase 16 Task 14: /theory <id> [reject] — 看详情 / 拒绝某 theory.
     SlashCommand("theory",         COMMAND_DESCRIPTIONS["theory"],         _wrap_handler("theory", _handle_theory)),
+    # Phase 16.2 Wave 5: /history — 查看本 session 操作历史 (默认 30 / 上限 200).
+    SlashCommand("history",        COMMAND_DESCRIPTIONS["history"],        _wrap_handler("history", _handle_history)),
     SlashCommand("migrate",        COMMAND_DESCRIPTIONS["migrate"],        _wrap_handler("migrate", _handle_migrate)),
 )
 
