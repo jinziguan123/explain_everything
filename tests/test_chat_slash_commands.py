@@ -2632,3 +2632,27 @@ class TestHandleHistory:
         assert "/cmd20" in out  # 末 30 起点
         assert "/cmd19" not in out
         assert "/cmd0" not in out
+
+    @pytest.mark.asyncio
+    async def test_handle_history_limit_5(self, tmp_path, monkeypatch):
+        """Task 5.2: --limit 5. 输出 5 entry, header shown=5."""
+        from explain_engine.chat.slash_commands import _handle_history
+
+        entries = [
+            _h_make_history_entry_slash(
+                cmd=f"cmd{i}",
+                ts=f"2026-05-25T14:{i:02d}:00+08:00",
+            )
+            for i in range(20)
+        ]
+        chat = _h_make_chat_with_history(tmp_path, monkeypatch, entries)
+
+        result = await _handle_history(chat, ["--limit", "5"])
+        out = result[0].content
+        # header: 20 total, 5 shown
+        assert "20" in out
+        assert "/cmd19" in out
+        assert "/cmd15" in out
+        assert "/cmd14" not in out
+        # 数实际渲染条数
+        assert out.count("[2026-05-25") == 5
