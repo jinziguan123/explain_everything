@@ -1054,6 +1054,22 @@ async def _run_chat_repl_async(
                 "自然语言输入会无响应; 仅 slash 命令工作.[/yellow]"
             )
 
+        # Phase 16.2 Wave 7 Task 7.10: resume banner 追加最近 N 条 history 段.
+        # 失败 silent (整段不显, log warn) — banner 缺一段不致命, 不应阻 chat 启动.
+        try:
+            from explain_engine.chat.history_render import render_recent_history
+
+            history_entries = chat_session.storage.load_repl_history(
+                chat_session.sid
+            )
+            history_section = render_recent_history(history_entries, max_n=10)
+            console.print(history_section)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                f"resume banner history section failed for "
+                f"{chat_session.sid}: {type(exc).__name__}: {exc}"
+            )
+
         # ── Build prompt_toolkit session (reuse across turns for history) ──
         pt_session = make_session(log_handler)
 
