@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel
 
 from explain_engine.llm.client import LLMClient, Message
-from explain_engine.llm.errors import SchemaValidationError
+from explain_engine.llm.errors import LLMError, SchemaValidationError
 from explain_engine.llm.light_fallback import with_light_fallback
 from explain_engine.llm.prompts._loader import load_prompt
 from explain_engine.schema.nodes import VariableNode
@@ -28,11 +28,12 @@ logger = logging.getLogger(__name__)
 QuestionType = Literal[
     "causal_modern", "concept_explanation", "mechanism", "phenomenon"
 ]
-_VALID_TYPES: set[str] = {
-    "causal_modern",
-    "concept_explanation",
-    "mechanism",
-    "phenomenon",
+_VALID_TYPES: frozenset[str] = frozenset(QuestionType.__args__)  # type: ignore[attr-defined]
+_YAML_BY_TYPE: dict[QuestionType, str] = {
+    "causal_modern": "variable_extraction",
+    "concept_explanation": "variable_extraction_concept_explanation",
+    "mechanism": "variable_extraction_mechanism",
+    "phenomenon": "variable_extraction_phenomenon",
 }
 
 
@@ -81,7 +82,7 @@ async def _classify_question(
 
     try:
         resp = await with_light_fallback(light_llm, main_llm, _do_call)
-    except Exception as exc:
+    except (LLMError, SchemaValidationError) as exc:
         logger.warning(
             "classify 整体失败 (light + main 全挂), fallback causal_modern: %s",
             exc,
@@ -167,11 +168,7 @@ async def bootstrap_phenomena(
     else:
         qtype = "causal_modern"
 
-    yaml_name = (
-        "variable_extraction"
-        if qtype == "causal_modern"
-        else f"variable_extraction_{qtype}"
-    )
+    yaml_name = _YAML_BY_TYPE[qtype]
     prompt = load_prompt(yaml_name)
     user_content = prompt["user_template"].format(
         question=question,
