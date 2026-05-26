@@ -48,3 +48,31 @@ def test_cli_delete_cancel_with_n() -> None:
     assert result.exit_code == 0, result.stdout
     assert "已取消" in result.stdout
     assert store._storage.session_dir(sid).exists()
+
+
+def test_cli_delete_force_skips_confirm() -> None:
+    """--force 跳 typer.confirm 直删, 不需 stdin input."""
+    sid = _make_session()
+    store = SessionStore()
+
+    result = runner.invoke(app, ["delete", sid, "--force"])
+    assert result.exit_code == 0, result.stdout
+    assert "已删" in result.stdout
+    assert not store._storage.session_dir(sid).exists()
+
+
+def test_cli_delete_short_force_flag() -> None:
+    """-f 等价 --force."""
+    sid = _make_session()
+    store = SessionStore()
+
+    result = runner.invoke(app, ["delete", sid, "-f"])
+    assert result.exit_code == 0
+    assert not store._storage.session_dir(sid).exists()
+
+
+def test_cli_delete_nonexistent_returns_1() -> None:
+    """不存在 sid → red error + exit 1."""
+    result = runner.invoke(app, ["delete", "s_notexist", "--force"])
+    assert result.exit_code == 1, result.stdout
+    assert "不存在" in result.stdout
