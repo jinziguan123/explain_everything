@@ -97,3 +97,17 @@ class TestResetPgFixture:
             row = cur.fetchone()
         assert row[0] == 0
         assert row[1] is None
+
+
+# ── Wave 2: lexicon_pg.py core CRUD ─────────────────────────────────────
+
+
+class TestLexiconDBError:
+    """Phase 17.1 Task 2.1: LexiconDBError 异常类."""
+
+    def test_lexicon_db_error_is_exception(self):
+        from explain_engine.persistence.lexicon_pg import LexiconDBError
+
+        assert issubclass(LexiconDBError, Exception)
+        err = LexiconDBError("oops")
+        assert str(err) == "oops"
