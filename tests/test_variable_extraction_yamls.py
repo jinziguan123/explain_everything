@@ -15,3 +15,16 @@ def test_concept_explanation_yaml_loads():
     assert "{question}" in p["user_template"]
     assert "{min_count}" in p["user_template"]
     assert "{max_count}" in p["user_template"]
+
+
+def test_mechanism_yaml_loads():
+    """mechanism: 本域 ≥ 70% + 跨域 ≤ 30%."""
+    p = load_prompt("variable_extraction_mechanism")
+    assert "system" in p
+    assert "user_template" in p
+    # 关键 invariant: 70/30 split
+    assert "70%" in p["system"]
+    assert "本域" in p["system"]
+    assert "{question}" in p["user_template"]
+    assert "{min_count}" in p["user_template"]
+    assert "{max_count}" in p["user_template"]
