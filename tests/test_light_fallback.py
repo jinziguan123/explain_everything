@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from explain_engine.llm.errors import LLMError
+from explain_engine.llm.errors import LLMError, SchemaValidationError
 from explain_engine.llm.light_fallback import with_light_fallback
 
 
@@ -51,3 +51,18 @@ async def test_with_light_fallback_light_llm_error_falls_back(caplog):
     assert light.call_count == 1
     assert main.call_count == 1
     assert any("light_llm 失败" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_with_light_fallback_schema_error_falls_back():
+    """light raise SchemaValidationError (返垃圾 JSON) → 调主 重试."""
+    light = _StubClient("light", raises=SchemaValidationError("missing field"))
+    main = _StubClient("main")
+
+    result = await with_light_fallback(
+        light, main, lambda llm: llm.chat("hi")
+    )
+
+    assert result == "response-from-main"
+    assert light.call_count == 1
+    assert main.call_count == 1
