@@ -410,6 +410,38 @@ Phase 5 起协议跟供应商解耦，配 4 个 env var:
 
 可选: `LLM_STRUCTURED_OUTPUT_MODE` (openai 协议下 `json_schema` (默认) / `json_object`)
 
+## Lexicon 数据库配置 (Phase 17.1+)
+
+Phase 17.1 起 lexicon (cross-session variable 库) 走远程 PostgreSQL + pgvector,
+不再用 local `variables.json`. 配 1 个 env var (其他可选):
+
+- `EXPLAIN_DB_URL` (必填): `postgresql://<user>:<密码>@<主机>:5432/explain`
+- `EXPLAIN_DB_POOL_MIN` (可选, 默 2): psycopg pool 最小 connection
+- `EXPLAIN_DB_POOL_MAX` (可选, 默 10): psycopg pool 最大 connection
+- `EXPLAIN_DB_CONNECT_TIMEOUT_S` (可选, 默 5): 连接超时秒数
+
+### 部署 PostgreSQL server (1 次性)
+
+完整步骤见 [`deploy/postgres/README.md`](deploy/postgres/README.md), 总结:
+
+```bash
+# 在目标 server (例 172.30.26.12):
+sudo mkdir -p /opt/explain-db/{pgdata,init}
+scp deploy/postgres/docker-compose.yml deploy/postgres/init/01-init.sql <server>:/opt/explain-db/init/
+ssh <server> 'cd /opt/explain-db && EXPLAIN_DB_PASSWORD=<强密码> docker compose up -d'
+
+# 本机配 .env:
+cp .env.example .env                                   # 若还没有
+# 编辑 .env, 改 EXPLAIN_DB_URL 的密码 + 主机
+```
+
+### Migration (从旧 variables.json 一次性迁)
+
+```bash
+.venv/bin/python -m explain_engine.cli migrate-lexicon-pg --dry-run    # 预览
+.venv/bin/python -m explain_engine.cli migrate-lexicon-pg              # 实跑
+```
+
 ### Phase 4 → Phase 5 配置迁移
 
 | Phase 4                              | Phase 5 等价                                                                |
