@@ -346,6 +346,27 @@ async def _build_canonical_mechanism(
         return _fallback()
 
 
+def _compute_signature(name: str, canonical_mechanism: str) -> str:
+    """sha256(name + '::' + canonical_mechanism)[:16] — 用作 canonical cache key
+    + global_id 前 8 char (Track B Wave 5 cache 复用).
+
+    Phase 17.1 Wave 4: 暂只用作 canonical_signature 字段, Wave 5 加 cache 查找.
+    """
+    import hashlib
+
+    s = f"{name}::{canonical_mechanism}".encode()
+    return hashlib.sha256(s).hexdigest()[:16]
+
+
+def _compute_global_id(name: str, canonical_mechanism: str) -> str:
+    """global_id = 'v_' + sha256(name + '::' + canonical_mechanism)[:8].
+
+    跟老 lexicon._compute_global_id 同语义 — 同 (name, canonical) 同 id (conservative
+    split, 宁可重复存不要 wrong merge). Wave 4 用作 insert 新 var 的 PK.
+    """
+    return "v_" + _compute_signature(name, canonical_mechanism)[:8]
+
+
 async def _batch_embed(canonicals: list[str]) -> list[list[float] | None]:
     """Phase 17.1 Task 4.3: BGE-M3 batch embed canonical mechanisms.
 
@@ -373,3 +394,95 @@ async def _batch_embed(canonicals: list[str]) -> list[list[float] | None]:
             f"{type(exc).__name__}: {exc}. Falling back to embedding=None for all."
         )
         return [None] * len(canonicals)
+
+
+async def _insert_new_var(
+    conn,
+    node: Any,  # VariableNode
+    canonical: str,
+    embedding: list[float] | None,
+    session: Any,  # Session (有 .meta.session_id)
+) -> None:
+    """Wave 4 helper: 把 (VariableNode, canonical, embedding, session) 转成 var dict
+    并调 _insert_var. 跟老 lexicon._upsert_var 'brand new entry' 分支同语义.
+    """
+    sid = session.meta.session_id
+    now = datetime.now(__import__("datetime").timezone.utc)
+    var = {
+        "global_id": _compute_global_id(node.name, canonical),
+        "name": node.name,
+        "description": node.description,
+        "abstraction_level": node.abstraction_level,
+        "epistemic": node.epistemic,
+        "canonical_mechanism": canonical,
+        "canonical_signature": _compute_signature(node.name, canonical),
+        "canonical_model_ver": "v1",
+        "reuse_count": 1,
+        "avg_essentialness": node.activation,  # Phase 10 第一版 proxy (同老)
+        "avg_consistency": node.stability,  # Phase 10 第一版 proxy
+        "first_seen_at": now,
+        "last_seen_at": now,
+        "source_sessions": [sid],
+        "embedding": embedding,
+    }
+    await _insert_var(conn, var)
+
+
+async def flush_to_lexicon(
+    session: Any,
+    storage: Any,  # 保 signature, Wave 4 PG impl 不再读 storage path
+    llm: Any | None = None,
+    llm_canonical_top_k: int = 3,
+) -> int:
+    """Phase 17.1 Wave 4: PG impl, 替老 lexicon.flush_to_lexicon JSON 行为.
+
+    Pipeline:
+      1. session.state.graph.nodes 过 _should_promote → candidates
+      2. sort by node.activation desc (高 activation 优先享受 LLM canonical 名额)
+      3. 前 llm_canonical_top_k 个走 LLM canonical, 其余 edge fallback
+      4. _batch_embed 全 canonicals (test mode: disabled → 全 None)
+      5. async with transaction: per (node, canon, emb):
+           - emb 非 None → _find_duplicate(threshold=0.85)
+           - 命中 winner → _merge_into_existing (loser 入 winner) 不算 promoted
+           - 未命中 / emb=None → _insert_new_var, promoted += 1
+      6. 返 promoted (新 insert 数; merge 算 0).
+
+    Wave 5 加 canonical_signature cache 层 (无需重算 LLM canonical),
+    Wave 6 加 lazy retroactive dedup. 本 Wave 先 ship 最小 PG 替 JSON.
+
+    NOTE: signature 跟老 lexicon.flush_to_lexicon 完全一致 (session, storage,
+    llm, llm_canonical_top_k), chat / cli 调点不变. storage 参数保留兼容 (未使用).
+    """
+    pool = await get_async_pool()
+    candidates = [
+        node
+        for node in session.state.graph.nodes.values()
+        if _should_promote(node)
+    ]
+    candidates.sort(key=lambda n: -n.activation)
+
+    canonicals: list[str] = []
+    for i, node in enumerate(candidates):
+        effective_llm = llm if i < llm_canonical_top_k else None
+        canon = await _build_canonical_mechanism(node, session, effective_llm)
+        canonicals.append(canon)
+
+    embeddings = await _batch_embed(canonicals)
+
+    promoted = 0
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            for node, canon, emb in zip(
+                candidates, canonicals, embeddings, strict=True
+            ):
+                winner_id: str | None = None
+                if emb is not None:
+                    winner_id = await _find_duplicate(conn, emb, threshold=0.85)
+                if winner_id:
+                    await _merge_into_existing(
+                        conn, winner_id, node, session, canon,
+                    )
+                    continue
+                await _insert_new_var(conn, node, canon, emb, session)
+                promoted += 1
+    return promoted

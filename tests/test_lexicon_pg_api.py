@@ -218,3 +218,158 @@ class TestBatchEmbed:
 
         out = await _batch_embed([])
         assert out == []
+
+
+# ── Task 4.4: flush_to_lexicon 主流程 ───────────────────────────────────
+
+
+def _build_multi_node_session(
+    session_id: str = "s_flush001",
+    n: int = 2,
+    abstraction_level: int = 1,
+    activation: float = 0.7,
+    lifecycle_state: str = "active",
+) -> _FakeSession:
+    """造 session: n 个 promote-qualified node (L1+, active, activation>=0.5).
+
+    每 node 互不连接 (无 edge), 走 edge fallback canonical = '<name> (无 edge 上下文)'.
+    """
+    nodes = {}
+    for i in range(n):
+        nid = f"n_flush_{i:03d}"
+        nodes[nid] = _make_node(
+            nid=nid,
+            name=f"概念 {i}",
+            abstraction_level=abstraction_level,
+            activation=activation,
+            lifecycle_state=lifecycle_state,
+        )
+    return _FakeSession(_FakeGraph(nodes, {}), session_id)
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestFlushToLexicon:
+    """Phase 17.1 Task 4.4: flush_to_lexicon PG impl (替老 JSON).
+
+    Pipeline:
+      1. session.state.graph.nodes 过 _should_promote → candidates
+      2. sort by activation desc
+      3. _build_canonical_mechanism (top-K LLM, rest edge fallback)
+      4. _batch_embed
+      5. async with transaction: per candidate find_duplicate → merge OR insert
+      6. return promoted count (insert-new 数, merge 算 0)
+    """
+
+    @pytest.mark.asyncio
+    async def test_flush_to_lexicon_new_var_inserts(self):
+        """2 个 promote 节点全新 insert (库空, 无 dup), promoted=2, DB count=2."""
+        import psycopg
+
+        from explain_engine.persistence.lexicon_pg import (
+            _get_dsn,
+            flush_to_lexicon,
+        )
+
+        session = _build_multi_node_session(n=2)
+        promoted = await flush_to_lexicon(session, storage=None, llm=None)
+        assert promoted == 2
+
+        # 真 DB count 校验
+        with psycopg.connect(_get_dsn()) as conn:
+            cnt = conn.execute("SELECT COUNT(*) FROM variables").fetchone()[0]
+        assert cnt == 2
+
+    @pytest.mark.asyncio
+    async def test_flush_to_lexicon_skips_non_qualified(self):
+        """L0 / stale / low activation 全不 promote, promoted=0."""
+        import psycopg
+
+        from explain_engine.persistence.lexicon_pg import (
+            _get_dsn,
+            flush_to_lexicon,
+        )
+
+        nodes = {
+            "l0": _make_node(nid="l0", name="l0", abstraction_level=0,
+                             activation=0.9, lifecycle_state="active",
+                             epistemic="observation"),
+            "stale": _make_node(nid="stale", name="stale",
+                                abstraction_level=2, activation=0.9,
+                                lifecycle_state="stale"),
+            "low": _make_node(nid="low", name="low", abstraction_level=1,
+                              activation=0.3, lifecycle_state="active"),
+        }
+        session = _FakeSession(_FakeGraph(nodes, {}), "s_skip0001")
+        promoted = await flush_to_lexicon(session, storage=None, llm=None)
+        assert promoted == 0
+
+        with psycopg.connect(_get_dsn()) as conn:
+            cnt = conn.execute("SELECT COUNT(*) FROM variables").fetchone()[0]
+        assert cnt == 0
+
+    @pytest.mark.asyncio
+    async def test_flush_to_lexicon_dup_merges(self):
+        """先 insert 1 var 有 embedding, 然后 flush 含 1 个 sim>0.85 node → merge (promoted=0, DB count=1)."""
+        import numpy as np
+        import psycopg
+
+        from explain_engine.persistence.lexicon_pg import (
+            _get_dsn,
+            _insert_var,
+            flush_to_lexicon,
+            get_async_pool,
+        )
+
+        rng = np.random.default_rng(seed=7)
+        base_emb = rng.random(1024).astype(np.float32).tolist()
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await _insert_var(conn, {
+                "global_id": "v_winner99",
+                "name": "已有 var",
+                "description": "winner",
+                "abstraction_level": 1,
+                "epistemic": "insight",
+                "canonical_mechanism": "已有 canonical",
+                "canonical_signature": "sig123",
+                "canonical_model_ver": "v1",
+                "reuse_count": 2,
+                "avg_essentialness": 0.6,
+                "avg_consistency": 0.8,
+                "first_seen_at": now,
+                "last_seen_at": now,
+                "source_sessions": ["s_orig0001"],
+                "embedding": base_emb,
+            })
+
+        # mock _batch_embed 让候选 node 的 embedding = base_emb (= 100% sim, 必 merge)
+        from explain_engine.persistence import lexicon_pg as lp
+
+        async def _mock_batch_embed(canonicals):
+            return [base_emb] * len(canonicals)
+
+        # 用 monkeypatch 直接 setattr (无 fixture, 手动 try/finally)
+        orig = lp._batch_embed
+        lp._batch_embed = _mock_batch_embed
+        try:
+            session = _build_multi_node_session(session_id="s_dup00001", n=1)
+            promoted = await flush_to_lexicon(session, storage=None, llm=None)
+        finally:
+            lp._batch_embed = orig
+
+        # merge → promoted 计数为 0 (insert 新数), DB 仍 1 行
+        assert promoted == 0
+        with psycopg.connect(_get_dsn()) as conn:
+            cnt = conn.execute("SELECT COUNT(*) FROM variables").fetchone()[0]
+            row = conn.execute(
+                "SELECT reuse_count, source_sessions FROM variables WHERE global_id = %s",
+                ("v_winner99",),
+            ).fetchone()
+        assert cnt == 1
+        assert row[0] == 3  # 2 + 1
+        # source_sessions union 含新 sid
+        assert "s_dup00001" in row[1]
+        assert "s_orig0001" in row[1]
