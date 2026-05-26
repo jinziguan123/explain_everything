@@ -30,3 +30,27 @@ async def test_send_user_message_yields_assistant_text(tmp_path, monkeypatch):
     assert len(assistant_events) >= 1
     assert "饱和蒸汽压" in assistant_events[0].content
     assert len(turn_complete_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_send_user_message_llm_error_no_transcript_pollution(tmp_path, monkeypatch):
+    from explain_engine.llm.errors import LLMError
+
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+
+    llm = AsyncMock()
+    llm.chat.side_effect = LLMError("network down")
+
+    events = []
+    async for ev in ephemeral.send_user_message("hi", llm):
+        events.append(ev)
+
+    error_events = [e for e in events if e.type == "slash_error"]
+    assert len(error_events) == 1
+    assert "LLMError" in error_events[0].content
+    # transcript 不变 (retry 友好)
+    assert ephemeral.transcript == []
