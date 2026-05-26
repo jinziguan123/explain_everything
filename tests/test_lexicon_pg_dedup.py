@@ -214,3 +214,102 @@ class TestMaybeLazyDedupIncrementsCountThenRuns:
             row = await cur.fetchone()
         assert row[0] == 0, f"第 6 次后 flush_count_since 应 reset 0, got {row[0]}"
         assert row[1] is not None, "第 6 次后 last_retro_dedup_at 应写 NOW()"
+
+
+# ── Wave 6 Task 6.4: _retroactive_dedup_pg cross-join + 合并 ────────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestRetroactiveDedupPg:
+    """Phase 17.1 Task 6.4: pgvector cross-join 合 sim > 0.85, winner 早 first_seen.
+
+    Test scenario:
+      - bulk insert 108 dummy var (无 embedding, 凑 N >= 100; 不进 cross-join 因
+        WHERE embedding IS NOT NULL 跳)
+      - 加 2 个 var: winner (早 first_seen) + loser (晚 first_seen), embedding 几乎
+        相同 (sim ~ 0.999), source_sessions 不同 — 应触发 merge
+      - 强 set flush_count = 5 → 第 1 次 _maybe_lazy_dedup 即触发 dedup
+      - 验:
+        * 返 merged == 1
+        * 库剩 109 行 (loser 删)
+        * winner 的 reuse_count, source_sessions, avg_ess/cons 已更新
+        * loser global_id 查不到 (None)
+    """
+
+    @pytest.mark.asyncio
+    async def test_retroactive_dedup_merges_sim_above_threshold(self):
+        import numpy as np
+
+        from explain_engine.persistence.lexicon_pg import (
+            _find_var_by_id,
+            _insert_var,
+            _maybe_lazy_dedup,
+            get_async_pool,
+        )
+
+        pool = await get_async_pool()
+        # 造 winner / loser embedding 高度相似 (sim ≈ 0.9999)
+        rng = np.random.default_rng(seed=42)
+        winner_emb = rng.random(1024).astype(np.float32)
+        loser_emb = winner_emb + rng.normal(0, 0.001, 1024).astype(np.float32)
+
+        # 时间: winner 早 1s, loser 晚 1s
+        from datetime import timedelta
+        t_winner = datetime.now(UTC)
+        t_loser = t_winner + timedelta(seconds=1)
+
+        async with pool.connection() as conn:
+            # 108 dummy 凑 N >= 100 (它们 embedding NULL, 不进 cross-join)
+            await _bulk_insert_dummies(conn, 108, prefix="v_pad")
+            # winner (早) + loser (晚)
+            await _insert_var(conn, _sample_var(
+                global_id="v_winner01",
+                name="winner var",
+                first_seen_at=t_winner,
+                last_seen_at=t_winner,
+                source_sessions=["s_w001"],
+                reuse_count=3,
+                avg_essentialness=0.8,
+                avg_consistency=0.6,
+                embedding=winner_emb.tolist(),
+            ))
+            await _insert_var(conn, _sample_var(
+                global_id="v_loser001",
+                name="loser var",
+                first_seen_at=t_loser,
+                last_seen_at=t_loser,
+                source_sessions=["s_l001", "s_l002"],
+                reuse_count=2,
+                avg_essentialness=0.4,
+                avg_consistency=0.9,
+                embedding=loser_emb.tolist(),
+            ))
+            # 强 set flush_count = 5 (第 1 次 _maybe_lazy_dedup 即触发 dedup branch)
+            await conn.execute(
+                "UPDATE lexicon_meta SET flush_count_since = 5 WHERE id = 1"
+            )
+
+        merged = await _maybe_lazy_dedup(pool)
+        assert merged == 1, f"应 merge 1 pair (winner/loser sim>0.85), got {merged}"
+
+        # 验库行数 = 108 (dummy) + 1 (winner, loser 删) = 109
+        async with pool.connection() as conn:
+            cur = await conn.execute("SELECT COUNT(*) FROM variables")
+            n = (await cur.fetchone())[0]
+        assert n == 109, f"loser 应被 DELETE, 库剩 109, got {n}"
+
+        # winner 仍在 + 字段已更新
+        async with pool.connection() as conn:
+            winner = await _find_var_by_id(conn, "v_winner01")
+            loser = await _find_var_by_id(conn, "v_loser001")
+        assert loser is None, "loser 应被 DELETE"
+        assert winner is not None, "winner 应保留"
+        # reuse_count = 3 (winner) + 2 (loser) = 5
+        assert winner["reuse_count"] == 5
+        # source_sessions union 顺序去重: [s_w001, s_l001, s_l002]
+        assert winner["source_sessions"] == ["s_w001", "s_l001", "s_l002"]
+        # avg_ess running-avg = (0.8*3 + 0.4*2) / 5 = 0.64
+        assert abs(winner["avg_essentialness"] - 0.64) < 1e-6
+        # avg_cons running-avg = (0.6*3 + 0.9*2) / 5 = 0.72
+        assert abs(winner["avg_consistency"] - 0.72) < 1e-6

@@ -647,11 +647,96 @@ async def _build_canonical_mechanism_cached(
 
 
 async def _retroactive_dedup_pg(conn) -> int:
-    """Phase 17.1 Task 6.2 stub — Task 6.4 真实现 (pgvector cross-join 合 sim>0.85).
+    """Phase 17.1 Task 6.4: pgvector cross-join 合并 sim > 0.85 var.
 
-    本 stub 返 0 让 Wave 6 阶段性递增 task 顺利 ship; Task 6.4 替换为真 logic.
+    Algo:
+      1. SELECT 所有 cross-pair (a.id < b.id) sim > 0.85 (cosine 1 - <=>),
+         排除任一 embedding IS NULL 的行, 按 a.first_seen_at ASC 排
+         (winner = 早 first_seen). 保 (a, b) 中 a 是 winner (a.first_seen <= b).
+      2. Loop pair: 已被合的 id (winner 或 loser) skip — 防 A↔B 合后再 A↔C
+         触发对 A 的二次合 (loser=A 已被 absorbed).
+      3. Audit insert lexicon_merge_audit row (Task 6.5 验).
+      4. 合 loser → winner: source_sessions union 顺序去重, reuse_count 加,
+         avg_essentialness/avg_consistency running-avg, last_seen_at = NOW().
+      5. DELETE loser.
+
+    返 merged 数. 单 conn 跑 (由 caller _maybe_lazy_dedup 的 transaction 包).
     """
-    return 0
+    # winner = first_seen 早的一方, a 总 winner / b 总 loser.
+    # tiebreaker: first_seen 相同时 global_id 字典序小者赢. 这样每 pair 只出现 1 次.
+    cur = await conn.execute(
+        """SELECT a.global_id AS winner_id, b.global_id AS loser_id,
+                  1 - (a.embedding <=> b.embedding) AS sim,
+                  b.source_sessions AS loser_sessions,
+                  COALESCE(b.canonical_mechanism, '') AS loser_canon,
+                  COALESCE(a.canonical_mechanism, '') AS winner_canon,
+                  b.reuse_count, b.avg_essentialness, b.avg_consistency
+           FROM variables a, variables b
+           WHERE a.global_id <> b.global_id
+             AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
+             AND (a.first_seen_at < b.first_seen_at
+                  OR (a.first_seen_at = b.first_seen_at
+                      AND a.global_id < b.global_id))
+             AND 1 - (a.embedding <=> b.embedding) > 0.85
+           ORDER BY a.first_seen_at ASC, a.global_id ASC"""
+    )
+    pairs = await cur.fetchall()
+
+    merged_count = 0
+    absorbed: set[str] = set()  # 已 merge 的 global_id (winner/loser 都防二次)
+    for row in pairs:
+        (
+            winner_id, loser_id, sim, loser_sessions,
+            loser_canon, winner_canon,
+            l_reuse, l_ess, l_cons,
+        ) = row
+        if loser_id in absorbed or winner_id in absorbed:
+            continue  # 已被合, skip (transitive race)
+
+        # Audit
+        await conn.execute(
+            """INSERT INTO lexicon_merge_audit
+               (merged_into, merged_into_canon, merged_from_canon, sim, evidence_session_ids)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (winner_id, winner_canon[:80], loser_canon[:80], sim, loser_sessions),
+        )
+
+        # 取 winner 当前 fitness + sessions (FOR UPDATE 锁防并发)
+        cur = await conn.execute(
+            """SELECT reuse_count, avg_essentialness, avg_consistency, source_sessions
+               FROM variables WHERE global_id = %s FOR UPDATE""",
+            (winner_id,),
+        )
+        w_row = await cur.fetchone()
+        if w_row is None:
+            # winner 已被并发删 — edge case, skip merge (audit 已写, 不漏 trace)
+            absorbed.add(loser_id)
+            merged_count += 1
+            continue
+        w_reuse, w_ess, w_cons, w_sessions = w_row
+        new_reuse = w_reuse + l_reuse
+        # running-avg (按 reuse_count 加权)
+        new_ess = (w_ess * w_reuse + l_ess * l_reuse) / max(new_reuse, 1)
+        new_cons = (w_cons * w_reuse + l_cons * l_reuse) / max(new_reuse, 1)
+        # union sessions 顺序去重
+        merged_sessions = list(w_sessions)
+        for s in loser_sessions:
+            if s not in merged_sessions:
+                merged_sessions.append(s)
+        await conn.execute(
+            """UPDATE variables SET reuse_count = %s, avg_essentialness = %s,
+                 avg_consistency = %s, source_sessions = %s, last_seen_at = NOW()
+               WHERE global_id = %s""",
+            (new_reuse, new_ess, new_cons, merged_sessions, winner_id),
+        )
+        # 删 loser
+        await conn.execute(
+            "DELETE FROM variables WHERE global_id = %s", (loser_id,)
+        )
+        absorbed.add(loser_id)
+        merged_count += 1
+
+    return merged_count
 
 
 async def _maybe_lazy_dedup(pool) -> int:
