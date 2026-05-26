@@ -7,9 +7,18 @@
 
 Phase 9: autouse `isolated_explain_home` fixture 替老 SESSIONS_DIR fixture
 pattern. 所有 test 透明 isolation 到 tmp_path/.explain (project_id=test_proj).
+
+Phase 17.1: 顶部 load_dotenv() 让 EXPLAIN_TEST_DB_URL 等 .env 配置自动生效,
+test 不依赖 user shell export — subagent / CI / pytest 单独跑都 work.
 """
 
-import pytest
+# Phase 17.1: load .env 文件让 EXPLAIN_TEST_DB_URL 等环境变量在 test 中可用.
+# 必须在 import pytest 之前 — fixture decorator 求值时即读 env.
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import pytest  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
