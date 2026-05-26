@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -182,3 +183,19 @@ class StorageV2:
             for d in sessions_root.iterdir()
             if d.is_dir() and not d.name.startswith(".")
         ]
+
+    # ── delete session (Phase 17.2 Feature C) ──
+    def delete_session(self, sid: str) -> None:
+        """删整个 session_dir (metadata + graph + transcript + chat_state + memory +
+        repl_history 全清).
+
+        Phase 17.2 Feature C: chat /delete + cli delete 共用此底层 API.
+
+        Raises:
+            FileNotFoundError: session dir 不存在 (caller 抓 → 友好 zh msg).
+            OSError: rmtree 权限 / IO 失败 (caller 报错 exit 1, 不静默).
+        """
+        d = self.session_dir(sid)
+        if not d.exists():
+            raise FileNotFoundError(f"session {sid} not found at {d}")
+        shutil.rmtree(d)
