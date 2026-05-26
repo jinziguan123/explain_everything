@@ -546,3 +546,34 @@ def get_lexicon_top_k_for_compress(
                 (k,),
             )
             return cur.fetchall()
+
+
+def _render_lexicon_for_prompt(vars_list: list[dict[str, Any]]) -> str:
+    """Phase 17.1 Task 4.7: 渲 lexicon prior section 进 LLM prompt.
+
+    跟老 lexicon.py:681 同 signature, 兼容 2 种 dict shape:
+    - PG flat (Phase 17.1): row 顶级含 `reuse_count`
+    - JSON nested (legacy): `fitness.reuse_count`
+
+    每行: `- {global_id} 「{name}」(L{level}, reused {N}x): {desc[:80]} — {mech[:60]}`
+    末尾 disclaimer — 让 LLM 知道 lexicon 是 hint 不是 rule (避免被框死).
+    Token budget: 单 var ~80 token, Top-K=20 默认 ≈ 1.7k token.
+    """
+    if not vars_list:
+        return ""
+    lines = ["[已知 abstractions — 仅供参考, 不强制使用]"]
+    for v in vars_list:
+        gid = v.get("global_id", "?")
+        name = v.get("name", "?")
+        level = v.get("abstraction_level", 0)
+        # PG flat 优先, fallback JSON nested
+        reuse = v.get("reuse_count")
+        if reuse is None:
+            fitness = v.get("fitness") or {}
+            reuse = fitness.get("reuse_count", 0)
+        desc = (v.get("description") or "")[:80]
+        mech = (v.get("canonical_mechanism") or "")[:60]
+        lines.append(
+            f"- {gid} 「{name}」(L{level}, reused {reuse}x): {desc} — {mech}"
+        )
+    return "\n".join(lines)

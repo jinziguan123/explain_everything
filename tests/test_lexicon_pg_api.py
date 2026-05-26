@@ -504,3 +504,97 @@ class TestGetTopNVars:
         from explain_engine.persistence.lexicon_pg import get_top_n_vars
 
         assert get_top_n_vars(storage=None, n=10) == []
+
+
+# ── Task 4.7: _render_lexicon_for_prompt ────────────────────────────────
+
+
+class TestRenderLexiconForPrompt:
+    """Phase 17.1 Task 4.7: _render_lexicon_for_prompt 拼 LLM prior markdown."""
+
+    def test_render_empty_returns_empty_string(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _render_lexicon_for_prompt,
+        )
+
+        assert _render_lexicon_for_prompt([]) == ""
+
+    def test_render_pg_flat_dict(self):
+        """PG 风格 dict — 顶级 reuse_count (拍平 fitness)."""
+        from explain_engine.persistence.lexicon_pg import (
+            _render_lexicon_for_prompt,
+        )
+
+        vars_list = [{
+            "global_id": "v_test001",
+            "name": "测试模式",
+            "abstraction_level": 1,
+            "reuse_count": 5,
+            "description": "测试描述" * 5,
+            "canonical_mechanism": "测试机制",
+        }]
+        out = _render_lexicon_for_prompt(vars_list)
+        assert "[已知 abstractions" in out
+        assert "v_test001" in out
+        assert "测试模式" in out
+        assert "L1" in out
+        assert "reused 5x" in out
+        assert "测试机制" in out
+
+    def test_render_legacy_json_nested_fitness(self):
+        """Legacy JSON 风格 — fitness 嵌套 dict (backward compat)."""
+        from explain_engine.persistence.lexicon_pg import (
+            _render_lexicon_for_prompt,
+        )
+
+        vars_list = [{
+            "global_id": "v_legacy01",
+            "name": "老模式",
+            "abstraction_level": 2,
+            "fitness": {"reuse_count": 7},
+            "description": "老描述",
+            "canonical_mechanism": "老机制",
+        }]
+        out = _render_lexicon_for_prompt(vars_list)
+        assert "v_legacy01" in out
+        assert "L2" in out
+        assert "reused 7x" in out
+
+    def test_render_truncates_long_desc_and_mech(self):
+        """desc 截 80 字 + mech 截 60 字 (token budget control)."""
+        from explain_engine.persistence.lexicon_pg import (
+            _render_lexicon_for_prompt,
+        )
+
+        long_desc = "x" * 200
+        long_mech = "y" * 200
+        vars_list = [{
+            "global_id": "v_long",
+            "name": "n",
+            "abstraction_level": 1,
+            "reuse_count": 1,
+            "description": long_desc,
+            "canonical_mechanism": long_mech,
+        }]
+        out = _render_lexicon_for_prompt(vars_list)
+        # 80 + 60 = 140, 加上 prefix 总长应 < 250 (而非含 200+200 = 400)
+        assert "x" * 80 in out
+        assert "x" * 81 not in out
+        assert "y" * 60 in out
+        assert "y" * 61 not in out
+
+    def test_render_multiple_vars_each_on_one_line(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _render_lexicon_for_prompt,
+        )
+
+        vars_list = [
+            {"global_id": f"v_{i:03d}", "name": f"n{i}",
+             "abstraction_level": 1, "reuse_count": i,
+             "description": "d", "canonical_mechanism": "m"}
+            for i in range(3)
+        ]
+        out = _render_lexicon_for_prompt(vars_list)
+        # 1 header + 3 var lines = 4 lines
+        assert len(out.split("\n")) == 4
+        assert "v_000" in out and "v_001" in out and "v_002" in out
