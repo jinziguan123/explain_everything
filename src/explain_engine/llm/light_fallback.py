@@ -37,7 +37,9 @@ async def with_light_fallback(
         return await fn(light_llm)
     except (LLMError, SchemaValidationError) as exc:
         logger.warning(
-            "light_llm 失败, fallback 主 LLM: %s",
+            "light_llm 失败 (model=%s, %s: %s), fallback 主 LLM",
+            getattr(light_llm, "_default_model", "?"),
+            type(exc).__name__,
             exc,
         )
         return await fn(main_llm)
