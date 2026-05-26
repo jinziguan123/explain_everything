@@ -563,6 +563,22 @@ def get_lexicon_top_k_for_compress(
 # ── Wave 5: canonical mechanism cache (Track B) ─────────────────────────
 
 
+def _get_node_edges(node: Any, session: Any) -> list[Any]:
+    """Phase 17.1 Task 5.2: 取 session.state.graph.edges 中 source/target == node.id
+    的 edge list.
+
+    给 compute_canonical_signature 用 (它需要相关 edge 算 signature). 单独函数
+    让 test 容易 mock (不必每 test 都构 session.state.graph.edges dict).
+
+    返 list[RelationEdge], 顺序按 session.state.graph.edges.values() 迭代顺序
+    (signature 内部会 sort, 顺序不重要).
+    """
+    return [
+        e for e in session.state.graph.edges.values()
+        if e.source_node == node.id or e.target_node == node.id
+    ]
+
+
 def compute_canonical_signature(
     node: Any,           # VariableNode
     edges: list[Any],    # list[RelationEdge]

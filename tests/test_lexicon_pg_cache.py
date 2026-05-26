@@ -151,3 +151,52 @@ class TestComputeCanonicalSignature:
         sig1 = compute_canonical_signature(node, only_relevant)
         sig2 = compute_canonical_signature(node, with_irrelevant)
         assert sig1 == sig2, "无关 edge 不应影响 signature"
+
+
+# ── Task 5.2: _get_node_edges helper ───────────────────────────────────────
+
+
+class TestGetNodeEdges:
+    """Phase 17.1 Task 5.2: _get_node_edges 取 session.state.graph.edges 中
+    source/target == node.id 的 edge list. 给 compute_canonical_signature 用,
+    单独函数让 test 容易 mock.
+    """
+
+    def test_get_node_edges_filters_relevant_edges(self):
+        """mock session 含 graph.edges dict (5 edge, 2 个跟 node 关), 调返 2."""
+        from explain_engine.persistence.lexicon_pg import _get_node_edges
+
+        node = _FakeNode(id="n1")
+        # 5 个 edge — 只 2 个跟 n1 有关 (e1 outgoing, e3 incoming)
+        edges = [
+            _FakeEdge("n1", "n2"),           # e1: n1 outgoing  ✓
+            _FakeEdge("n7", "n8"),           # e2: 无关
+            _FakeEdge("n3", "n1"),           # e3: n1 incoming  ✓
+            _FakeEdge("n4", "n5"),           # e4: 无关
+            _FakeEdge("n6", "n9"),           # e5: 无关
+        ]
+        session = _FakeSession(edges=edges)
+        relevant = _get_node_edges(node, session)
+        assert len(relevant) == 2
+        # 全是 source/target == n1
+        for e in relevant:
+            assert e.source_node == "n1" or e.target_node == "n1"
+
+    def test_get_node_edges_empty_when_no_relevant(self):
+        """全无关 edge 返 []."""
+        from explain_engine.persistence.lexicon_pg import _get_node_edges
+
+        node = _FakeNode(id="n1")
+        session = _FakeSession(edges=[
+            _FakeEdge("n7", "n8"),
+            _FakeEdge("n3", "n9"),
+        ])
+        assert _get_node_edges(node, session) == []
+
+    def test_get_node_edges_empty_when_no_edges(self):
+        """session 完全无 edge 时返 []."""
+        from explain_engine.persistence.lexicon_pg import _get_node_edges
+
+        node = _FakeNode(id="n1")
+        session = _FakeSession(edges=[])
+        assert _get_node_edges(node, session) == []
