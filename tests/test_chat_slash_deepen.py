@@ -163,3 +163,28 @@ async def test_deepen_in_persistent_session_rejected(tmp_path, monkeypatch):
 
     # 不该触发 promote
     assert not any(e.type == "slash_deepen_promoted" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_deepen_promote_failure_keeps_ephemeral(tmp_path, monkeypatch):
+    """promote_to_persistent raise → slash_error, ephemeral 状态保留 (无 slash_deepen_promoted)."""
+    from explain_engine.llm.errors import LLMError
+
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage, llm=MagicMock())
+    ephemeral.promote_to_persistent = AsyncMock(
+        side_effect=LLMError("classify failed")
+    )
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(ephemeral, ["为什么"])
+
+    error_events = [e for e in events if e.type == "slash_error"]
+    assert len(error_events) == 1
+    assert "建模失败" in error_events[0].content or "LLMError" in error_events[0].content
+    # 不应 yield slash_deepen_promoted — REPL outer loop 不切 chat var
+    promoted_events = [e for e in events if e.type == "slash_deepen_promoted"]
+    assert len(promoted_events) == 0
