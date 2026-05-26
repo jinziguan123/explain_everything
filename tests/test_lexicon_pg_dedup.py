@@ -390,3 +390,79 @@ class TestRetroactiveDedupAudit:
         assert sim > 0.99
         # evidence = loser 的 source_sessions
         assert evidence_sessions == ["s_audl1", "s_audl2"]
+
+
+# ── Wave 6 Task 6.6: 重置 flush_count + 写 last_retro_at ────────────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestMaybeLazyDedupResetsCountAfterRun:
+    """Phase 17.1 Task 6.6: 真合 (有 sim>0.85 pair) 触发后 lexicon_meta 后置条件.
+
+    - flush_count_since 回 0
+    - last_retro_dedup_at = NOW() (非 NULL)
+    - 下一次 _maybe_lazy_dedup 又从 0 起累 (回到周期开头)
+
+    Task 6.3 test 用 stub _retroactive_dedup_pg 验 reset (无真 merge),
+    本 test 用真合 (Task 6.4 logic) 再 verify 一遍, 确认真合路径也 reset.
+    """
+
+    @pytest.mark.asyncio
+    async def test_resets_count_and_writes_last_retro_at_after_real_merge(self):
+        import numpy as np
+
+        from explain_engine.persistence.lexicon_pg import (
+            _insert_var,
+            _maybe_lazy_dedup,
+            get_async_pool,
+        )
+
+        pool = await get_async_pool()
+        rng = np.random.default_rng(seed=11)
+        winner_emb = rng.random(1024).astype(np.float32)
+        loser_emb = winner_emb + rng.normal(0, 0.001, 1024).astype(np.float32)
+        from datetime import timedelta
+        t_winner = datetime.now(UTC)
+        t_loser = t_winner + timedelta(seconds=1)
+
+        async with pool.connection() as conn:
+            await _bulk_insert_dummies(conn, 108, prefix="v_rst")
+            await _insert_var(conn, _sample_var(
+                global_id="v_rst_win01",
+                first_seen_at=t_winner,
+                last_seen_at=t_winner,
+                embedding=winner_emb.tolist(),
+            ))
+            await _insert_var(conn, _sample_var(
+                global_id="v_rst_los01",
+                first_seen_at=t_loser,
+                last_seen_at=t_loser,
+                embedding=loser_emb.tolist(),
+            ))
+            await conn.execute(
+                "UPDATE lexicon_meta SET flush_count_since = 5 WHERE id = 1"
+            )
+
+        # 真合触发
+        merged = await _maybe_lazy_dedup(pool)
+        assert merged == 1, "应真合 1 pair"
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT flush_count_since, last_retro_dedup_at FROM lexicon_meta WHERE id=1"
+            )
+            row = await cur.fetchone()
+        assert row[0] == 0, "真合后 flush_count_since 应 reset 0"
+        assert row[1] is not None, "真合后 last_retro_dedup_at 应写 NOW()"
+
+        # 进入下一周期 — 库内 N = 108 + 1 (winner 留, loser 删) = 109 还在阈值上,
+        # 但 flush_count_since 已 reset, 下一次入应又开始 increment.
+        merged2 = await _maybe_lazy_dedup(pool)
+        assert merged2 == 0, "下一周期第 1 次应 count<5 → return 0"
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT flush_count_since FROM lexicon_meta WHERE id=1"
+            )
+            row = await cur.fetchone()
+        assert row[0] == 1, f"下一周期 increment 后 flush_count 应 1, got {row[0]}"
