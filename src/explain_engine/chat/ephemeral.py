@@ -208,4 +208,8 @@ class EphemeralChatSession:
         real_chat = ChatSession(meta.session_id, llm=llm)
         real_chat.chat_state = self.chat_state
         real_chat.input_provider = self.input_provider
+        # Phase 18 Wave 3 hotfix (C-1): 持久化 chat_state 让 outer loop 重 build 时能 load 回.
+        # 否则 outer loop 用 metadata.sid 重 build ChatSession → load_chat_state 返 None →
+        # 用户在 ephemeral 设的 /budget 限制 silent 丢失.
+        real_chat.persist()
         return real_chat

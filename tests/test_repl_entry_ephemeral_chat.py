@@ -224,3 +224,97 @@ async def test_repl_entry_deepen_event_switches_chat_var(
 
     # Restore (defensive — monkeypatch 会 auto restore, 这里 noop)
     _ = real_chat_session_cls
+
+
+@pytest.mark.asyncio
+async def test_repl_entry_deepen_promoted_metadata_missing_keeps_ephemeral(
+    tmp_path, monkeypatch
+):
+    """Phase 18 Wave 3 review I-2: slash_deepen_promoted event metadata=None / 缺 sid
+    → outer loop 打 red error + 保留 ephemeral (chat 仍是 EphemeralChatSession),
+    不切到 ChatSession (防异常 metadata 让 chat var 指向坏对象).
+
+    现 outer loop (repl_entry.py:163-170) 有 try/except metadata["sid"] 防御, 加 test
+    防 silent regression.
+    """
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_repl_metadata")
+
+    from explain_engine.chat import repl_entry
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.session import ChatEvent
+
+    fake_llm = MagicMock()
+    monkeypatch.setattr(repl_entry, "make_llm_client", lambda: fake_llm)
+
+    # input 序列: /deepen → /quit
+    inputs = iter(["/deepen 为什么", "/quit"])
+
+    def make_session_stub(_log_handler):
+        return None
+
+    async def read_input_stub(_pt_session, prompt_text=""):
+        try:
+            return next(inputs)
+        except StopIteration as exc:
+            raise EOFError from exc
+
+    monkeypatch.setattr(repl_entry, "make_session", make_session_stub)
+    monkeypatch.setattr(repl_entry, "read_input", read_input_stub)
+
+    async def stub_init_lexicon():
+        return False
+
+    monkeypatch.setattr(
+        "explain_engine.engines.lexicon.init_lexicon_backend", stub_init_lexicon
+    )
+
+    # mock dispatch_slash: /deepen → slash_deepen_promoted event metadata=None
+    # (模拟 handler bug 或老 event 漏字段). /quit → slash_quit.
+    async def fake_dispatch_slash(chat, text):
+        if text.startswith("/deepen"):
+            return [ChatEvent(
+                type="slash_deepen_promoted",
+                content="模拟 promote 完 (但 metadata 丢)",
+                metadata=None,  # ← 关键: metadata 缺失
+            )]
+        if text.startswith("/quit"):
+            return [ChatEvent(type="slash_quit", content="bye")]
+        return []
+
+    monkeypatch.setattr(
+        "explain_engine.chat.slash_commands.dispatch_slash", fake_dispatch_slash
+    )
+
+    # mock ChatSession 计数它是否被建 — 若被建说明防御失效
+    chat_session_calls = []
+
+    class StubChatSession:
+        def __init__(self, sid, llm=None):
+            chat_session_calls.append((sid, llm))
+            self.sid = sid
+            self.llm = llm
+            self.input_provider = None
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(repl_entry, "ChatSession", StubChatSession)
+
+    # 捕 console.print 输出验 red error 文案
+    printed_messages = []
+
+    orig_enter = repl_entry.enter_repl_async
+
+    # 没必要 hook Console 全, 用 Rich 默 stdout 也 OK; 直接验 chat var 未切.
+    # 跑后 chat 应仍是 EphemeralChatSession (从 outer loop 最后 if 判断
+    # "isinstance(chat, ChatSession)" 不进 aclose 分支推断).
+
+    await orig_enter()
+
+    # 关键 assert: ChatSession 未被建 — outer loop 防御 metadata missing 保留 ephemeral
+    assert len(chat_session_calls) == 0, (
+        f"metadata=None 时 ChatSession 不该被建, 但被建了: {chat_session_calls}"
+    )
+    # 防御性: printed_messages 现没 hook, 仅留作占位 (主断面已覆盖)
+    _ = (EphemeralChatSession, printed_messages)

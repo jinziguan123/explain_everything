@@ -4,11 +4,14 @@
 1. Build EphemeralChatSession + input_provider (注入 prompt_toolkit read_input)
 2. while loop 读 input:
    - slash → dispatch_slash (ephemeral 时大多失败 — Wave 3/4 修)
-   - 自然语言 + ephemeral → promote_to_persistent → real ChatSession (切模式)
+   - 自然语言 + ephemeral → handle_user_input(text, llm) (Phase 18: system-1 LLM chat,
+     不再 auto-promote). user 显式 /deepen [Q] → slash_deepen_promoted event →
+     outer loop 用 metadata.sid 切到 ChatSession.
    - 自然语言 + real chat → handle_user_input (Phase 9 query_loop)
 3. Quit / EOF / Ctrl-C → 退出, restore log handler
 
 设计: docs/plans/2026-05-18-phase11-repl-unification-design.md §3.1
+     + docs/plans/2026-05-26-phase-18-deepen-design.md
 """
 
 from __future__ import annotations
@@ -29,7 +32,8 @@ from explain_engine.persistence.storage_v2 import StorageV2
 
 
 async def enter_repl_async() -> None:
-    """Ephemeral REPL outer loop. 用户进入即是 ephemeral, 首句 promote.
+    """Ephemeral REPL outer loop. 用户进入即是 ephemeral. Phase 18 起: 自然语言走
+    system-1 chat (handle_user_input), 显式 /deepen 触发 promote 到 ChatSession.
 
     chat 模式期间 swap root logger 到 BufferedLogHandler (ctrl+o popup 看 log,
     避撞 prompt_toolkit prompt). 退出时 restore 原 handler.

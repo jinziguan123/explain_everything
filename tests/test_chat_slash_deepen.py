@@ -1,6 +1,6 @@
 """/deepen handler — Phase 18 Task 9+."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -189,3 +189,72 @@ async def test_deepen_promote_failure_keeps_ephemeral(tmp_path, monkeypatch):
     # 不应 yield slash_deepen_promoted — REPL outer loop 不切 chat var
     promoted_events = [e for e in events if e.type == "slash_deepen_promoted"]
     assert len(promoted_events) == 0
+
+
+@pytest.mark.asyncio
+async def test_deepen_preserves_ephemeral_chat_state_budget(
+    tmp_path, monkeypatch
+):
+    """Phase 18 Wave 3 hotfix C-1 regression: ephemeral 设 /budget → /deepen 后,
+    outer loop 用 metadata.sid 重 build ChatSession 时仍能 load 回 budget 限制.
+
+    Bug 复现: promote_to_persistent 内 build real_chat + 拷 chat_state 后未 persist,
+    outer loop ChatSession(sid) → load_chat_state 返 None → 默 ChatStateDict() 全 0
+    → 用户设的 /budget 5 50 silent 丢失.
+
+    Fix: real_chat.persist() 落盘 chat_state.json.
+    """
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_c1_regression")
+
+    from explain_engine.chat.session import ChatSession, ChatStateDict
+    from explain_engine.schema.nodes import VariableNode
+
+    storage = StorageV2()
+    llm = MagicMock(name="injected_llm")
+
+    # ephemeral: 用户设 /budget 5 50 → 写到 chat_state.budget_per_turn_limit=5
+    # / budget_per_session_limit=50 (按 ChatStateDict 真字段名)
+    ephemeral = EphemeralChatSession(storage=storage, llm=llm)
+    ephemeral.chat_state = ChatStateDict(
+        budget_per_turn_limit=5,
+        budget_per_session_limit=50,
+    )
+
+    # mock bootstrap_phenomena 避真 LLM 调 (8 个 fake VariableNode 满足 min_count)
+    fake_phenomena = [
+        VariableNode(
+            id=f"p_{i + 1:03d}",
+            name=f"p{i}",
+            description="d",
+            abstraction_level=0,
+            confidence=0.7,
+            epistemic="observation",
+        )
+        for i in range(8)
+    ]
+
+    # mock make_light_llm_client 避读 env (test 无 LLM_LIGHT_* / LLM_*).
+    # 注: promote 内 make_light_llm_client 只是建 client, 实际不 call (bootstrap
+    # 已被 patch). 返 MagicMock 即可.
+    with (
+        patch(
+            "explain_engine.chat.ephemeral.bootstrap_phenomena",
+            return_value=fake_phenomena,
+        ),
+        patch(
+            "explain_engine.chat.ephemeral.make_light_llm_client",
+            return_value=MagicMock(name="light_llm"),
+        ),
+    ):
+        real_chat = await ephemeral.promote_to_persistent("question", llm)
+
+    # 断 1: real_chat 自身 chat_state OK (in-memory 拷)
+    assert real_chat.chat_state.budget_per_turn_limit == 5
+    assert real_chat.chat_state.budget_per_session_limit == 50
+
+    # 断 2 (关键修复点): outer loop 模拟 — 用 sid 重 build ChatSession 后仍保留.
+    # Bug 时这里两个 assert 都是 0 (silent loss).
+    rebuilt = ChatSession(real_chat.sid, llm=llm)
+    assert rebuilt.chat_state.budget_per_turn_limit == 5
+    assert rebuilt.chat_state.budget_per_session_limit == 50
