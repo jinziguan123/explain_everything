@@ -138,7 +138,12 @@ class TestCompress:
             model="t", usage={"input_tokens": 0, "output_tokens": 0},
         )
         fake_llm.chat.side_effect = [canon_resp]
+        # Phase 17.2 final review fix: cli._run_compress 现 unconditionally 调
+        # make_light_llm_client() 给 flush_to_lexicon 用. 同 patch 成 fake_llm,
+        # 触发 with_light_fallback 内 "light is main" 短路 (跳 light call, 仅
+        # 1 次 main fake_llm.chat 给 canonical).
         with patch("explain_engine.cli.make_llm_client", return_value=fake_llm), \
+             patch("explain_engine.cli.make_light_llm_client", return_value=fake_llm), \
              patch("rich.prompt.Prompt.ask", side_effect=["k"]):
             result = runner.invoke(app, ["compress", sid])
         assert result.exit_code == 0

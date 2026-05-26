@@ -251,6 +251,9 @@ async def _run_compress(session_id: str) -> None:
         raise typer.Exit(4)
 
     llm = make_llm_client()
+    # Phase 17.2 Task 7 (final review fix): light_llm 给 flush_to_lexicon 走 cheap
+    # model 生 canonical_mechanism. LLM_LIGHT_* 未配则 fallback 主 LLM.
+    light_llm = make_light_llm_client()
 
     if stage == "bootstrap_pending":
         console.print("[INFO] 调 LLM 生成 abstract 候选...")
@@ -308,7 +311,9 @@ async def _run_compress(session_id: str) -> None:
     from explain_engine.engines.lexicon import flush_to_lexicon
     from explain_engine.persistence.storage_v2 import StorageV2
     try:
-        n = await flush_to_lexicon(session, StorageV2(), llm=llm)
+        n = await flush_to_lexicon(
+            session, StorageV2(), llm=llm, light_llm=light_llm,
+        )
         if n > 0:
             console.print(f"[INFO] {n} var 写入 lexicon")
     except Exception as exc:
@@ -1040,15 +1045,20 @@ def chat(
     """
     del no_input_check  # silence ARG001
     llm = make_llm_client()
+    # Phase 17.2 Task 7 (final review fix): light_llm 给 chat 退出 flush 用
+    # (chat 期可能产新 var, 退出 flush 时走 cheap model 生 canonical_mechanism).
+    light_llm = make_light_llm_client()
     asyncio.run(_run_chat_repl_async(
         initial_sid=session_id,
         llm=llm,
+        light_llm=light_llm,
     ))
 
 
 async def _run_chat_repl_async(
     initial_sid: str,
     llm: "LLMClient | None",
+    light_llm: "LLMClient | None" = None,
 ) -> None:
     """REPL 主循环 (Wave 2 抽出 + 2026-05-18 prompt_toolkit 升级).
 
@@ -1210,7 +1220,8 @@ async def _run_chat_repl_async(
             from explain_engine.engines.lexicon import flush_to_lexicon
             from explain_engine.persistence.storage_v2 import StorageV2
             n = await flush_to_lexicon(
-                chat_session._session, StorageV2(), llm=llm,
+                chat_session._session, StorageV2(),
+                llm=llm, light_llm=light_llm,
             )
             if n > 0:
                 console.print(f"[dim]{n} var 写入 lexicon[/dim]")

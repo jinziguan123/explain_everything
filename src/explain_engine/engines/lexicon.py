@@ -323,6 +323,7 @@ async def flush_to_lexicon(
     storage: StorageV2,
     llm: LLMClient | None = None,
     llm_canonical_top_k: int = 3,
+    light_llm: LLMClient | None = None,
 ) -> int:
     """Promote 高 fitness var 进 lexicon. 返 promoted count.
 
@@ -339,6 +340,10 @@ async def flush_to_lexicon(
 
     `llm_canonical_top_k=0` → 全 fallback (lazy mode).
     `llm_canonical_top_k >= N` → 全 LLM (老 Wave 2 行为).
+
+    Phase 17.2 Task 7 (final review fix): optional light_llm — 不 None 时透传给
+    _build_canonical_mechanism, 走 with_light_fallback (cheap model 优先, 失败
+    回退主 llm). None (默) → 行为跟现一致, 零回归.
     """
     path = storage.knowledge_dir() / "variables.json"
     lexicon = _load_lexicon(path)
@@ -368,8 +373,12 @@ async def flush_to_lexicon(
     for i, node in enumerate(candidates):
         # Top-K 用 真 llm; 其余传 None 走 edge fallback
         effective_llm = llm if i < llm_canonical_top_k else None
+        # Phase 17.2 Task 7 (final review fix): light_llm 仅在用真 llm 的 top-K
+        # 名额上下文里生效 (effective_llm 非 None). 其余 idx 走 edge fallback,
+        # light_llm 一并跟 effective_llm=None, 不引出额外 LLM call.
+        effective_light = light_llm if effective_llm is not None else None
         canonical_mech = await _build_canonical_mechanism(
-            node, session, effective_llm,
+            node, session, effective_llm, light_llm=effective_light,
         )
         canonicals.append(canonical_mech)
 
@@ -780,15 +789,21 @@ async def flush_to_lexicon(
     session: Session, storage: StorageV2,
     llm: LLMClient | None = None,
     llm_canonical_top_k: int = 3,
+    light_llm: LLMClient | None = None,
 ) -> int:
-    """Wave 9 dispatcher: PG 可达走 lexicon_pg, 断走 JSON fallback."""
+    """Wave 9 dispatcher: PG 可达走 lexicon_pg, 断走 JSON fallback.
+
+    Phase 17.2 Task 7 (final review fix): light_llm 透传给 PG / JSON impl.
+    """
     if _PG_BACKEND_ACTIVE:
         from explain_engine.persistence.lexicon_pg import (
             flush_to_lexicon as pg_impl,
         )
-        return await pg_impl(session, storage, llm, llm_canonical_top_k)
+        return await pg_impl(
+            session, storage, llm, llm_canonical_top_k, light_llm=light_llm,
+        )
     return await _flush_to_lexicon_json_impl(
-        session, storage, llm, llm_canonical_top_k,
+        session, storage, llm, llm_canonical_top_k, light_llm=light_llm,
     )
 
 

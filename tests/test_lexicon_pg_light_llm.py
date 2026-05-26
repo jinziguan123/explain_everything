@@ -130,3 +130,104 @@ class TestPgCanonicalLightLlm:
 
         assert result == "Y canon"
         assert called == [None]
+
+
+# ── e2e: flush_to_lexicon (PG impl) → _build_canonical_mechanism 透传 light_llm ──
+# Phase 17.2 final review fix (I-2): 跟 JSON 版 e2e 对称 (见
+# test_lexicon_light_llm.py). PG impl 之前 _build_canonical_mechanism 调点不传
+# light_llm → flush_to_lexicon 即便接 light_llm 也透不下去. 本 e2e 验从
+# flush_to_lexicon(light_llm=X) 端到端透传到 _build_canonical_mechanism(light_llm=X).
+
+
+class _PromotableNode:
+    """带 activation 的 _FakeNode 子集 (_should_promote 需 L1/L2 + activation)."""
+    def __init__(self, id: str = "p1", name: str = "P"):
+        self.id = id
+        self.name = name
+        self.description = "d"
+        self.abstraction_level = 2  # L2 → _should_promote
+        self.epistemic = "insight"
+        self.activation = 0.9  # high activation
+        self.stability = 0.5
+        self.lifecycle_state = "active"
+        self.confidence = 0.8
+
+
+class _PromotableGraph:
+    def __init__(self):
+        self.nodes = {"p1": _PromotableNode()}
+        self.edges = {}
+
+
+class _PromotableState:
+    def __init__(self):
+        self.graph = _PromotableGraph()
+
+
+class _PromotableSession:
+    def __init__(self):
+        self.state = _PromotableState()
+        self.meta = _FakeMeta()
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestPgFlushToLexiconE2eLight:
+    """Phase 17.2 final review fix: flush_to_lexicon (PG) 端到端透传 light_llm."""
+
+    @pytest.mark.asyncio
+    async def test_flush_to_lexicon_passes_light_llm(self):
+        """e2e: flush_to_lexicon(light_llm=X) → _build_canonical_mechanism(light_llm=X)."""
+        import os
+
+        from explain_engine.persistence import lexicon_pg
+        from explain_engine.persistence.lexicon_pg import flush_to_lexicon
+
+        # 跳 BGE-M3 batch embed (test mode)
+        os.environ["EXPLAIN_EMBEDDING_DISABLED"] = "1"
+
+        session = _PromotableSession()
+        light = AsyncMock(name="light_llm_sentinel")
+        main = AsyncMock(name="main_llm_sentinel")
+
+        captured = []
+
+        async def fake_build(node, sess, llm, light_llm=None):
+            captured.append({"node_id": node.id, "llm": llm, "light_llm": light_llm})
+            return f"stub canonical {node.id}"
+
+        with patch.object(lexicon_pg, "_build_canonical_mechanism", new=fake_build):
+            promoted = await flush_to_lexicon(
+                session, storage=None, llm=main, light_llm=light,
+            )
+
+        assert promoted == 1
+        assert len(captured) == 1
+        call = captured[0]
+        assert call["node_id"] == "p1"
+        assert call["llm"] is main
+        assert call["light_llm"] is light
+
+    @pytest.mark.asyncio
+    async def test_flush_to_lexicon_light_llm_none_default(self):
+        """e2e: 不传 light_llm → _build_canonical_mechanism 收 light_llm=None (零回归)."""
+        import os
+
+        from explain_engine.persistence import lexicon_pg
+        from explain_engine.persistence.lexicon_pg import flush_to_lexicon
+
+        os.environ["EXPLAIN_EMBEDDING_DISABLED"] = "1"
+
+        session = _PromotableSession()
+        main = AsyncMock(name="main_llm")
+
+        captured = []
+
+        async def fake_build(node, sess, llm, light_llm=None):
+            captured.append(light_llm)
+            return "stub"
+
+        with patch.object(lexicon_pg, "_build_canonical_mechanism", new=fake_build):
+            await flush_to_lexicon(session, storage=None, llm=main)
+
+        assert captured == [None]

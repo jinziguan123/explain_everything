@@ -1297,9 +1297,20 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
     # persist sidecar + flush lexicon (best-effort — lexicon 失败不该 fail compress)
     chat.persist()
     n = 0
+    # Phase 17.2 Task 7 (final review fix): light_llm 给 flush_to_lexicon 走 cheap
+    # model 生 canonical_mechanism. lazy 调 make_light_llm_client (跟 ephemeral.py
+    # 同 pattern); LLM_LIGHT_* 未配则 fallback 主 LLM.
+    from explain_engine.config import make_light_llm_client
+    try:
+        light_llm = make_light_llm_client()
+    except Exception:
+        light_llm = None
     try:
         with _console.status(STATUS_LEXICON_FLUSH):
-            n = await flush_to_lexicon(chat._session, chat.storage, llm=chat.llm)
+            n = await flush_to_lexicon(
+                chat._session, chat.storage,
+                llm=chat.llm, light_llm=light_llm,
+            )
     except Exception:
         n = 0
 

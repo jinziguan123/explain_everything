@@ -3,6 +3,9 @@
 验 _build_canonical_mechanism 接受 optional light_llm 参数 + 通过
 with_light_fallback 走 cheap model. light=None 时跟现行为 100% 一致
 (零回归).
+
+Phase 17.2 final review fix: 加 e2e test 验 flush_to_lexicon →
+_build_canonical_mechanism 端到端透传 light_llm (避免之前 dead code 风险).
 """
 
 from unittest.mock import AsyncMock
@@ -113,3 +116,91 @@ async def test_build_canonical_light_none_zero_regression_fallback():
 
     # edge fallback: "通常 cause 风险规避"
     assert "风险规避" in mech
+
+
+# ── e2e: flush_to_lexicon → _build_canonical_mechanism 透传 light_llm ──
+# Phase 17.2 final review fix (I-2):
+# 之前 _build_canonical_mechanism 已接 light_llm 参数, 但 flush_to_lexicon
+# 不接 light_llm → caller 没法 wire → 整 lexicon light_llm 在 production 是 dead
+# code. 本 e2e 验从 flush_to_lexicon(light_llm=X) 端到端透传到
+# _build_canonical_mechanism(light_llm=X).
+
+
+def _make_session_with_promotable_var() -> Session:
+    """建带 1 个 L2 (active high activation) 的 session — flush_to_lexicon 会 promote."""
+    g = ExplanationGraph(root_question="why?")
+    g.add_node(VariableNode(
+        id="d_001", name="长期不确定性 e2e", description="root driver",
+        abstraction_level=2, confidence=0.8, epistemic="insight",
+        activation=0.9, lifecycle_state="active",
+    ))
+    state = CognitiveState(graph=g, budget_remaining=10, root_question="why?")
+    meta = SessionMeta.new(question="why?")
+    meta.session_id = "s_e2e_light_001"
+    return Session(meta=meta, state=state)
+
+
+@pytest.mark.asyncio
+async def test_flush_to_lexicon_passes_light_llm_to_build_canonical(
+    monkeypatch, tmp_path,
+):
+    """e2e: flush_to_lexicon(light_llm=X) → _build_canonical_mechanism(light_llm=X)."""
+    from explain_engine.engines import lexicon as lex_module
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    session = _make_session_with_promotable_var()
+
+    light = AsyncMock(name="light_llm_sentinel")
+    main = AsyncMock(name="main_llm_sentinel")
+
+    captured = []
+
+    async def spy_build(node, sess, llm, light_llm=None):
+        captured.append({"node_id": node.id, "llm": llm, "light_llm": light_llm})
+        return f"stub canonical {node.id}"
+
+    monkeypatch.setattr(lex_module, "_build_canonical_mechanism", spy_build)
+    # 隔离 lexicon 写入到 tmp dir
+    monkeypatch.setenv("EXPLAIN_STORAGE_ROOT", str(tmp_path))
+    # 跳 BGE-M3 batch embed (test mode)
+    monkeypatch.setenv("EXPLAIN_EMBEDDING_DISABLED", "1")
+
+    # 强制走 JSON impl (避免 PG 干扰)
+    monkeypatch.setattr(lex_module, "_PG_BACKEND_ACTIVE", False)
+
+    promoted = await lex_module.flush_to_lexicon(
+        session, StorageV2(), llm=main, light_llm=light,
+    )
+
+    assert promoted == 1
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["node_id"] == "d_001"
+    assert call["llm"] is main
+    # 关键断言: light_llm 端到端透传
+    assert call["light_llm"] is light
+
+
+@pytest.mark.asyncio
+async def test_flush_to_lexicon_light_llm_none_default(monkeypatch, tmp_path):
+    """e2e: 不传 light_llm (默) → _build_canonical_mechanism 收 light_llm=None (零回归)."""
+    from explain_engine.engines import lexicon as lex_module
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    session = _make_session_with_promotable_var()
+    main = AsyncMock(name="main_llm")
+
+    captured = []
+
+    async def spy_build(node, sess, llm, light_llm=None):
+        captured.append(light_llm)
+        return "stub"
+
+    monkeypatch.setattr(lex_module, "_build_canonical_mechanism", spy_build)
+    monkeypatch.setenv("EXPLAIN_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_EMBEDDING_DISABLED", "1")
+    monkeypatch.setattr(lex_module, "_PG_BACKEND_ACTIVE", False)
+
+    await lex_module.flush_to_lexicon(session, StorageV2(), llm=main)
+
+    assert captured == [None]

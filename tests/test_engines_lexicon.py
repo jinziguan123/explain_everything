@@ -373,7 +373,10 @@ class TestFlushToLexicon:
         # (不 forward real, 因 real 需真 LLM; spy 仅捕 + 返 stub string)
         captured_llms = []
 
-        async def spy_build(node, sess, llm):
+        async def spy_build(node, sess, llm, light_llm=None):
+            # Phase 17.2 final review fix: light_llm kwarg 由 flush_to_lexicon
+            # 透传, spy 需接 kwarg 避免 TypeError. 本 test 不 assert light_llm,
+            # 仅验 top-K llm 路由跟现行为一致 (零回归).
             captured_llms.append((node.id, llm))
             return f"stub mech for {node.id}"
 
@@ -422,7 +425,7 @@ class TestFlushToLexicon:
 
         captured = []
 
-        async def spy(node, sess, llm):
+        async def spy(node, sess, llm, light_llm=None):
             captured.append((node.id, llm))
             return f"stub for {node.id}"
 

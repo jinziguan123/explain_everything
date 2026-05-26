@@ -458,6 +458,7 @@ async def flush_to_lexicon(
     storage: Any,  # 保 signature, Wave 4 PG impl 不再读 storage path
     llm: Any | None = None,
     llm_canonical_top_k: int = 3,
+    light_llm: Any | None = None,
 ) -> int:
     """Phase 17.1 Wave 4: PG impl, 替老 lexicon.flush_to_lexicon JSON 行为.
 
@@ -477,6 +478,9 @@ async def flush_to_lexicon(
 
     NOTE: signature 跟老 lexicon.flush_to_lexicon 完全一致 (session, storage,
     llm, llm_canonical_top_k), chat / cli 调点不变. storage 参数保留兼容 (未使用).
+
+    Phase 17.2 Task 8 (final review fix): optional light_llm 透传给
+    _build_canonical_mechanism (cache miss 路径). light=None (默) → 行为跟现一致.
     """
     pool = await get_async_pool()
     candidates = [
@@ -489,7 +493,12 @@ async def flush_to_lexicon(
     canonicals: list[str] = []
     for i, node in enumerate(candidates):
         effective_llm = llm if i < llm_canonical_top_k else None
-        canon = await _build_canonical_mechanism(node, session, effective_llm)
+        # Phase 17.2 Task 8 (final review fix): light_llm 仅在用真 llm 的 top-K
+        # 名额上下文生效; edge fallback 不需要 light_llm.
+        effective_light = light_llm if effective_llm is not None else None
+        canon = await _build_canonical_mechanism(
+            node, session, effective_llm, light_llm=effective_light,
+        )
         canonicals.append(canon)
 
     embeddings = await _batch_embed(canonicals)

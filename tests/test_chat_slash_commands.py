@@ -652,7 +652,7 @@ class TestSlashCompress:
             called["review"] += 1
             # accept all 不动 candidates
 
-        async def fake_flush(session, storage, llm=None):
+        async def fake_flush(session, storage, llm=None, light_llm=None):
             called["flush"] += 1
             return 2  # 2 var written
 
@@ -707,7 +707,7 @@ class TestSlashCompress:
                 "score_all 未在 review_insights 前跑 — gain 会全 0"
             )
 
-        async def fake_flush(session, storage, llm=None):
+        async def fake_flush(session, storage, llm=None, light_llm=None):
             called["flush"] += 1
             return 0
 
@@ -790,7 +790,7 @@ class TestSlashCompress:
         async def fake_review(state, input_provider, console=None):
             pass
 
-        async def fake_flush(session, storage, llm=None):
+        async def fake_flush(session, storage, llm=None, light_llm=None):
             return 0
 
         monkeypatch.setattr(
@@ -1900,7 +1900,7 @@ class TestSlashStageGateCompress:
         async def fake_review(state, input_provider, console=None):
             pass
 
-        async def fake_flush(session, storage, llm=None):
+        async def fake_flush(session, storage, llm=None, light_llm=None):
             return 0
 
         monkeypatch.setattr(
@@ -1946,7 +1946,7 @@ class TestSlashStageGateCompress:
         async def fake_review(state, input_provider, console=None):
             pass
 
-        async def fake_flush(session, storage, llm=None):
+        async def fake_flush(session, storage, llm=None, light_llm=None):
             return 0
 
         monkeypatch.setattr(
@@ -1986,7 +1986,7 @@ class TestSlashStageGateCompress:
         async def fake_review(state, input_provider, console=None):
             pass
 
-        async def fake_flush(session, storage, llm=None):
+        async def fake_flush(session, storage, llm=None, light_llm=None):
             return 0
 
         monkeypatch.setattr(
@@ -2073,7 +2073,7 @@ class TestCompressInsightPendingShortCircuit:
         async def fake_review(state, input_provider, console=None):
             calls["review"] += 1
 
-        async def fake_flush(session, storage, llm=None):
+        async def fake_flush(session, storage, llm=None, light_llm=None):
             calls["flush"] += 1
             return 0
 
@@ -2119,7 +2119,7 @@ class TestCompressInsightPendingShortCircuit:
         async def fake_review(state, input_provider, console=None):
             pass
 
-        async def fake_flush(session, storage, llm=None):
+        async def fake_flush(session, storage, llm=None, light_llm=None):
             return 0
 
         monkeypatch.setattr(
