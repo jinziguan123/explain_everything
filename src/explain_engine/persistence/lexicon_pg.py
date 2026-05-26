@@ -260,3 +260,20 @@ async def _merge_into_existing(
            WHERE global_id = %s""",
         (new_count, new_ess, new_cons, sessions, winner_id),
     )
+
+
+# ── Wave 4: public API 替老 lexicon.py JSON ─────────────────────────────
+
+
+def _should_promote(node: Any) -> bool:
+    """Phase 17.1 Task 4.1: 直接复用老 lexicon._should_promote 语义.
+
+    - skip L0 (observations 不进 lexicon)
+    - skip non-active (stale/decayed)
+    - skip activation < 0.5 (conservative threshold)
+    """
+    return (
+        node.abstraction_level >= 1
+        and node.lifecycle_state == "active"
+        and node.activation >= 0.5
+    )
