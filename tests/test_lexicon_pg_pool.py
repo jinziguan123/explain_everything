@@ -279,3 +279,51 @@ class TestFindVarById:
         async with pool.connection() as conn:
             row = await _find_var_by_id(conn, "v_nonexistent")
         assert row is None
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestUpdateVarFitness:
+    """Phase 17.1 Task 2.6: _update_var_fitness UPDATE + trigger 自动 updated_at."""
+
+    @pytest.mark.asyncio
+    async def test_update_var_fitness_changes_fields_and_bumps_updated_at(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _find_var_by_id,
+            _insert_var,
+            _update_var_fitness,
+            get_async_pool,
+        )
+
+        var = _sample_var(global_id="v_update01")
+        pool = await get_async_pool()
+        # 分 2 connection: INSERT 跑完 commit, 让 UPDATE 拿新 txn timestamp
+        # (PG NOW() = transaction_timestamp(), 同 txn 内返同值, 必须 commit
+        # 才能让 trigger 看到新 NOW())
+        async with pool.connection() as conn1:
+            await _insert_var(conn1, var)
+        async with pool.connection() as conn2:
+            before = await _find_var_by_id(conn2, "v_update01")
+            assert before["reuse_count"] == 1
+            assert before["created_at"] == before["updated_at"]
+
+        async with pool.connection() as conn3:
+            new_last_seen = datetime.now(UTC)
+            await _update_var_fitness(
+                conn3,
+                "v_update01",
+                reuse_count=5,
+                avg_essentialness=0.8,
+                avg_consistency=0.9,
+                last_seen_at=new_last_seen,
+            )
+        async with pool.connection() as conn4:
+            after = await _find_var_by_id(conn4, "v_update01")
+
+        assert after["reuse_count"] == 5
+        assert abs(after["avg_essentialness"] - 0.8) < 1e-4
+        assert abs(after["avg_consistency"] - 0.9) < 1e-4
+        # trigger 自动 bump updated_at
+        assert after["updated_at"] > before["updated_at"]
+        # created_at 不变
+        assert after["created_at"] == before["created_at"]

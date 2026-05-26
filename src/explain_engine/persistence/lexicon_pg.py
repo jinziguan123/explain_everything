@@ -14,6 +14,7 @@ Internal (Wave 2):
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -120,3 +121,26 @@ async def _find_var_by_id(conn, global_id: str) -> dict[str, Any] | None:
             "SELECT * FROM variables WHERE global_id = %s", (global_id,)
         )
         return await cur.fetchone()
+
+
+async def _update_var_fitness(
+    conn,
+    global_id: str,
+    reuse_count: int,
+    avg_essentialness: float,
+    avg_consistency: float,
+    last_seen_at: datetime,
+) -> None:
+    """UPDATE fitness 4 字段 (reuse_count / avg_ess / avg_cons / last_seen_at).
+
+    updated_at 由 variables_set_updated_at trigger 自动刷 NOW().
+    """
+    await conn.execute(
+        """UPDATE variables SET
+            reuse_count = %s,
+            avg_essentialness = %s,
+            avg_consistency = %s,
+            last_seen_at = %s
+           WHERE global_id = %s""",
+        (reuse_count, avg_essentialness, avg_consistency, last_seen_at, global_id),
+    )
