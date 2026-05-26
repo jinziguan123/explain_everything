@@ -295,6 +295,7 @@ async def _build_canonical_mechanism(
     node: Any,  # VariableNode (有 .id .name .abstraction_level .description)
     session: Any,  # Session (有 .state.graph.{nodes, edges})
     llm: Any | None,  # LLMClient | None
+    light_llm: Any | None = None,  # Phase 17.2 Task 8: optional cheap model
 ) -> str:
     """Phase 17.1 Task 4.2: 复用老 lexicon._build_canonical_mechanism (无 cache).
 
@@ -304,6 +305,10 @@ async def _build_canonical_mechanism(
 
     Wave 5 会在前面套 canonical_signature cache 层 (cache hit 直返, miss 才调本函数),
     Wave 4 先 ship 无 cache 版本, 保持跟老 lexicon.py 行为一致.
+
+    Phase 17.2 Task 8: optional light_llm — 不 None 时通过 with_light_fallback
+    先走 cheap model, 失败自动 fallback 主 llm. None (默) → 行为跟现一致 (主 llm
+    直接调), 零回归.
     """
     from explain_engine.llm.client import Message
     from explain_engine.llm.errors import LLMError
@@ -342,11 +347,19 @@ async def _build_canonical_mechanism(
         "请用 1 句中文 (<60 字) 总结它的 canonical mechanism, "
         "格式: '通常 cause X; 由 Y cause'. 仅输 1 行, 无解释."
     )
-    try:
-        response = await llm.chat(
+
+    async def _do_call(active_llm: Any):
+        return await active_llm.chat(
             messages=[Message(role="user", content=prompt)],
             schema=None,
         )
+
+    try:
+        if light_llm is not None:
+            from explain_engine.llm.light_fallback import with_light_fallback
+            response = await with_light_fallback(light_llm, llm, _do_call)
+        else:
+            response = await _do_call(llm)
         text = (response.text or "").strip()
         if not text:
             return _fallback()
@@ -613,6 +626,7 @@ async def _build_canonical_mechanism_cached(
     session: Any,
     llm: Any | None,
     pool: Any,  # AsyncConnectionPool
+    light_llm: Any | None = None,
 ) -> str:
     """Phase 17.1 Task 5.3: cache-lookup-first wrapper.
 
@@ -626,6 +640,10 @@ async def _build_canonical_mechanism_cached(
     Wave 5 暂只加本函数, 不改 flush_to_lexicon 调点 (Wave 6/7 接入). 这样 cache
     层完全独立, 测试容易. CANONICAL_MODEL_VERSION 是 module-level 常量, monkeypatch
     改值后下次 globals lookup 自动取新 (test 用此机制验 model_ver bump invalidate).
+
+    Phase 17.2 Task 8: optional light_llm 透传给 _build_canonical_mechanism (cache miss
+    时该函数通过 with_light_fallback 走 cheap model + 主 llm fallback). light=None 默
+    跟现行为 100% 一致 (零回归).
     """
     edges = _get_node_edges(node, session)
     signature = compute_canonical_signature(node, edges)
@@ -639,8 +657,8 @@ async def _build_canonical_mechanism_cached(
         row = await cur.fetchone()
     if row:
         return row[0]
-    # Cache miss → 真 LLM (Wave 4 写)
-    return await _build_canonical_mechanism(node, session, llm)
+    # Cache miss → 真 LLM (Wave 4 写), Phase 17.2: light_llm 注入 cheap model
+    return await _build_canonical_mechanism(node, session, llm, light_llm=light_llm)
 
 
 # ── Wave 6: lazy retroactive dedup (Track C) ────────────────────────────
