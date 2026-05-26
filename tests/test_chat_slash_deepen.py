@@ -60,3 +60,24 @@ async def test_deepen_without_args_uses_last_user_msg(tmp_path, monkeypatch):
     question = call_args[0][0] if call_args[0] else call_args.kwargs["question"]
     # 最近 user msg (倒序找), 不识别 "为什么" 模式
     assert question == "能再说说吗"
+
+
+@pytest.mark.asyncio
+async def test_deepen_empty_transcript_no_args(tmp_path, monkeypatch):
+    """ephemeral 刚启动 (transcript 空) 立即 /deepen 不带参 → 用法提示 slash_error."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+    # transcript 空 + 不带 args
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(ephemeral, [])
+
+    error_events = [e for e in events if e.type == "slash_error"]
+    assert len(error_events) == 1
+    assert "用法" in error_events[0].content
+    # 不该 触发 promote — ephemeral 没 mock promote_to_persistent, 触发会 LLMError
+    # 直接 ' slash_deepen_promoted' 不应在 events 中
+    assert not any(e.type == "slash_deepen_promoted" for e in events)
