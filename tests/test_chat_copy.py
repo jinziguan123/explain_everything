@@ -341,3 +341,38 @@ class TestDeleteCopy:
         assert len(desc) <= 50
         import re
         assert re.search(r"[一-鿿]", desc), "delete desc 应含中文"
+
+
+class TestDeepenCopy:
+    """Phase 18 Task 8: /deepen 3 zh string + COMMAND_DESCRIPTIONS + HELP_GROUPS_ZH."""
+
+    def test_deepen_copy_strings_exist(self):
+        from explain_engine.chat.chat_copy import (
+            err_deepen_already_promoted,
+            err_deepen_no_question,
+            msg_deepen_promote_start,
+        )
+        assert "用法" in err_deepen_no_question() or "/deepen" in err_deepen_no_question()
+        already = err_deepen_already_promoted("Q")
+        assert "已建模" in already or "/new" in already or "已 /deepen" in already
+        assert "Q" in already
+        start = msg_deepen_promote_start("Q")
+        assert "建模" in start or "深度" in start
+        assert "Q" in start
+
+    def test_command_descriptions_has_deepen(self):
+        """deepen 注册到 COMMAND_DESCRIPTIONS 让 /help 可见."""
+        from explain_engine.chat.chat_copy import COMMAND_DESCRIPTIONS
+        assert "deepen" in COMMAND_DESCRIPTIONS
+        desc = COMMAND_DESCRIPTIONS["deepen"]
+        assert len(desc) <= 50
+        import re
+        assert re.search(r"[一-鿿]", desc), "deepen desc 应含中文"
+
+    def test_help_groups_zh_includes_deepen(self):
+        """/deepen 在 HELP_GROUPS_ZH 某个分组中, 让 /help 输出可见."""
+        from explain_engine.chat.chat_copy import HELP_GROUPS_ZH
+        all_cmds: set[str] = set()
+        for _, cmds in HELP_GROUPS_ZH:
+            all_cmds.update(cmds)
+        assert "deepen" in all_cmds

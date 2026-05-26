@@ -80,6 +80,7 @@ COMMAND_DESCRIPTIONS: dict[str, str] = {
     "check": "查看接受度评估报告 (跟 /show 信息侧重不同)",
 
     # 管理 session
+    "deepen":   "触发深度建模 (/deepen [问题], 不带参取最近 user 输入)",
     "new":      "重置当前 chat, 回到刚启动的空白状态",
     "resume":   "切换到历史 session",
     "list":     "列出当前项目所有 session",
@@ -105,7 +106,7 @@ HELP_GROUPS_ZH: list[tuple[str, list[str]]] = [
     ("推进 session",              ["compress", "run", "rescore"]),
     ("干预分析 (需先 /compress)", ["predict", "counterfactual"]),
     ("查看状态 (只读)",           ["show", "graph", "check"]),
-    ("管理 session",              ["new", "resume", "list", "delete", "lexicon", "theories", "theory", "history"]),
+    ("管理 session",              ["deepen", "new", "resume", "list", "delete", "lexicon", "theories", "theory", "history"]),
     ("其他",                      ["budget", "compact", "save", "migrate"]),
     ("帮助 / 退出",               ["help", "quit"]),
 ]
@@ -297,3 +298,24 @@ def err_delete_not_found(sid: str) -> str:
 def err_delete_active(sid: str) -> str:
     """slash 拒绝删当前活动 session, 给出可执行动作建议."""
     return f"{sid} 是当前活动 session, 请先 /resume 切到别的 session 或 /new 重置后再删"
+
+
+# ── Phase 18: /deepen 中文文案 ──
+
+
+def err_deepen_no_question() -> str:
+    """ephemeral 状态下 /deepen 不带参且 transcript 空 → 用法提示."""
+    return "用法: /deepen <问题>  (或先 chat 一句, 再 /deepen 不带参取最近 user 输入)"
+
+
+def err_deepen_already_promoted(current_question: str) -> str:
+    """已 promote 的 ChatSession 内再 /deepen → 拒绝 + 提示 /new."""
+    return (
+        f"本 session 已 /deepen 过 (建模主题: {current_question}). "
+        f"想换主题请用 /new 开新 session."
+    )
+
+
+def msg_deepen_promote_start(question: str) -> str:
+    """/deepen 触发 promote 时的状态消息."""
+    return f"启动深度建模 (主题: {question})..."
