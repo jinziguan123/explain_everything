@@ -1352,5 +1352,34 @@ def theories(
     console.print(table)
 
 
+@app.command("migrate-lexicon-pg")
+def migrate_lexicon_pg_cmd(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="仅预览, 不写 DB / 不 rename json"
+    ),
+) -> None:
+    """Phase 17.1 Wave 7: 一次性把 knowledge/variables.json 迁到 PostgreSQL.
+
+    Pre-req:
+      - EXPLAIN_DB_URL 已设 (e.g. postgresql://explain:<密码>@host:5432/explain).
+      - PG server 运行 (远程: ssh host 'docker compose ps').
+      - schema 已建 (init/01-init.sql 自动跑 in fresh container).
+
+    成功 (insert > 0): variables.json → variables.json.migrated (backup).
+    失败 (transaction rollback): json 仍在原位, 可 retry.
+    Idempotent: ON CONFLICT (global_id) DO NOTHING — 重跑只插新.
+
+    --dry-run: 仅 count would_migrate, 不动 DB 不动 json.
+    """
+    from explain_engine.persistence.lexicon_migrations import (
+        migrate_json_to_pg,
+    )
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2()
+    result = asyncio.run(migrate_json_to_pg(storage, dry_run=dry_run))
+    console.print(f"[green]Migration:[/green] {result}")
+
+
 if __name__ == "__main__":
     app()

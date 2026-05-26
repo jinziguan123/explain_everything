@@ -425,3 +425,57 @@ class TestRenameLogic:
         # backup 文件路径 = json_path.with_suffix('.json.migrated') 仍是
         # 第 1 次 rename 的产物)
         assert json_path.with_suffix(".json.migrated").exists()
+
+
+# ── Task 7.6: cli subcommand migrate-lexicon-pg ──────────────────────────
+
+
+class TestCliMigrateLexiconPgCommand:
+    """Phase 17.1 Task 7.6: cli.py @app.command('migrate-lexicon-pg') 注册.
+
+    --help 走 typer.testing.CliRunner, 不连 DB (注册 + arg parse 测试).
+    真跑 dry-run 跟全量 case 由 TestMigrateDryRun 等已覆盖, 这里仅验 cli wiring.
+    """
+
+    def test_cli_migrate_lexicon_pg_help_works(self):
+        from typer.testing import CliRunner
+
+        from explain_engine.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["migrate-lexicon-pg", "--help"])
+        assert result.exit_code == 0
+        # typer 自动渲 Usage + help text; subcommand 名 / --dry-run flag 应出现
+        out = result.output
+        assert "migrate-lexicon-pg" in out or "Usage" in out
+        assert "--dry-run" in out
+
+    def test_cli_migrate_lexicon_pg_registered_in_app(self):
+        """subcommand 注册检验 (不走 invoke, 防 env 异常)."""
+        from explain_engine.cli import app
+
+        # typer.Typer.registered_commands 是 list of CommandInfo, 看 .name
+        names = {cmd.name for cmd in app.registered_commands if cmd.name}
+        assert "migrate-lexicon-pg" in names
+
+    @_skip_no_test_db
+    @pytest.mark.usefixtures("reset_pg")
+    def test_cli_migrate_lexicon_pg_dry_run_smoke(self, tmp_path):
+        """cli --dry-run 真跑: 输出含 would_migrate, exit 0, DB 不动."""
+        from typer.testing import CliRunner
+
+        from explain_engine.cli import app
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        storage = StorageV2()
+        kd = storage.knowledge_dir()
+        _write_legacy_lexicon(
+            kd, [_make_legacy_var(global_id="v_cli001")],
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["migrate-lexicon-pg", "--dry-run"])
+        assert result.exit_code == 0, f"stderr={result.output}"
+        # 输出 dict repr 含 would_migrate / dry_run
+        assert "would_migrate" in result.output
+        assert "dry_run" in result.output
