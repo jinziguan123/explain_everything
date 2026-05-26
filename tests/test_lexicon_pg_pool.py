@@ -111,3 +111,32 @@ class TestLexiconDBError:
         assert issubclass(LexiconDBError, Exception)
         err = LexiconDBError("oops")
         assert str(err) == "oops"
+
+
+class TestGetDsn:
+    """Phase 17.1 Task 2.2: _get_dsn 读 env / fallback default."""
+
+    def test_get_dsn_returns_env_or_default(self, monkeypatch):
+        from explain_engine.persistence.lexicon_pg import DEFAULT_DSN, _get_dsn
+
+        # env 已设 → 返 env value
+        monkeypatch.setenv("EXPLAIN_DB_URL", "postgresql://test:pw@host:5432/db")
+        assert _get_dsn() == "postgresql://test:pw@host:5432/db"
+
+        # env 未设 → 返 DEFAULT_DSN
+        monkeypatch.delenv("EXPLAIN_DB_URL", raising=False)
+        assert _get_dsn() == DEFAULT_DSN
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestGetAsyncPool:
+    """Phase 17.1 Task 2.2: get_async_pool 单例 + lazy open."""
+
+    @pytest.mark.asyncio
+    async def test_get_async_pool_returns_singleton(self):
+        from explain_engine.persistence.lexicon_pg import get_async_pool
+
+        pool1 = await get_async_pool()
+        pool2 = await get_async_pool()
+        assert pool1 is pool2
