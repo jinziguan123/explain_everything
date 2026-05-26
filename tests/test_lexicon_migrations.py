@@ -345,3 +345,83 @@ class TestMigrateDryRun:
         # variables.json 还在 (没 rename)
         assert json_path.exists()
         assert not json_path.with_suffix(".json.migrated").exists()
+
+
+# ── Task 7.5: 成功 rename .migrated, 失败 / 零 inserted 保留 json ──────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestRenameLogic:
+    """Phase 17.1 Task 7.5: rename trigger 是 `if inserted > 0`.
+
+    3 case:
+      1. 成功 insert N > 0 → json → .migrated (Task 7.1 已验, 这里 regression)
+      2. 空 variables.json (vars_list = []) → migrated:0, json 保留
+      3. 重跑全 skip → migrated:0, json 保留 (Task 7.2 已验, 这里 explicit)
+
+    设计意图: 0 inserted 表示 "啥都没新增", 保 json 给用户 inspect / retry 机会
+    (说不定要 fix 字段后再灌).
+    """
+
+    @pytest.mark.asyncio
+    async def test_migrate_renames_on_success(self, tmp_path):
+        """sanity: insert 成功 → rename trigger."""
+        from explain_engine.persistence.lexicon_migrations import (
+            migrate_json_to_pg,
+        )
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        storage = StorageV2()
+        kd = storage.knowledge_dir()
+        json_path = _write_legacy_lexicon(
+            kd, [_make_legacy_var(global_id="v_rn001")],
+        )
+        await migrate_json_to_pg(storage)
+        assert not json_path.exists()
+        assert json_path.with_suffix(".json.migrated").exists()
+
+    @pytest.mark.asyncio
+    async def test_migrate_keeps_json_when_empty_vars_list(self, tmp_path):
+        """空 vars_list → migrated:0, json 保留 (inserted==0 不触发 rename)."""
+        from explain_engine.persistence.lexicon_migrations import (
+            migrate_json_to_pg,
+        )
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        storage = StorageV2()
+        kd = storage.knowledge_dir()
+        json_path = _write_legacy_lexicon(kd, [])  # empty
+        r = await migrate_json_to_pg(storage)
+        assert r == {"migrated": 0, "skipped": 0}
+        # json 仍在原位 (没新 insert, 没必要 backup)
+        assert json_path.exists()
+        assert not json_path.with_suffix(".json.migrated").exists()
+
+    @pytest.mark.asyncio
+    async def test_migrate_keeps_json_when_all_skip(self, tmp_path):
+        """重跑 (vars 已存 DB) → migrated:0/skipped:N, json 保留."""
+        from explain_engine.persistence.lexicon_migrations import (
+            migrate_json_to_pg,
+        )
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        storage = StorageV2()
+        kd = storage.knowledge_dir()
+        var = _make_legacy_var(global_id="v_skip001")
+
+        # 第 1 次 insert + 自动 rename
+        _write_legacy_lexicon(kd, [var])
+        await migrate_json_to_pg(storage)
+
+        # 第 2 次 (重写 variables.json 模拟用户重跑) — DB 已存, 全 skip
+        json_path = _write_legacy_lexicon(kd, [var])
+        r2 = await migrate_json_to_pg(storage)
+        assert r2 == {"migrated": 0, "skipped": 1}
+
+        # all skip → json 保留, 没 rename
+        assert json_path.exists()
+        # 注意: 第 1 次 backup 仍在 — 不应被覆盖 (rename 不触发,
+        # backup 文件路径 = json_path.with_suffix('.json.migrated') 仍是
+        # 第 1 次 rename 的产物)
+        assert json_path.with_suffix(".json.migrated").exists()
