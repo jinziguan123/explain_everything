@@ -1,0 +1,27 @@
+# Phase 17.1: PostgreSQL 16 + pgvector for explain-engine lexicon
+#
+# Deploy: 在 172.30.26.12 跑 `EXPLAIN_DB_PASSWORD=<密码> docker compose up -d`
+# init/01-init.sql 容器首次启动时自动跑 (CREATE EXTENSION vector + 3 表 + 4 索引 + trigger).
+# 数据持久化在 host volume ./pgdata.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: explain-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: explain
+      POSTGRES_USER: explain
+      POSTGRES_PASSWORD: ${EXPLAIN_DB_PASSWORD:-changeme}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      # 暴露给内网. 想限制仅本机: "127.0.0.1:5432:5432"
+      - "5432:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U explain -d explain"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
