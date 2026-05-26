@@ -198,3 +198,106 @@ class TestMigrateIdempotent:
 
         # json 没 rename (因 inserted == 0, 保留让用户 inspect)
         assert json_path.exists()
+
+
+# ── Task 7.3: legacy signature 算法 (no edges) ───────────────────────────
+
+
+class TestComputeSignatureForLegacy:
+    """Phase 17.1 Task 7.3: _compute_signature_for_legacy 算法验证.
+
+    legacy var 没 graph 上下文 → edges 段固定空, 仅 name+desc+level+epi 进 hash.
+    跟 Wave 5 compute_canonical_signature 同 sha256[:16] 格式, deterministic.
+    """
+
+    def test_same_var_yields_same_hash(self):
+        from explain_engine.persistence.lexicon_migrations import (
+            _compute_signature_for_legacy,
+        )
+
+        var = _make_legacy_var(name="A 概念")
+        s1 = _compute_signature_for_legacy(var)
+        s2 = _compute_signature_for_legacy(var)
+        assert s1 == s2
+
+    def test_diff_name_diff_hash(self):
+        from explain_engine.persistence.lexicon_migrations import (
+            _compute_signature_for_legacy,
+        )
+
+        v1 = _make_legacy_var(name="A 概念")
+        v2 = _make_legacy_var(name="B 概念")
+        assert _compute_signature_for_legacy(v1) != _compute_signature_for_legacy(v2)
+
+    def test_diff_description_diff_hash(self):
+        from explain_engine.persistence.lexicon_migrations import (
+            _compute_signature_for_legacy,
+        )
+
+        v1 = _make_legacy_var(description="描述 X")
+        v2 = _make_legacy_var(description="描述 Y")
+        assert _compute_signature_for_legacy(v1) != _compute_signature_for_legacy(v2)
+
+    def test_diff_level_diff_hash(self):
+        from explain_engine.persistence.lexicon_migrations import (
+            _compute_signature_for_legacy,
+        )
+
+        v1 = _make_legacy_var(abstraction_level=1)
+        v2 = _make_legacy_var(abstraction_level=2)
+        assert _compute_signature_for_legacy(v1) != _compute_signature_for_legacy(v2)
+
+    def test_diff_epistemic_diff_hash(self):
+        from explain_engine.persistence.lexicon_migrations import (
+            _compute_signature_for_legacy,
+        )
+
+        v1 = _make_legacy_var(epistemic="insight")
+        v2 = _make_legacy_var(epistemic="speculation")
+        assert _compute_signature_for_legacy(v1) != _compute_signature_for_legacy(v2)
+
+    def test_signature_is_16_char_hex(self):
+        from explain_engine.persistence.lexicon_migrations import (
+            _compute_signature_for_legacy,
+        )
+
+        sig = _compute_signature_for_legacy(_make_legacy_var())
+        assert len(sig) == 16
+        # 16 char lowercase hex
+        assert all(c in "0123456789abcdef" for c in sig)
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestMigratedModelVersion:
+    """Phase 17.1 Task 7.3: migration var canonical_model_ver = 'v1-migrated'.
+
+    跟 Wave 5 LLM-built canonical (v1) 区分 — 让后续 cache invalidation
+    (bump v2) 仍能影响 migrated entries (二者都 != 'v2'), 但 audit 时能
+    分辨这条 entry 是 LLM 生还是 migration 灌入.
+    """
+
+    @pytest.mark.asyncio
+    async def test_migrated_var_has_v1_migrated_model_ver(self, tmp_path):
+        from explain_engine.persistence.lexicon_migrations import (
+            migrate_json_to_pg,
+        )
+        from explain_engine.persistence.lexicon_pg import get_async_pool
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        storage = StorageV2()
+        kd = storage.knowledge_dir()
+        _write_legacy_lexicon(
+            kd, [_make_legacy_var(global_id="v_modelver01")],
+        )
+        await migrate_json_to_pg(storage)
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT canonical_model_ver FROM variables WHERE global_id = %s",
+                ("v_modelver01",),
+            )
+            row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == "v1-migrated"
