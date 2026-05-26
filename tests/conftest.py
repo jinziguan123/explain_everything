@@ -49,6 +49,21 @@ def tmp_sessions_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_lexicon_backend_flag():
+    """Phase 17.1 Wave 9: 每 test 前重置 lexicon._PG_BACKEND_ACTIVE = None.
+
+    避免 test 串跑时, 某 test 调 init_lexicon_backend() set True 后, 后续 JSON-only
+    test (e.g. test_engines_lexicon) dispatch 走 PG impl 而 fail. 测试隔离.
+    """
+    try:
+        from explain_engine.engines import lexicon
+        lexicon._PG_BACKEND_ACTIVE = None
+    except ImportError:
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _disable_embedding_unless_marked(request, monkeypatch):
     """Phase 13 default: EXPLAIN_EMBEDDING_DISABLED=1 unless @pytest.mark.embedding.
 
@@ -143,6 +158,9 @@ async def reset_pg(pg_test_dsn, monkeypatch):
     )
 
     monkeypatch.setenv("EXPLAIN_DB_URL", pg_test_dsn)
+    # 限 test pool size 防累积撞 PG max_connections (远程 PG 50+ test 顺跑容易爆)
+    monkeypatch.setenv("EXPLAIN_DB_POOL_MIN", "1")
+    monkeypatch.setenv("EXPLAIN_DB_POOL_MAX", "3")
     with psycopg.connect(pg_test_dsn, autocommit=True) as conn:
         conn.execute(
             "TRUNCATE variables, lexicon_merge_audit; "
@@ -150,15 +168,17 @@ async def reset_pg(pg_test_dsn, monkeypatch):
             "WHERE id = 1"
         )
     yield
-    # 清 module-level pool — 先 await close() 让 workers 退出, 再清引用
+    # 清 module-level pool — close(timeout=30) 让 workers 真退出, 默认 5s 远程
+    # PG 不够 (connection 关 round-trip 慢), 引发下个 test PoolTimeout (旧 conn
+    # 占 PG max_connections). 30s 留足 grace.
     try:
         from explain_engine.persistence import lexicon_pg
 
         if lexicon_pg._async_pool is not None:
-            await lexicon_pg._async_pool.close()
+            await lexicon_pg._async_pool.close(timeout=30.0)
             lexicon_pg._async_pool = None
         if lexicon_pg._sync_pool is not None:
-            lexicon_pg._sync_pool.close()
+            lexicon_pg._sync_pool.close(timeout=30.0)
             lexicon_pg._sync_pool = None
     except ImportError:
         pass  # Wave 2 之前 lexicon_pg 还没建

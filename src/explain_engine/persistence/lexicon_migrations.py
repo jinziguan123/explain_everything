@@ -42,20 +42,24 @@ def _compute_signature_for_legacy(var: dict[str, Any]) -> str:
 async def migrate_json_to_pg(
     storage: Any,
     dry_run: bool = False,
+    keep_json: bool = False,
 ) -> dict[str, Any]:
     """一次性 migrate variables.json → PG, idempotent.
 
     Args:
       storage: StorageV2 实例 — 用 storage.knowledge_dir() 找 variables.json.
       dry_run: True 时仅 count, 不写 DB, 不 rename json.
+      keep_json: True 时**不** rename .migrated (用于 startup sync, 让 JSON 作 offline
+        fallback buffer 继续可用). cli `migrate-lexicon-pg` 用 default False (cutover
+        语义, rename 标识已 migrate).
 
     Returns:
       - {"migrated": N, "skipped": M} (正常路径)
       - {"would_migrate": N, "dry_run": True} (dry-run)
       - {"migrated": 0, "reason": str} (无 variables.json)
 
-    成功 (inserted > 0): variables.json → variables.json.migrated.
-    全 skip (inserted == 0): json 保留, 可手动 inspect / retry.
+    成功 (inserted > 0 且 not keep_json): variables.json → variables.json.migrated.
+    全 skip (inserted == 0) 或 keep_json=True: json 保留, 可手动 inspect / retry / 作 fallback.
 
     Behavior:
       - 全 var 在单个 transaction 内 insert — 中途 fail 全 rollback (json 保留).
@@ -111,7 +115,7 @@ async def migrate_json_to_pg(
                 else:
                     skipped += 1
 
-    if inserted > 0:
+    if inserted > 0 and not keep_json:
         backup_path = json_path.with_suffix(".json.migrated")
         json_path.rename(backup_path)
 

@@ -701,3 +701,103 @@ def _render_lexicon_for_prompt(vars_list: list[dict[str, Any]]) -> str:
             f"- {gid} 「{name}」(L{level}, reused {reuse}x): {desc} — {mech}"
         )
     return "\n".join(lines)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Phase 17.1 Wave 9: backend auto-fallback dispatcher
+# ════════════════════════════════════════════════════════════════════════
+# 启动时 init_lexicon_backend() 检 PG 可达性:
+#   PG 通 → _PG_BACKEND_ACTIVE = True, 公共 API 调 lexicon_pg 远程 PG impl,
+#           顺带 sync local JSON 残留 var → PG (keep_json=True, JSON 留作 offline
+#           fallback buffer).
+#   PG 断 → _PG_BACKEND_ACTIVE = False, 公共 API 回退本机 JSON impl (即上面老代码),
+#           chat 仍可用, 写入仅留 local JSON, 不同步 PG. 重连后下次启动 init 自动 sync.
+#
+# 公共 API (flush_to_lexicon / get_lexicon_top_k_for_compress / _render_lexicon_for_prompt)
+# 末尾 def 同名 dispatcher override 前面老 def. Python from-import 拿的是最末 def.
+#
+# 老 caller 不动. 切换透明 — 仅 chat REPL 启动时多 1 行 `await init_lexicon_backend()`.
+
+_PG_BACKEND_ACTIVE: bool | None = None  # None=未 init / True=PG / False=JSON fallback
+
+# Save 老 JSON impl 引用 (上面 def 即老 JSON 实现)
+_flush_to_lexicon_json_impl = flush_to_lexicon
+_get_lexicon_top_k_for_compress_json_impl = get_lexicon_top_k_for_compress
+_render_lexicon_for_prompt_json_impl = _render_lexicon_for_prompt
+
+
+async def init_lexicon_backend() -> bool:
+    """Phase 17.1 Wave 9: REPL 启动调 1 次. PG 通 → True (用 PG); 断 → False (本机 JSON).
+
+    Idempotent — 重调返 cached _PG_BACKEND_ACTIVE. test reset 时 force re-init
+    需手 set _PG_BACKEND_ACTIVE = None.
+
+    PG 通时顺带 startup sync: 把 local JSON 残留 var (offline 期写) 一次性
+    push 到 PG (idempotent, ON CONFLICT skip). 不删 JSON (留作 fallback buffer).
+    """
+    global _PG_BACKEND_ACTIVE
+    if _PG_BACKEND_ACTIVE is not None:
+        return _PG_BACKEND_ACTIVE
+    try:
+        from explain_engine.persistence.lexicon_migrations import migrate_json_to_pg
+        from explain_engine.persistence.lexicon_pg import verify_connection
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        await verify_connection()
+        # Startup sync: local JSON → PG, idempotent, 不 rename JSON
+        result = await migrate_json_to_pg(StorageV2(), keep_json=True)
+        _PG_BACKEND_ACTIVE = True
+        logging.info(
+            f"lexicon backend: PG ✓ (startup sync: {result})"
+        )
+    except Exception as exc:
+        _PG_BACKEND_ACTIVE = False
+        logging.warning(
+            f"lexicon backend: PG 不可达 ({type(exc).__name__}: {exc}), "
+            "fallback 本机 JSON. Chat 仍可用; lexicon 修改不会同步 PG, "
+            "重连后下次启动 init 自动 sync."
+        )
+    return _PG_BACKEND_ACTIVE
+
+
+# ── Public API dispatcher (override 前面 def) ──
+
+
+async def flush_to_lexicon(
+    session: Session, storage: StorageV2,
+    llm: LLMClient | None = None,
+    llm_canonical_top_k: int = 3,
+) -> int:
+    """Wave 9 dispatcher: PG 可达走 lexicon_pg, 断走 JSON fallback."""
+    if _PG_BACKEND_ACTIVE:
+        from explain_engine.persistence.lexicon_pg import (
+            flush_to_lexicon as pg_impl,
+        )
+        return await pg_impl(session, storage, llm, llm_canonical_top_k)
+    return await _flush_to_lexicon_json_impl(
+        session, storage, llm, llm_canonical_top_k,
+    )
+
+
+def get_lexicon_top_k_for_compress(
+    storage: StorageV2,
+    k: int = 20,
+) -> list[dict[str, Any]]:
+    """Wave 9 dispatcher: sync version."""
+    if _PG_BACKEND_ACTIVE:
+        from explain_engine.persistence.lexicon_pg import (
+            get_lexicon_top_k_for_compress as pg_impl,
+        )
+        return pg_impl(storage, k)
+    return _get_lexicon_top_k_for_compress_json_impl(storage, k)
+
+
+def _render_lexicon_for_prompt(vars_list: list[dict[str, Any]]) -> str:
+    """Wave 9 dispatcher: PG flat dict / JSON nested fitness 两兼容 (lexicon_pg
+    版本已含兼容逻辑, JSON 版本仅认 fitness nested)."""
+    if _PG_BACKEND_ACTIVE:
+        from explain_engine.persistence.lexicon_pg import (
+            _render_lexicon_for_prompt as pg_impl,
+        )
+        return pg_impl(vars_list)
+    return _render_lexicon_for_prompt_json_impl(vars_list)

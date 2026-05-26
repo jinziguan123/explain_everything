@@ -1024,6 +1024,12 @@ async def _run_chat_repl_async(
         read_input,
     )
     from explain_engine.chat.session import ChatSession, ChatSessionLoadError
+    from explain_engine.engines.lexicon import init_lexicon_backend
+
+    # Phase 17.1 Wave 9: init lexicon backend before chat starts
+    use_pg = await init_lexicon_backend()
+    backend_label = "PostgreSQL (远程)" if use_pg else "本地 JSON (PG 不可达)"
+    console.print(f"[dim]Lexicon backend: {backend_label}[/dim]")
 
     # ── chat 模式 enter: swap logging handler ──
     log_handler = BufferedLogHandler(capacity=200)

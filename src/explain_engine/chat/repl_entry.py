@@ -49,6 +49,13 @@ async def enter_repl_async() -> None:
         console.print(f"[yellow]LLM 未配置 ({exc}); slash 命令仍可用.[/yellow]")
         llm = None
 
+    # Phase 17.1 Wave 9: init lexicon backend (PG 可达 → PG + sync local JSON;
+    # 断 → 本机 JSON fallback). 不抛 — chat REPL 永远可用.
+    from explain_engine.engines.lexicon import init_lexicon_backend
+    use_pg = await init_lexicon_backend()
+    backend_label = "PostgreSQL (远程)" if use_pg else "本地 JSON (PG 不可达)"
+    console.print(f"[dim]Lexicon backend: {backend_label}[/dim]")
+
     log_handler = BufferedLogHandler(capacity=200)
     log_handler.setFormatter(logging.Formatter("%(message)s"))
     root_logger = logging.getLogger()
