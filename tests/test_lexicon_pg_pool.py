@@ -658,3 +658,136 @@ class TestEmbeddingNullLegacy:
         assert row is not None
         assert row["global_id"] == "v_null0001"
         assert row["embedding"] is None
+
+
+# ── Task 3.6: _merge_into_existing fixtures ─────────────────────────────
+
+
+class _FakeNode:
+    """模拟 VariableNode 仅供 _merge_into_existing test 用."""
+
+    def __init__(self, activation: float):
+        self.activation = activation
+
+
+class _FakeMeta:
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+
+
+class _FakeSession:
+    def __init__(self, session_id: str):
+        self.meta = _FakeMeta(session_id)
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestMergeIntoExisting:
+    """Phase 17.1 Task 3.6: _merge_into_existing 合 loser 入 winner.
+
+    - source_sessions union (loser session 加入 winner)
+    - reuse_count += 1
+    - avg_essentialness running-avg (old*old_count + new) / new_count
+    - last_seen_at NOW() bump
+    - canonical 字段全保 winner (不变 — loser canonical 不进 winner)
+    """
+
+    @pytest.mark.asyncio
+    async def test_merge_into_existing_unions_sessions_and_updates_fitness(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _find_var_by_id,
+            _insert_var,
+            _merge_into_existing,
+            get_async_pool,
+        )
+
+        # winner: count=2, ess=0.6, sessions=[s_orig0001]
+        var = _sample_var(
+            global_id="v_winner001",
+            reuse_count=2,
+            avg_essentialness=0.6,
+            avg_consistency=0.8,
+            source_sessions=["s_orig0001"],
+        )
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await _insert_var(conn, var)
+
+        # 调 merge: loser activation=0.9, session=s_loser0001
+        async with pool.connection() as conn:
+            await _merge_into_existing(
+                conn,
+                "v_winner001",
+                _FakeNode(activation=0.9),
+                _FakeSession("s_loser0001"),
+                "loser canon (不进 winner)",
+            )
+
+        async with pool.connection() as conn:
+            row = await _find_var_by_id(conn, "v_winner001")
+
+        assert row is not None
+        # reuse_count: 2 + 1
+        assert row["reuse_count"] == 3
+        # running-avg: (0.6 * 2 + 0.9) / 3 = 0.7
+        assert abs(row["avg_essentialness"] - 0.7) < 1e-4
+        # consistency 保 winner 值 (loser 没提供新 cons)
+        assert abs(row["avg_consistency"] - 0.8) < 1e-4
+        # source_sessions union
+        assert sorted(row["source_sessions"]) == ["s_loser0001", "s_orig0001"]
+        # canonical 全保 winner 原值
+        assert row["canonical_mechanism"] == "test mech"
+
+    @pytest.mark.asyncio
+    async def test_merge_into_existing_dedup_session_in_union(self):
+        """loser session 已在 winner sessions 时不重复加 (idempotent)."""
+        from explain_engine.persistence.lexicon_pg import (
+            _find_var_by_id,
+            _insert_var,
+            _merge_into_existing,
+            get_async_pool,
+        )
+
+        var = _sample_var(
+            global_id="v_winner002",
+            reuse_count=1,
+            avg_essentialness=0.5,
+            source_sessions=["s_shared001"],
+        )
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await _insert_var(conn, var)
+        async with pool.connection() as conn:
+            # loser session = winner 已有的 s_shared001
+            await _merge_into_existing(
+                conn,
+                "v_winner002",
+                _FakeNode(activation=0.7),
+                _FakeSession("s_shared001"),
+                "x",
+            )
+        async with pool.connection() as conn:
+            row = await _find_var_by_id(conn, "v_winner002")
+        # sessions 仍只 1 个 (不重复)
+        assert row["source_sessions"] == ["s_shared001"]
+        # count 仍 +1
+        assert row["reuse_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_merge_into_existing_missing_winner_is_noop(self):
+        """winner_id 不存在 (edge case: 已被删) 时静默返回, 不抛."""
+        from explain_engine.persistence.lexicon_pg import (
+            _merge_into_existing,
+            get_async_pool,
+        )
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            # 不抛
+            await _merge_into_existing(
+                conn,
+                "v_nonexistent",
+                _FakeNode(activation=0.5),
+                _FakeSession("s_xxx"),
+                "x",
+            )

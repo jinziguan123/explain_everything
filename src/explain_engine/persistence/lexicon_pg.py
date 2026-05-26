@@ -215,3 +215,48 @@ async def _find_duplicate(
     )
     row = await cur.fetchone()
     return row[0] if row else None
+
+
+async def _merge_into_existing(
+    conn,
+    winner_id: str,
+    loser_node: Any,  # VariableNode (有 .activation 属性)
+    session: Any,  # Session (有 .meta.session_id)
+    loser_canonical: str,  # 当前 round canonical, 暂不进 winner (保 winner 自己 canonical) — 留参 audit log Wave 4+ 用
+) -> None:
+    """合 loser 入 winner: source_sessions union + fitness running-avg + last_seen_at NOW().
+
+    Winner 的 canonical_* 字段全保留不动 (loser_canonical 仅 audit log 用, 暂不写).
+
+    用 `FOR UPDATE` 锁行防并发 merge 冲突. winner 已被删 (edge case) → noop.
+    """
+    cur = await conn.execute(
+        """SELECT reuse_count, avg_essentialness, avg_consistency, source_sessions
+           FROM variables WHERE global_id = %s FOR UPDATE""",
+        (winner_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        # winner 已被删, edge case (并发 retro_dedup 可能), silent noop
+        return
+    old_count, old_ess, old_cons, old_sessions = row
+    new_count = old_count + 1
+    # running-avg essentialness: 旧总和 + 新 / 新 count
+    new_ess = (old_ess * old_count + loser_node.activation) / new_count
+    # consistency 保 winner (loser 没新 cons 数据)
+    new_cons = old_cons
+    # union sessions (preserve order, dedup)
+    sessions = list(old_sessions)
+    sid = session.meta.session_id
+    if sid not in sessions:
+        sessions.append(sid)
+    await conn.execute(
+        """UPDATE variables SET
+             reuse_count = %s,
+             avg_essentialness = %s,
+             avg_consistency = %s,
+             source_sessions = %s,
+             last_seen_at = NOW()
+           WHERE global_id = %s""",
+        (new_count, new_ess, new_cons, sessions, winner_id),
+    )
