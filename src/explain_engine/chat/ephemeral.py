@@ -66,6 +66,48 @@ class EphemeralChatSession:
     def is_ephemeral(self) -> bool:
         return True
 
+    async def send_user_message(
+        self,
+        text: str,
+        llm: LLMClient,
+    ):
+        """Phase 18: Ephemeral 下 LLM system-1 chat.
+
+        yield assistant_text + turn_complete events. transcript in-memory append
+        (不持久 — storage_v2 不写 transcript.jsonl).
+
+        LLM 失败 (LLMError / SchemaValidationError) → yield slash_error event,
+        transcript 不变 (retry 友好).
+        """
+        from explain_engine.chat.session import ChatEvent
+        from explain_engine.llm.client import Message
+        from explain_engine.llm.errors import LLMError, SchemaValidationError
+        from explain_engine.llm.prompts._loader import load_prompt
+
+        prompt = load_prompt("ephemeral_chat")
+        messages: list[Message] = [Message(role="system", content=prompt["system"])]
+        # 拼现有 transcript (in-memory)
+        for msg in self.transcript:
+            messages.append(Message(role=msg["role"], content=msg["content"]))
+        messages.append(Message(role="user", content=text))
+
+        try:
+            resp = await llm.chat(messages)
+        except (LLMError, SchemaValidationError) as exc:
+            yield ChatEvent(
+                type="slash_error",
+                content=f"LLM 调用失败: {type(exc).__name__}: {exc}",
+            )
+            return
+
+        assistant_text = resp.text or ""
+        # transcript append (in-memory, 不持久)
+        self.transcript.append({"role": "user", "content": text})
+        self.transcript.append({"role": "assistant", "content": assistant_text})
+
+        yield ChatEvent(type="assistant_text", content=assistant_text)
+        yield ChatEvent(type="turn_complete", content=None)
+
     async def promote_to_persistent(
         self,
         question: str,
