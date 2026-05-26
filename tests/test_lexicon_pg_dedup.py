@@ -78,3 +78,49 @@ class TestLexiconMetaSeed:
         assert rows[0][1] == 0
         assert rows[0][2] is None
         assert rows[0][3] == "v1"
+
+
+# ── Wave 6 Task 6.2: _maybe_lazy_dedup N<100 skip ───────────────────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestMaybeLazyDedupSkipsBelow100:
+    """Phase 17.1 Task 6.2: N < 100 时 _maybe_lazy_dedup 早 return.
+
+    Verify:
+      - 返 0 (没触发 dedup)
+      - flush_count_since 未变 (强 set 10 验, 仍 10 — 证早 return 没碰 meta)
+    """
+
+    @pytest.mark.asyncio
+    async def test_maybe_lazy_dedup_skips_when_n_below_100(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _insert_var,
+            _maybe_lazy_dedup,
+            get_async_pool,
+        )
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            # 仅 5 行 (远 < 100), insert 快
+            for i in range(5):
+                await _insert_var(
+                    conn, _sample_var(global_id=f"v_below{i:03d}")
+                )
+            # 强 set flush_count_since = 10 (远超阈值 5)
+            await conn.execute(
+                "UPDATE lexicon_meta SET flush_count_since = 10 WHERE id = 1"
+            )
+
+        merged = await _maybe_lazy_dedup(pool)
+        assert merged == 0
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT flush_count_since, last_retro_dedup_at FROM lexicon_meta WHERE id = 1"
+            )
+            row = await cur.fetchone()
+        # N<100 早 return — flush_count_since 仍 10 (没 increment), last_retro_at 仍 NULL
+        assert row[0] == 10
+        assert row[1] is None

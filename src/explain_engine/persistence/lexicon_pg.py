@@ -643,6 +643,59 @@ async def _build_canonical_mechanism_cached(
     return await _build_canonical_mechanism(node, session, llm)
 
 
+# ── Wave 6: lazy retroactive dedup (Track C) ────────────────────────────
+
+
+async def _retroactive_dedup_pg(conn) -> int:
+    """Phase 17.1 Task 6.2 stub — Task 6.4 真实现 (pgvector cross-join 合 sim>0.85).
+
+    本 stub 返 0 让 Wave 6 阶段性递增 task 顺利 ship; Task 6.4 替换为真 logic.
+    """
+    return 0
+
+
+async def _maybe_lazy_dedup(pool) -> int:
+    """Phase 17.1 Task 6.2: 阈值守门 — N > 100 + flush_count_since >= 5 才跑.
+
+    State 存 lexicon_meta 表 (单 row id=1), `FOR UPDATE` 锁防并发 race
+    (两 flush 同时进时一个走 dedup 一个走 increment).
+
+    Algo:
+      1. SELECT COUNT(*) FROM variables → n; n < 100 → 返 0 (跳, 不动 state)
+      2. FOR UPDATE lock lexicon_meta row → 读 flush_count_since
+      3. < 5 → flush_count_since += 1, 返 0 (累计, 不跑)
+      4. >= 5 → 跑 _retroactive_dedup_pg → reset flush_count_since=0 +
+         last_retro_dedup_at = NOW() → 返 merged 数
+
+    返 merged 数 (0 表示没触发 dedup; 真触发了可能也 0 — 库里无 sim>0.85 pair).
+    """
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            cur = await conn.execute("SELECT COUNT(*) FROM variables")
+            n = (await cur.fetchone())[0]
+            if n < 100:
+                return 0
+
+            cur = await conn.execute(
+                "SELECT flush_count_since FROM lexicon_meta WHERE id = 1 FOR UPDATE"
+            )
+            flush_count = (await cur.fetchone())[0]
+
+            if flush_count < 5:
+                await conn.execute(
+                    "UPDATE lexicon_meta SET flush_count_since = flush_count_since + 1 "
+                    "WHERE id = 1"
+                )
+                return 0
+
+            merged = await _retroactive_dedup_pg(conn)
+            await conn.execute(
+                "UPDATE lexicon_meta SET last_retro_dedup_at = NOW(), "
+                "flush_count_since = 0 WHERE id = 1"
+            )
+            return merged
+
+
 def _render_lexicon_for_prompt(vars_list: list[dict[str, Any]]) -> str:
     """Phase 17.1 Task 4.7: 渲 lexicon prior section 进 LLM prompt.
 
