@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 
 import pytest
 
@@ -183,3 +184,60 @@ class TestVerifyConnectionFail:
         finally:
             # 清理避免污染其他 test
             lexicon_pg._async_pool = None
+
+
+def _sample_var(global_id: str = "v_test0001", **overrides) -> dict:
+    """构造一个完整 14 字段 var dict (无 embedding), test fixture helper."""
+    now = datetime.now(UTC)
+    base = {
+        "global_id": global_id,
+        "name": "测试 var",
+        "description": "用于 test",
+        "abstraction_level": 1,
+        "epistemic": "insight",
+        "canonical_mechanism": "test mech",
+        "canonical_signature": "abc12345",
+        "canonical_model_ver": "v1",
+        "reuse_count": 1,
+        "avg_essentialness": 0.5,
+        "avg_consistency": 0.7,
+        "first_seen_at": now,
+        "last_seen_at": now,
+        "source_sessions": ["s_test0001"],
+    }
+    base.update(overrides)
+    return base
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestInsertVar:
+    """Phase 17.1 Task 2.4: _insert_var (不含 embedding 列, Wave 3 加)."""
+
+    @pytest.mark.asyncio
+    async def test_insert_var_basic_no_embedding(self):
+        import psycopg
+
+        from explain_engine.persistence.lexicon_pg import (
+            _insert_var,
+            get_async_pool,
+        )
+
+        var = _sample_var()
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await _insert_var(conn, var)
+            cur = await conn.execute(
+                "SELECT global_id, name, source_sessions, embedding "
+                "FROM variables WHERE global_id = %s",
+                (var["global_id"],),
+            )
+            row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == "v_test0001"
+        assert row[1] == "测试 var"
+        assert row[2] == ["s_test0001"]
+        # embedding 列存为 NULL (Wave 3 才加)
+        assert row[3] is None
+        # 顺带 sanity: psycopg 真的连了一次
+        assert isinstance(conn, psycopg.AsyncConnection)

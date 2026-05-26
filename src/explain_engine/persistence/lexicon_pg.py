@@ -14,6 +14,7 @@ Internal (Wave 2):
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
@@ -82,3 +83,30 @@ async def verify_connection() -> None:
             f"{type(exc).__name__}: {exc}\n"
             f"Hint: 检查 server (ssh 172.30.26.12 'docker compose ps') / EXPLAIN_DB_URL."
         ) from exc
+
+
+# ── CRUD helpers (内部, Wave 4 公开 API 层调) ────────────────────────────
+
+
+async def _insert_var(conn, var: dict[str, Any]) -> None:
+    """Insert 1 var (无 embedding 列, Wave 3 加 embedding 支持).
+
+    var 必含 14 字段: global_id, name, description, abstraction_level, epistemic,
+    canonical_mechanism, canonical_signature, canonical_model_ver,
+    reuse_count, avg_essentialness, avg_consistency,
+    first_seen_at, last_seen_at, source_sessions.
+    """
+    await conn.execute(
+        """INSERT INTO variables (
+            global_id, name, description, abstraction_level, epistemic,
+            canonical_mechanism, canonical_signature, canonical_model_ver,
+            reuse_count, avg_essentialness, avg_consistency,
+            first_seen_at, last_seen_at, source_sessions
+        ) VALUES (
+            %(global_id)s, %(name)s, %(description)s, %(abstraction_level)s, %(epistemic)s,
+            %(canonical_mechanism)s, %(canonical_signature)s, %(canonical_model_ver)s,
+            %(reuse_count)s, %(avg_essentialness)s, %(avg_consistency)s,
+            %(first_seen_at)s, %(last_seen_at)s, %(source_sessions)s
+        )""",
+        var,
+    )
