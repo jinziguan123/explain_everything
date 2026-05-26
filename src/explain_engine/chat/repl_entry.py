@@ -149,8 +149,42 @@ async def enter_repl_async() -> None:
                         chat = EphemeralChatSession(
                             storage=storage,
                             input_provider=_input_provider,
+                            llm=llm,  # Phase 18 Task 16: /new 后仍能 /deepen
                         )
                         _print_banner()
+                        continue
+                    if ev.type == "slash_deepen_promoted":
+                        # Phase 18 Task 17: /deepen 成功 → promote_to_persistent
+                        # 已在 _handle_deepen 内调用 + 落盘, sid 在 ev.metadata.
+                        # 此处把 ephemeral chat var 切到新建的 ChatSession,
+                        # 跟 slash_switch_session 现 pattern 同 (但 metadata 不是
+                        # content["sid"] — 见 ChatEvent docstring).
+                        _render_event(console, ev)
+                        try:
+                            new_sid = ev.metadata["sid"]
+                        except (KeyError, TypeError):
+                            console.print(
+                                "[red]slash_deepen_promoted event 缺 metadata.sid; "
+                                "保留 ephemeral.[/red]"
+                            )
+                            continue
+                        # ephemeral 无 aclose (无资源), 直接替换 chat var
+                        try:
+                            chat = ChatSession(new_sid, llm=llm)
+                            chat.input_provider = _input_provider
+                            console.print(
+                                f"[green]已进入持久 session {new_sid}, "
+                                f"可继续 /compress /run 等.[/green]"
+                            )
+                            from explain_engine.chat.history_render import (
+                                print_history_section,
+                            )
+                            print_history_section(console, chat)
+                        except Exception as exc:
+                            console.print(
+                                f"[red]切换至新 session 失败: "
+                                f"{type(exc).__name__}: {exc}[/red]"
+                            )
                         continue
                     _render_event(console, ev)
                     if ev.type == "slash_quit":
