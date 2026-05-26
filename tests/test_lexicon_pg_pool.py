@@ -428,3 +428,36 @@ class TestDeleteVar:
         async with pool.connection() as conn:
             result = await _delete_var(conn, "v_doesnt_exist")
         assert result is False
+
+
+# ── Wave 3: embedding + pgvector cosine dedup ───────────────────────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestInsertVarWithEmbedding:
+    """Phase 17.1 Task 3.1: _insert_var 支持 embedding 列 (vector(1024))."""
+
+    @pytest.mark.asyncio
+    async def test_insert_var_with_embedding(self):
+        import numpy as np
+
+        from explain_engine.persistence.lexicon_pg import (
+            _insert_var,
+            get_async_pool,
+        )
+
+        emb = np.random.rand(1024).astype(np.float32).tolist()
+        var = _sample_var(global_id="v_emb0001", embedding=emb)
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await _insert_var(conn, var)
+            cur = await conn.execute(
+                "SELECT embedding FROM variables WHERE global_id = %s",
+                (var["global_id"],),
+            )
+            row = await cur.fetchone()
+        assert row is not None
+        assert row[0] is not None
+        # pgvector adapter 应返 numpy array (1024,)
+        assert len(row[0]) == 1024

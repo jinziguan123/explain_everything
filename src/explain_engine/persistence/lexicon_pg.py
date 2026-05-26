@@ -17,6 +17,7 @@ import os
 from datetime import datetime
 from typing import Any
 
+from pgvector.psycopg import register_vector, register_vector_async
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
@@ -38,22 +39,32 @@ def _get_dsn() -> str:
 
 
 async def get_async_pool() -> AsyncConnectionPool:
-    """Lazy 单例 async pool. min/max/timeout 从 env 读 (留生产调优口)."""
+    """Lazy 单例 async pool. min/max/timeout 从 env 读 (留生产调优口).
+
+    configure callback: 每 connection 注册 pgvector adapter, 让 vector(1024)
+    列能直接绑 list[float] / np.ndarray, 读出 np.ndarray.
+    """
     global _async_pool
     if _async_pool is None:
         _async_pool = AsyncConnectionPool(
             _get_dsn(),
             min_size=int(os.environ.get("EXPLAIN_DB_POOL_MIN", "2")),
             max_size=int(os.environ.get("EXPLAIN_DB_POOL_MAX", "10")),
-            timeout=int(os.environ.get("EXPLAIN_DB_CONNECT_TIMEOUT_S", "5")),
+            # default 10s: register_vector_async configure 跑 oid lookup query,
+            # 远程 PG pre-warm 2 conn 时 5s 容易超 (实测 17s, 真实环境调高安全).
+            timeout=int(os.environ.get("EXPLAIN_DB_CONNECT_TIMEOUT_S", "10")),
             open=False,
+            configure=register_vector_async,
         )
         await _async_pool.open()
     return _async_pool
 
 
 def get_sync_pool() -> ConnectionPool:
-    """Lazy 单例 sync pool (cli subcommand 用, 避免 asyncio.run 包裹)."""
+    """Lazy 单例 sync pool (cli subcommand 用, 避免 asyncio.run 包裹).
+
+    configure callback: 同 async pool, 注册 pgvector sync adapter.
+    """
     global _sync_pool
     if _sync_pool is None:
         _sync_pool = ConnectionPool(
@@ -62,6 +73,7 @@ def get_sync_pool() -> ConnectionPool:
             max_size=5,
             timeout=5,
             open=False,
+            configure=register_vector,
         )
         _sync_pool.open()
     return _sync_pool
@@ -91,26 +103,30 @@ async def verify_connection() -> None:
 
 
 async def _insert_var(conn, var: dict[str, Any]) -> None:
-    """Insert 1 var (无 embedding 列, Wave 3 加 embedding 支持).
+    """Insert 1 var (含可选 embedding 列, Wave 3).
 
     var 必含 14 字段: global_id, name, description, abstraction_level, epistemic,
     canonical_mechanism, canonical_signature, canonical_model_ver,
     reuse_count, avg_essentialness, avg_consistency,
     first_seen_at, last_seen_at, source_sessions.
+
+    var.get('embedding') 可选, list[float] (len 1024) / np.ndarray / None.
+    pgvector adapter 已在 pool configure 注册, list 自动转 vector.
     """
+    params = {**var, "embedding": var.get("embedding")}
     await conn.execute(
         """INSERT INTO variables (
             global_id, name, description, abstraction_level, epistemic,
             canonical_mechanism, canonical_signature, canonical_model_ver,
             reuse_count, avg_essentialness, avg_consistency,
-            first_seen_at, last_seen_at, source_sessions
+            first_seen_at, last_seen_at, source_sessions, embedding
         ) VALUES (
             %(global_id)s, %(name)s, %(description)s, %(abstraction_level)s, %(epistemic)s,
             %(canonical_mechanism)s, %(canonical_signature)s, %(canonical_model_ver)s,
             %(reuse_count)s, %(avg_essentialness)s, %(avg_consistency)s,
-            %(first_seen_at)s, %(last_seen_at)s, %(source_sessions)s
+            %(first_seen_at)s, %(last_seen_at)s, %(source_sessions)s, %(embedding)s
         )""",
-        var,
+        params,
     )
 
 
