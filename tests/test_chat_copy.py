@@ -297,3 +297,43 @@ class TestHistoryCopy:
         # positional 含 --limit / --type 关键词
         m = err_history_positional()
         assert "--limit" in m and "--type" in m
+
+
+class TestDeleteCopy:
+    """Phase 17.2 Task 22: delete 4 zh string."""
+
+    def test_status_delete_confirm_exists_and_chinese(self):
+        from explain_engine.chat.chat_copy import STATUS_DELETE_CONFIRM
+        assert isinstance(STATUS_DELETE_CONFIRM, str)
+        assert "确认" in STATUS_DELETE_CONFIRM
+        # 含 {sid} placeholder 给 cli .format() 用
+        assert "{sid}" in STATUS_DELETE_CONFIRM
+
+    def test_msg_delete_done_includes_sid(self):
+        from explain_engine.chat.chat_copy import msg_delete_done
+        m = msg_delete_done("s_abc12345")
+        assert "s_abc12345" in m
+        assert "已删" in m or "删" in m
+
+    def test_err_delete_not_found_includes_sid(self):
+        from explain_engine.chat.chat_copy import err_delete_not_found
+        m = err_delete_not_found("s_xxx")
+        assert "s_xxx" in m
+        assert "不存在" in m
+
+    def test_err_delete_active_mentions_current_and_action(self):
+        from explain_engine.chat.chat_copy import err_delete_active
+        m = err_delete_active("s_active")
+        assert "s_active" in m
+        # 提示是当前 + 给出动作建议
+        assert "当前" in m
+        assert "/switch" in m or "/new" in m or "/resume" in m
+
+    def test_command_descriptions_has_delete(self):
+        """delete 注册到 COMMAND_DESCRIPTIONS 让 /help 可见."""
+        from explain_engine.chat.chat_copy import COMMAND_DESCRIPTIONS
+        assert "delete" in COMMAND_DESCRIPTIONS
+        desc = COMMAND_DESCRIPTIONS["delete"]
+        assert len(desc) <= 50
+        import re
+        assert re.search(r"[一-鿿]", desc), "delete desc 应含中文"

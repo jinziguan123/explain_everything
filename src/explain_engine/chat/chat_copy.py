@@ -83,6 +83,7 @@ COMMAND_DESCRIPTIONS: dict[str, str] = {
     "new":      "重置当前 chat, 回到刚启动的空白状态",
     "resume":   "切换到历史 session",
     "list":     "列出当前项目所有 session",
+    "delete":   "删除某个 session (默认二次确认; --force 跳过)",
     "lexicon":  "查看跨 session 累积的概念库",
     "theories": "查看跨 session 发现的稳定因果模式",
     "theory":   "看某 theory 详情 / 拒绝它 (/theory <id> [reject])",
@@ -104,7 +105,7 @@ HELP_GROUPS_ZH: list[tuple[str, list[str]]] = [
     ("推进 session",              ["compress", "run", "rescore"]),
     ("干预分析 (需先 /compress)", ["predict", "counterfactual"]),
     ("查看状态 (只读)",           ["show", "graph", "check"]),
-    ("管理 session",              ["new", "resume", "list", "lexicon", "theories", "theory", "history"]),
+    ("管理 session",              ["new", "resume", "list", "delete", "lexicon", "theories", "theory", "history"]),
     ("其他",                      ["budget", "compact", "save", "migrate"]),
     ("帮助 / 退出",               ["help", "quit"]),
 ]
@@ -276,3 +277,23 @@ def err_history_type_invalid(v) -> str:
 
 def err_history_positional() -> str:
     return "错误: /history 不接位置参数, 用 --limit / --type."
+
+
+# ── Phase 17.2 Feature C: /delete + cli delete 中文文案 ──
+
+STATUS_DELETE_CONFIRM = "确认删 {sid}? [y/N]: "
+
+
+def msg_delete_done(sid: str) -> str:
+    """成功删 session 后给用户看的绿字消息."""
+    return f"已删 session {sid}"
+
+
+def err_delete_not_found(sid: str) -> str:
+    """cli / slash 抓 FileNotFoundError 后展示."""
+    return f"session {sid} 不存在"
+
+
+def err_delete_active(sid: str) -> str:
+    """slash 拒绝删当前活动 session, 给出可执行动作建议."""
+    return f"{sid} 是当前活动 session, 请先 /resume 切到别的 session 或 /new 重置后再删"
