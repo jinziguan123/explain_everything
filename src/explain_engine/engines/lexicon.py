@@ -246,12 +246,17 @@ async def _build_canonical_mechanism(
     node: VariableNode,
     session: Session,
     llm: LLMClient | None,
+    light_llm: LLMClient | None = None,
 ) -> str:
     """生 canonical_mechanism 1-line summary.
 
     有 llm: 调 LLM 用 node + neighbors 信息 prompt 出 1 句话.
     无 llm 或 LLMError: edge-based fallback —
       "通常 cause [outgoing target names]; 由 [incoming source names] cause".
+
+    Phase 17.2 Task 7: optional light_llm 参数 — 不 None 时通过
+    with_light_fallback 先走 cheap model, 失败自动 fallback 主 llm.
+    None (默) → 行为跟现一致 (主 llm 直接调), 零回归.
     """
     g = session.state.graph
     nid = node.id
@@ -287,11 +292,19 @@ async def _build_canonical_mechanism(
         "请用 1 句中文 (<60 字) 总结它的 canonical mechanism, "
         "格式: '通常 cause X; 由 Y cause'. 仅输 1 行, 无解释."
     )
-    try:
-        response = await llm.chat(
+
+    async def _do_call(active_llm: LLMClient):
+        return await active_llm.chat(
             messages=[Message(role="user", content=prompt)],
             schema=None,
         )
+
+    try:
+        if light_llm is not None:
+            from explain_engine.llm.light_fallback import with_light_fallback
+            response = await with_light_fallback(light_llm, llm, _do_call)
+        else:
+            response = await _do_call(llm)
         text = (response.text or "").strip()
         if not text:
             return _fallback()
