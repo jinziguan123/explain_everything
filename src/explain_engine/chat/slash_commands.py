@@ -2073,6 +2073,78 @@ async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     )]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Phase 18 Task 9-14: /deepen — ephemeral 显式触发 bootstrap pipeline.
+#
+# Hybrid 设计 (chat REPL 默 system-1, /deepen escalate 到 reasoning pipeline):
+# - ephemeral 状态: /deepen [Q] 走 promote_to_persistent (= 现 bootstrap pipeline)
+# - 已 promote 的 ChatSession 内: /deepen 拒绝 + 提示 /new (一 session 一 /deepen)
+# - 不带参 → 取 transcript 末最近 user msg fallback
+# - transcript 空 + 不带参 → slash_error 用法提示
+# - promote 失败 → slash_error 保留 ephemeral (REPL outer loop 不切 chat var)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
+    """Phase 18: /deepen [question] — ephemeral 状态显式触发 bootstrap pipeline."""
+    from explain_engine.chat.chat_copy import (
+        err_deepen_already_promoted,
+        err_deepen_no_question,
+        msg_deepen_promote_start,
+    )
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.session import ChatEvent
+
+    # 已 promote 的 ChatSession 内 /deepen → 拒绝 + 提示 /new
+    if not isinstance(chat, EphemeralChatSession):
+        # ChatSession.state 是 CognitiveState (field=root_question, 非 question);
+        # _handle_show 用 chat._session.meta.question, 这里跟它一致.
+        sess_meta = getattr(chat, "_session", None)
+        if sess_meta is not None and hasattr(sess_meta, "meta"):
+            current_q = sess_meta.meta.question
+        else:
+            current_q = getattr(getattr(chat, "state", None), "root_question", "?")
+        return [ChatEvent(
+            type="slash_error",
+            content=err_deepen_already_promoted(current_q),
+        )]
+
+    # 取 question: 带参用参; 不带参倒序取 transcript 末 role=user
+    if args:
+        question = " ".join(args)
+    else:
+        question = None
+        for msg in reversed(chat.transcript):
+            if msg.get("role") == "user":
+                question = msg["content"]
+                break
+        if question is None:
+            return [ChatEvent(type="slash_error", content=err_deepen_no_question())]
+
+    # LLM 注入: Task 12 加 EphemeralChatSession.llm field 让 REPL outer loop
+    # 注入; test 路径用 _llm_for_test 占位 (handler 内 fallback).
+    llm = getattr(chat, "llm", None) or getattr(chat, "_llm_for_test", None)
+    if llm is None:
+        return [ChatEvent(
+            type="slash_error",
+            content="LLM 未配置, 无法 /deepen. 设 LLM_* env 后重启 REPL.",
+        )]
+
+    try:
+        real_chat = await chat.promote_to_persistent(question, llm)
+    except Exception as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"建模失败: {type(exc).__name__}: {exc}",
+        )]
+
+    return [ChatEvent(
+        type="slash_deepen_promoted",
+        content=msg_deepen_promote_start(question),
+        metadata={"sid": real_chat.sid},
+    )]
+
+
 # Registry — 17 default slash commands + 1 alias (/cf → counterfactual).
 # 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作 → engines → cross-session"分组.
 #
@@ -2109,6 +2181,8 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     # Phase 16.2 Wave 5: /history — 查看本 session 操作历史 (默认 30 / 上限 200).
     SlashCommand("history",        COMMAND_DESCRIPTIONS["history"],        _wrap_handler("history", _handle_history)),
     SlashCommand("migrate",        COMMAND_DESCRIPTIONS["migrate"],        _wrap_handler("migrate", _handle_migrate)),
+    # Phase 18 Task 9: /deepen — ephemeral 显式触发 promote_to_persistent.
+    SlashCommand("deepen",         COMMAND_DESCRIPTIONS["deepen"],         _wrap_handler("deepen", _handle_deepen)),
 )
 
 
