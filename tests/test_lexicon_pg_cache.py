@@ -391,3 +391,78 @@ class TestCacheHitSkipsLlm:
         assert llm_mock.method_calls == []
         # 5. 验证: _build_canonical_mechanism 也没被调
         build_mock.assert_not_called()
+
+
+# ── Task 5.5: cache miss → LLM → 后续 hit (mimics flush sequence) ──────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestCacheMissThenHit:
+    """Phase 17.1 Task 5.5: 完整 lifecycle —
+      1. 首次调 _cached → cache miss → LLM mock 调 1 次 → 返 'first canon'
+      2. 模拟 flush_to_lexicon 写 var (含 signature + canonical) 进 DB
+      3. 第 2 次调 _cached → cache hit → LLM mock 不再被调
+
+    Wave 5 暂不改 flush_to_lexicon 调 cached, 所以第 2 步手动 insert var 来
+    模拟 flush 之后的状态.
+    """
+
+    @pytest.mark.asyncio
+    async def test_miss_then_hit_skips_second_llm_call(self):
+        from explain_engine.persistence import lexicon_pg
+        from explain_engine.persistence.lexicon_pg import (
+            _build_canonical_mechanism_cached,
+            compute_canonical_signature,
+            get_async_pool,
+        )
+
+        node = _FakeNode(
+            id="n_miss",
+            name="miss_var",
+            description="miss desc",
+            abstraction_level=1,
+            epistemic="insight",
+        )
+        session = _FakeSession(edges=[_FakeEdge("n_miss", "n_x")])
+        pool = await get_async_pool()
+
+        # 1. 算出本 node 的实际 signature (后续 insert 用同一个)
+        signature = compute_canonical_signature(
+            node, [e for e in session.state.graph.edges.values()],
+        )
+
+        # 2. 第 1 次: cache miss → LLM mock 被调 1 次
+        build_mock = AsyncMock(return_value="first canon")
+        with patch.object(
+            lexicon_pg, "_build_canonical_mechanism", new=build_mock,
+        ):
+            result_1 = await _build_canonical_mechanism_cached(
+                node, session, llm=None, pool=pool,
+            )
+        assert result_1 == "first canon"
+        assert build_mock.call_count == 1
+
+        # 3. 模拟 flush_to_lexicon 写 var (实际是 flush 写, 这里手动 insert):
+        #    signature 跟 node 实际算出的一致, canonical 跟 LLM 返的一致.
+        _insert_var_with_signature(
+            global_id="v_miss0001",
+            name=node.name,
+            description=node.description,
+            abstraction_level=node.abstraction_level,
+            epistemic=node.epistemic,
+            canonical_mechanism="first canon",
+            canonical_signature=signature,
+            canonical_model_ver="v1",
+        )
+
+        # 4. 第 2 次: cache hit → LLM mock 不再被调
+        build_mock_2 = AsyncMock(return_value="should not be called")
+        with patch.object(
+            lexicon_pg, "_build_canonical_mechanism", new=build_mock_2,
+        ):
+            result_2 = await _build_canonical_mechanism_cached(
+                node, session, llm=None, pool=pool,
+            )
+        assert result_2 == "first canon"
+        build_mock_2.assert_not_called()
