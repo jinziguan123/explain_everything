@@ -1,0 +1,153 @@
+"""Phase 17.1 Wave 5: canonical mechanism cache (Track B) tests.
+
+Wave 5 加 `compute_canonical_signature` + `_build_canonical_mechanism_cached`,
+让重复 var (同 name + desc + level + epi + edge topology) 跳 LLM 直返已存 canonical.
+省 50-80% LLM cost (重复 abstraction 不重算 canonical sentence).
+
+每 task 一 TestXxx class, DB 涉及的标 `@_skip_no_test_db` + `@reset_pg`.
+"""
+from __future__ import annotations
+
+import os
+
+import pytest
+
+# 没设 EXPLAIN_TEST_DB_URL 时 skip (跟 test_lexicon_pg_pool.py 同)
+_skip_no_test_db = pytest.mark.skipif(
+    os.environ.get("EXPLAIN_TEST_DB_URL") is None,
+    reason="EXPLAIN_TEST_DB_URL not set (见 deploy/postgres/README.md '建 test db' 一节)",
+)
+
+
+# ── Fake helpers (模拟 VariableNode / RelationEdge / Session) ──────────────
+
+
+class _FakeNode:
+    """模拟 VariableNode 仅供 cache test 用."""
+
+    def __init__(
+        self,
+        id: str = "n1",
+        name: str = "默认名",
+        description: str = "默认描述",
+        abstraction_level: int = 1,
+        epistemic: str = "insight",
+        activation: float = 0.7,
+        stability: float = 0.5,
+    ):
+        self.id = id
+        self.name = name
+        self.description = description
+        self.abstraction_level = abstraction_level
+        self.epistemic = epistemic
+        self.activation = activation
+        self.stability = stability
+
+
+class _FakeEdge:
+    def __init__(
+        self,
+        source_node: str,
+        target_node: str,
+        relation_type: str = "manifests_as",
+    ):
+        self.source_node = source_node
+        self.target_node = target_node
+        self.relation_type = relation_type
+
+
+class _FakeGraph:
+    def __init__(self, edges: list[_FakeEdge] | None = None, nodes: dict | None = None):
+        self.edges = {f"e{i}": e for i, e in enumerate(edges or [])}
+        self.nodes = nodes or {}
+
+
+class _FakeState:
+    def __init__(self, edges: list[_FakeEdge] | None = None, nodes: dict | None = None):
+        self.graph = _FakeGraph(edges, nodes)
+
+
+class _FakeMeta:
+    def __init__(self, session_id: str = "s_test"):
+        self.session_id = session_id
+
+
+class _FakeSession:
+    def __init__(
+        self,
+        edges: list[_FakeEdge] | None = None,
+        nodes: dict | None = None,
+        sid: str = "s_test",
+    ):
+        self.state = _FakeState(edges, nodes)
+        self.meta = _FakeMeta(sid)
+
+
+# ── Task 5.1: compute_canonical_signature ──────────────────────────────────
+
+
+class TestComputeCanonicalSignature:
+    """Phase 17.1 Task 5.1: compute_canonical_signature sha256[:16].
+
+    Hash 输入 = name + desc + abstraction_level + epistemic + sorted(edge_keys).
+    edge 只算 source==node.id 或 target==node.id 的 (排除无关 edge), 排序保
+    deterministic.
+
+    改 LLM prompt 时手 bump CANONICAL_MODEL_VERSION → 旧 cache 全 miss → 重 build.
+    """
+
+    def test_signature_stable_same_input(self):
+        """同 node + edges 调 2 次返同 hash."""
+        from explain_engine.persistence.lexicon_pg import (
+            compute_canonical_signature,
+        )
+
+        node = _FakeNode(id="n1", name="X")
+        edges = [_FakeEdge("n1", "n2"), _FakeEdge("n3", "n1")]
+        sig1 = compute_canonical_signature(node, edges)
+        sig2 = compute_canonical_signature(node, edges)
+        assert sig1 == sig2
+        assert isinstance(sig1, str)
+        assert len(sig1) == 16  # sha256 hex truncated to 16
+
+    def test_signature_changes_on_edge_topology(self):
+        """加 1 个相关 edge 后 hash 变."""
+        from explain_engine.persistence.lexicon_pg import (
+            compute_canonical_signature,
+        )
+
+        node = _FakeNode(id="n1")
+        sig_before = compute_canonical_signature(node, [_FakeEdge("n1", "n2")])
+        sig_after = compute_canonical_signature(
+            node, [_FakeEdge("n1", "n2"), _FakeEdge("n1", "n3")],
+        )
+        assert sig_before != sig_after
+
+    def test_signature_changes_on_name(self):
+        """node.name 改 hash 变."""
+        from explain_engine.persistence.lexicon_pg import (
+            compute_canonical_signature,
+        )
+
+        edges = [_FakeEdge("n1", "n2")]
+        sig_a = compute_canonical_signature(_FakeNode(id="n1", name="A"), edges)
+        sig_b = compute_canonical_signature(_FakeNode(id="n1", name="B"), edges)
+        assert sig_a != sig_b
+
+    def test_signature_irrelevant_edges_excluded(self):
+        """edges 含 source≠node.id 且 target≠node.id 的, hash 不受影响."""
+        from explain_engine.persistence.lexicon_pg import (
+            compute_canonical_signature,
+        )
+
+        node = _FakeNode(id="n1")
+        # 一组只含 node 自己的 edges
+        only_relevant = [_FakeEdge("n1", "n2")]
+        # 另一组含 1 个无关 edge (source/target 都不是 n1)
+        with_irrelevant = [
+            _FakeEdge("n1", "n2"),
+            _FakeEdge("n7", "n8"),  # 完全无关
+        ]
+        sig1 = compute_canonical_signature(node, only_relevant)
+        sig2 = compute_canonical_signature(node, with_irrelevant)
+        assert sig1 == sig2, "无关 edge 不应影响 signature"

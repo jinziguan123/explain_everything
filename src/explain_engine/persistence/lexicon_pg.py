@@ -10,9 +10,17 @@ Internal (Wave 2):
 - LexiconDBError 异常类
 - _get_dsn / get_async_pool / get_sync_pool / verify_connection
 - _insert_var / _find_var_by_id / _update_var_fitness / _list_vars_top_k / _delete_var
+
+Internal (Wave 5: canonical mechanism cache, Track B):
+- CANONICAL_MODEL_VERSION (module const, bump 'v2' invalidate 全 cache)
+- compute_canonical_signature(node, edges) -> str  (sha256[:16] of structural fields)
+- _get_node_edges(node, session) -> list  (取相关 edge)
+- _build_canonical_mechanism_cached(node, session, llm, pool) -> str
+  (cache hit 跳 LLM; miss 调 Wave 4 _build_canonical_mechanism)
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import datetime
 from typing import Any
@@ -22,6 +30,10 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 DEFAULT_DSN = "postgresql://explain:changeme@127.0.0.1:5432/explain"
+
+# Wave 5: 改 LLM canonical prompt 时手 bump 'v2', 旧 v1 cache 全 miss → 重 build.
+# Module-level 常量, monkeypatch.setattr 改值后函数下次取新 (globals lookup).
+CANONICAL_MODEL_VERSION = "v1"
 
 # Module-level pool 单例 (lazy open). reset_pg fixture teardown 时清 None
 # 让下个 test 用新 dsn 重建.
@@ -546,6 +558,38 @@ def get_lexicon_top_k_for_compress(
                 (k,),
             )
             return cur.fetchall()
+
+
+# ── Wave 5: canonical mechanism cache (Track B) ─────────────────────────
+
+
+def compute_canonical_signature(
+    node: Any,           # VariableNode
+    edges: list[Any],    # list[RelationEdge]
+) -> str:
+    """Phase 17.1 Task 5.1: 稳定 sha256[:16] of (name + desc + level + epi + sorted edge keys).
+
+    edges 只算 source==node.id 或 target==node.id 的 (排除无关 edge), 排序保
+    deterministic — 同一 node 在同一 graph topology 下永远算出同一 signature.
+
+    改 LLM canonical prompt 时手 bump CANONICAL_MODEL_VERSION → 旧 v1 cache 全 miss
+    → 重新调 LLM 生 v2 canonical.
+
+    返 16 char hex string (sha256 前 16 char, 冲突概率 ≈ 1/2^64 远超实用阈值).
+    """
+    edge_keys = sorted(
+        f"{e.source_node}→{e.relation_type}→{e.target_node}"
+        for e in edges
+        if e.source_node == node.id or e.target_node == node.id
+    )
+    payload = "\n".join([
+        f"name={node.name}",
+        f"desc={node.description}",
+        f"level={node.abstraction_level}",
+        f"epi={node.epistemic}",
+        f"edges={'|'.join(edge_keys)}",
+    ])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def _render_lexicon_for_prompt(vars_list: list[dict[str, Any]]) -> str:
