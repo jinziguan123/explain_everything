@@ -5,7 +5,7 @@
 - Task 17: /deepen 成功 → slash_deepen_promoted event 触发 chat var 切到 ChatSession
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
