@@ -110,3 +110,26 @@ async def test_send_user_message_second_turn_passes_history_to_llm(tmp_path, mon
     assert "之前问题" in contents
     assert "之前回答" in contents
     assert "新问题" in contents
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_chat_does_not_persist_transcript(tmp_path, monkeypatch):
+    """ephemeral 下 send_user_message 后, storage_v2 不写 transcript.jsonl."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+
+    llm = AsyncMock()
+    llm.chat.return_value = MagicMock(text="answer")
+
+    async for _ in ephemeral.send_user_message("问题", llm):
+        pass
+
+    # 验 storage_v2 没有任何 session_dir (ephemeral.sid is None)
+    assert ephemeral.sid is None
+    # 项目 dir 应该为空 / 无 sessions
+    sessions_root = storage.project_dir() / "sessions"
+    if sessions_root.exists():
+        assert list(sessions_root.iterdir()) == []  # 没 session dir
