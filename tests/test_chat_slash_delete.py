@@ -109,3 +109,46 @@ class TestSlashDeleteCurrentSession:
         # 拒绝逻辑应先于 --force 检查, content 应包含 "当前"
         assert events[0].type == "slash_error"
         assert "当前" in events[0].content
+
+
+class TestSlashDeleteForceSuccess:
+    """Phase 17.2 Task 27: 成功 path — /delete <非当前 sid> --force."""
+
+    @pytest.mark.asyncio
+    async def test_delete_other_session_with_force_success(self):
+        """chat 在 s_a, /delete s_b --force → slash_delete event + s_b dir 没了."""
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        # 预创 2 个 session
+        _make_done_session("s_de300a01")  # current
+        _make_done_session("s_de300b02")  # 要删的
+        chat = ChatSession("s_de300a01")
+        cmd = _command_by_name("delete")
+
+        storage = StorageV2()
+        assert storage.session_dir("s_de300a01").exists()
+        assert storage.session_dir("s_de300b02").exists()
+
+        events = await cmd.handler(chat, ["s_de300b02", "--force"])
+        # 应是 slash_delete event
+        assert events[0].type == "slash_delete"
+        assert "s_de300b02" in events[0].content
+        assert "已删" in events[0].content
+
+        # s_de300b02 dir 被删, s_de300a01 (当前) 保留
+        assert not storage.session_dir("s_de300b02").exists()
+        assert storage.session_dir("s_de300a01").exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_via_dispatch_slash(self):
+        """走完整 dispatch_slash 链路 ("/delete s_x --force" 字符串) 应同结果."""
+        from explain_engine.chat.slash_commands import dispatch_slash
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        _make_done_session("s_de300a03")  # current
+        _make_done_session("s_de300b04")  # target
+
+        chat = ChatSession("s_de300a03")
+        events = await dispatch_slash(chat, "/delete s_de300b04 --force")
+        assert events[0].type == "slash_delete"
+        assert not StorageV2().session_dir("s_de300b04").exists()
