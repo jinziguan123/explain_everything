@@ -153,3 +153,11 @@ class SessionStore:
                 continue
         metas.sort(key=lambda m: m.created_at, reverse=True)
         return metas
+
+    def delete(self, session_id: str) -> None:
+        """Phase 17.2 Feature C: 删整个 session dir.
+
+        Thin wrapper → StorageV2.delete_session. 不存在 FileNotFoundError 上层抓.
+        权限 / IO 失败 OSError 传播 (不静默吞).
+        """
+        self._storage.delete_session(session_id)
