@@ -28,3 +28,17 @@ def test_mechanism_yaml_loads():
     assert "{question}" in p["user_template"]
     assert "{min_count}" in p["user_template"]
     assert "{max_count}" in p["user_template"]
+
+
+def test_phenomenon_yaml_loads():
+    """phenomenon: 本域 ≥ 40% + 跨域 ≤ 60% (中间偏跨)."""
+    p = load_prompt("variable_extraction_phenomenon")
+    assert "system" in p
+    assert "user_template" in p
+    # 关键 invariant: 40/60 split
+    assert "40%" in p["system"]
+    assert "60%" in p["system"]
+    assert "本域" in p["system"]
+    assert "{question}" in p["user_template"]
+    assert "{min_count}" in p["user_template"]
+    assert "{max_count}" in p["user_template"]
