@@ -69,3 +69,35 @@ def mock_llm_response():
         )
 
     return _make
+
+
+# ── Phase 17.1 Wave 1: testcontainers pgvector container per test session ──
+#
+# Lazy: 只在 test 显式引用 pg_container fixture (或经 reset_pg 间接引用) 才 spin.
+# 既有 1135 test 不触本 fixture, 启动速度不受影响.
+#
+# 首次跑: docker pull pgvector/pgvector:pg16 (~150MB), 30s-2min 取决于网络.
+# 后续: container 复用整 test session, 各 test 经 reset_pg TRUNCATE 隔离.
+
+
+@pytest.fixture(scope="session")
+def pg_container():
+    """Phase 17.1: pgvector container per session, 跑 DDL_INIT_SQL 起 schema."""
+    pytest.importorskip("testcontainers.postgres")
+    import psycopg
+    from testcontainers.postgres import PostgresContainer
+
+    from explain_engine.persistence.lexicon_pg_schema import DDL_INIT_SQL
+
+    pg = PostgresContainer("pgvector/pgvector:pg16")
+    pg.start()
+    try:
+        # testcontainers 默认返 SQLAlchemy 风格 dsn, 剥前缀给 psycopg3
+        url = pg.get_connection_url()
+        dsn = url.replace("postgresql+psycopg2://", "postgresql://")
+        # Apply schema (CREATE EXTENSION + 3 tables + 4 indexes + trigger + meta seed)
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute(DDL_INIT_SQL)
+        yield dsn
+    finally:
+        pg.stop()
