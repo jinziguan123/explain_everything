@@ -308,6 +308,10 @@ class TestDeleteCopy:
         assert "确认" in STATUS_DELETE_CONFIRM
         # 含 {sid} placeholder 给 cli .format() 用
         assert "{sid}" in STATUS_DELETE_CONFIRM
+        # Phase 17.2 Wave 3 review fix (I-1): template 不应含 [y/N] —
+        # typer.confirm 会自动 append, 重复会让 cli 输出双 [y/N].
+        assert "[y/N]" not in STATUS_DELETE_CONFIRM
+        assert "[Y/n]" not in STATUS_DELETE_CONFIRM
 
     def test_msg_delete_done_includes_sid(self):
         from explain_engine.chat.chat_copy import msg_delete_done

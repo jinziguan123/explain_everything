@@ -66,11 +66,15 @@ class TestSlashDeleteHandler:
 
     @pytest.mark.asyncio
     async def test_nonexistent_sid_with_force(self):
-        """/delete <不存在> --force → err_delete_not_found event."""
+        """/delete <不存在但格式合规> --force → err_delete_not_found event.
+
+        Phase 17.2 Wave 3 review fix (C-1): sid 必须先过 _SESSION_ID_RE, 旧
+        's_notexist' 不合规 → 走 ValueError 分支, 故改 's_deadbeef'.
+        """
         _make_done_session("s_de100004")
         chat = ChatSession("s_de100004")
         cmd = _command_by_name("delete")
-        events = await cmd.handler(chat, ["s_notexist", "--force"])
+        events = await cmd.handler(chat, ["s_deadbeef", "--force"])
         assert events[0].type == "slash_error"
         assert "不存在" in events[0].content
 
@@ -152,3 +156,48 @@ class TestSlashDeleteForceSuccess:
         events = await dispatch_slash(chat, "/delete s_de300b04 --force")
         assert events[0].type == "slash_delete"
         assert not StorageV2().session_dir("s_de300b04").exists()
+
+
+# ── Phase 17.2 Wave 3 review fix ──
+
+
+class TestSlashDeleteReviewFix:
+    """I-2 + C-1: OSError 抓 + path traversal 防御."""
+
+    @pytest.mark.asyncio
+    async def test_oserror_returns_slash_error(self, monkeypatch):
+        """I-2: SessionStore.delete raise PermissionError → slash_error
+        + content 含 '删除失败', 不抛 raw exception.
+
+        保护 OSError 抓 branch — 若 future 重构漏抓, 此 test 静默 regress.
+        """
+        from explain_engine.persistence.session import SessionStore
+
+        _make_done_session("s_de400001")  # current
+        _make_done_session("s_de400002")  # target (要 delete 的 — chat.sid != target)
+        chat = ChatSession("s_de400001")
+        cmd = _command_by_name("delete")
+
+        def boom(self, s):
+            raise PermissionError("simulated no-write")
+        monkeypatch.setattr(SessionStore, "delete", boom)
+
+        events = await cmd.handler(chat, ["s_de400002", "--force"])
+        assert events[0].type == "slash_error"
+        assert "删除失败" in events[0].content or "IO/权限" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_rejected(self):
+        """C-1: /delete . --force → slash_error '非法 session id', 不真删."""
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        _make_done_session("s_de500001")  # current + 必须 survive
+        chat = ChatSession("s_de500001")
+        cmd = _command_by_name("delete")
+
+        events = await cmd.handler(chat, [".", "--force"])
+        assert events[0].type == "slash_error"
+        assert "非法" in events[0].content or "invalid" in events[0].content
+
+        # 真正的 session 必须仍在
+        assert StorageV2().session_dir("s_de500001").exists()

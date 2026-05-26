@@ -16,11 +16,18 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Phase 17.2 Wave 3 review fix (C-1): sid must match this regex before any
+# filesystem operation that interpolates it into a path (avoid path traversal
+# like '.', 'a/../b', '/etc'). Copied from session.py — keep both in sync.
+# 不抽公共模块, 避免循环 import (storage_v2 是 session.py 的 dep).
+_SESSION_ID_RE = re.compile(r"^s_[0-9a-f]{8}$")
 
 
 def compute_project_id() -> str:
@@ -191,11 +198,35 @@ class StorageV2:
 
         Phase 17.2 Feature C: chat /delete + cli delete 共用此底层 API.
 
+        Phase 17.2 Wave 3 review fix (C-1, CRITICAL): sid 必须 match
+        `^s_[0-9a-f]{8}$`, 否则 ValueError. 防止 path traversal —
+        历史 PoC: `explain delete . --force` 会 rmtree 整个 sessions/ 目录.
+        Defense-in-depth: 二次 verify resolved path 在 sessions root 内,
+        防符号链接等绕过 (虽然 regex 已严, 加一层保险, security 不嫌严).
+
         Raises:
+            ValueError: sid 格式非法 (不匹配 regex 或 resolve 出 sessions root).
             FileNotFoundError: session dir 不存在 (caller 抓 → 友好 zh msg).
             OSError: rmtree 权限 / IO 失败 (caller 报错 exit 1, 不静默).
         """
+        if not _SESSION_ID_RE.match(sid):
+            raise ValueError(f"invalid sid format: {sid!r}")
+
         d = self.session_dir(sid)
         if not d.exists():
             raise FileNotFoundError(f"session {sid} not found at {d}")
+
+        # Defense in depth: resolved path must live under sessions root.
+        # Regex 已严, 但若 sessions_root 本身有 symlink 等, 再 verify 一次.
+        sessions_root = (self.project_dir() / "sessions").resolve()
+        d_resolved = d.resolve()
+        try:
+            d_resolved.relative_to(sessions_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"sid {sid!r} resolves outside sessions root"
+            ) from exc
+        if d_resolved == sessions_root:
+            raise ValueError(f"sid {sid!r} resolves to sessions root itself")
+
         shutil.rmtree(d)

@@ -1711,6 +1711,13 @@ async def _handle_delete(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
             type="slash_error",
             content=err_delete_not_found(sid),
         )]
+    except ValueError as exc:
+        # Phase 17.2 Wave 3 review fix (C-1): StorageV2 拒绝非法 sid 格式 →
+        # 友好 slash_error, 不抛 raw exception.
+        return [ChatEvent(
+            type="slash_error",
+            content=f"非法 session id: {exc}",
+        )]
     except OSError as exc:
         return [ChatEvent(
             type="slash_error",

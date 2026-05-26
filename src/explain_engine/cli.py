@@ -931,7 +931,9 @@ def delete_cmd(
 
     store = _get_store()
     if not force:
-        prompt = STATUS_DELETE_CONFIRM.format(sid=session_id).rstrip(": ")
+        # Phase 17.2 Wave 3 review fix (I-1): template 不再含 `[y/N]:`, 让
+        # typer.confirm 自动加, 避免双 [y/N] 显示.
+        prompt = STATUS_DELETE_CONFIRM.format(sid=session_id)
         if not typer.confirm(prompt, default=False):
             console.print("[yellow]已取消[/yellow]")
             raise typer.Exit(code=0)
@@ -940,6 +942,11 @@ def delete_cmd(
     except FileNotFoundError:
         console.print(f"[red]{err_delete_not_found(session_id)}[/red]")
         raise typer.Exit(code=1) from None
+    except ValueError as exc:
+        # Phase 17.2 Wave 3 review fix (C-1): StorageV2 拒绝非法 sid 格式 →
+        # 友好红字 + exit 1, 不暴 raw stack trace.
+        console.print(f"[red]非法 session id: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
     except OSError as exc:
         console.print(f"[red]删除失败 (IO/权限): {exc}[/red]")
         raise typer.Exit(code=1) from exc

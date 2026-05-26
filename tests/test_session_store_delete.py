@@ -28,7 +28,12 @@ def test_session_store_delete_removes_from_list() -> None:
 
 
 def test_session_store_delete_nonexistent_raises() -> None:
-    """thin wrapper 透传 FileNotFoundError."""
+    """thin wrapper 透传 FileNotFoundError.
+
+    Phase 17.2 Wave 3 review fix (C-1): sid 必须先过 _SESSION_ID_RE 校验, 故旧
+    's_notexist' (10 char 非 8 hex) 不合规 → 会走 ValueError 分支, 改用合规
+    sid 's_deadbeef' 让此 test 仍验 FileNotFoundError 透传.
+    """
     store = SessionStore()
     with pytest.raises(FileNotFoundError):
-        store.delete("s_notexist")
+        store.delete("s_deadbeef")

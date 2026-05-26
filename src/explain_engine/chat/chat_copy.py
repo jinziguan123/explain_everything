@@ -281,7 +281,7 @@ def err_history_positional() -> str:
 
 # ── Phase 17.2 Feature C: /delete + cli delete 中文文案 ──
 
-STATUS_DELETE_CONFIRM = "确认删 {sid}? [y/N]: "
+STATUS_DELETE_CONFIRM = "确认删 {sid}?"
 
 
 def msg_delete_done(sid: str) -> str:

@@ -27,10 +27,14 @@ def test_delete_session_removes_dir() -> None:
 
 
 def test_delete_session_nonexistent_raises() -> None:
-    """不存在的 sid → FileNotFoundError (caller 上层抓 → 友好 zh msg)."""
+    """不存在的 sid (但格式合规) → FileNotFoundError (caller 上层抓 → 友好 zh msg).
+
+    Phase 17.2 Wave 3 review fix (C-1): sid 必须先过 _SESSION_ID_RE 校验, 故
+    旧 's_notexist' (10 char 非 8 hex) 不合规, 改用 's_deadbeef' (8 hex).
+    """
     s = StorageV2()
     with pytest.raises(FileNotFoundError):
-        s.delete_session("s_notexist")
+        s.delete_session("s_deadbeef")
 
 
 def test_delete_session_removes_sidecars() -> None:
@@ -67,3 +71,27 @@ def test_delete_session_removes_sidecars() -> None:
 
     s.delete_session(sid)
     assert not d.exists()
+
+
+# ── Phase 17.2 Wave 3 review fix (C-1): path traversal 防御 ──
+
+
+def test_delete_session_rejects_dot() -> None:
+    """sid='.' 会 rmtree 整个 sessions/ 目录 — 必须 ValueError."""
+    s = StorageV2()
+    with pytest.raises(ValueError, match="invalid sid format"):
+        s.delete_session(".")
+
+
+def test_delete_session_rejects_traversal() -> None:
+    """含 .. 的 sid 会跳出 session_dir — 必须 ValueError."""
+    s = StorageV2()
+    with pytest.raises(ValueError, match="invalid sid format"):
+        s.delete_session("s_aaaaaaaa/../s_bbbbbbbb")
+
+
+def test_delete_session_rejects_absolute() -> None:
+    """绝对路径作 sid (e.g. '/etc') 必须 ValueError."""
+    s = StorageV2()
+    with pytest.raises(ValueError, match="invalid sid format"):
+        s.delete_session("/etc")
