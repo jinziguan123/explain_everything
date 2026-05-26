@@ -327,3 +327,66 @@ class TestUpdateVarFitness:
         assert after["updated_at"] > before["updated_at"]
         # created_at 不变
         assert after["created_at"] == before["created_at"]
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestListVarsTopK:
+    """Phase 17.1 Task 2.7: _list_vars_top_k ORDER BY composite score DESC."""
+
+    @pytest.mark.asyncio
+    async def test_list_vars_top_k_by_composite_score(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _insert_var,
+            _list_vars_top_k,
+            get_async_pool,
+        )
+
+        # 3 var, composite = avg_ess * avg_cons * reuse_count
+        # v_low:    0.1 * 0.1 * 1  = 0.01
+        # v_mid:    0.5 * 0.5 * 4  = 1.00
+        # v_top:    0.9 * 0.9 * 10 = 8.10
+        var_low = _sample_var(
+            global_id="v_low00001",
+            avg_essentialness=0.1,
+            avg_consistency=0.1,
+            reuse_count=1,
+        )
+        var_mid = _sample_var(
+            global_id="v_mid00001",
+            avg_essentialness=0.5,
+            avg_consistency=0.5,
+            reuse_count=4,
+        )
+        var_top = _sample_var(
+            global_id="v_top00001",
+            avg_essentialness=0.9,
+            avg_consistency=0.9,
+            reuse_count=10,
+        )
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            for v in (var_low, var_mid, var_top):
+                await _insert_var(conn, v)
+            top2 = await _list_vars_top_k(conn, k=2)
+
+        assert len(top2) == 2
+        gids = [r["global_id"] for r in top2]
+        assert gids == ["v_top00001", "v_mid00001"]
+        # v_low 应被截
+
+    @pytest.mark.asyncio
+    async def test_list_vars_top_k_default_k_20(self):
+        """k 默认 20 — 全装得下 3 var."""
+        from explain_engine.persistence.lexicon_pg import (
+            _insert_var,
+            _list_vars_top_k,
+            get_async_pool,
+        )
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            for i in range(3):
+                await _insert_var(conn, _sample_var(global_id=f"v_dflt{i:04d}"))
+            rows = await _list_vars_top_k(conn)
+        assert len(rows) == 3

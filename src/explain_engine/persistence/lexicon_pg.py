@@ -144,3 +144,19 @@ async def _update_var_fitness(
            WHERE global_id = %s""",
         (reuse_count, avg_essentialness, avg_consistency, last_seen_at, global_id),
     )
+
+
+async def _list_vars_top_k(conn, k: int = 20) -> list[dict[str, Any]]:
+    """SELECT top-k vars by composite score (avg_ess * avg_cons * reuse_count) DESC.
+
+    composite score 反映 fitness 综合质量 (essential + consistent + 复用频繁).
+    返 list[dict] (dict_row factory), 长度 <= k.
+    """
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            """SELECT * FROM variables
+               ORDER BY (avg_essentialness * avg_consistency * reuse_count) DESC
+               LIMIT %s""",
+            (k,),
+        )
+        return await cur.fetchall()
