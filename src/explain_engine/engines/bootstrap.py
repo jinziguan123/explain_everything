@@ -1,19 +1,45 @@
 """BootstrapEngine — Phase 3 入口。
 
 调 variable_extraction prompt 生 8-15 个 concrete phenomena。
+
+Phase 17.2 Feature A: 加 _classify_question 前置 4-class LLM call (走 light_llm),
+按 type 选 variable_extraction[_<type>].yaml 让不同问题类型 (古典概念 / 技术机制 /
+自然现象 / 现代因果) 有不同 domain 配比.
 """
 
-from typing import TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
 
 from explain_engine.llm.client import LLMClient, Message
 from explain_engine.llm.errors import SchemaValidationError
+from explain_engine.llm.light_fallback import with_light_fallback
 from explain_engine.llm.prompts._loader import load_prompt
 from explain_engine.schema.nodes import VariableNode
 
 if TYPE_CHECKING:
     from explain_engine.engines.theory.theory import Theory
+
+
+logger = logging.getLogger(__name__)
+
+
+QuestionType = Literal[
+    "causal_modern", "concept_explanation", "mechanism", "phenomenon"
+]
+_VALID_TYPES: set[str] = {
+    "causal_modern",
+    "concept_explanation",
+    "mechanism",
+    "phenomenon",
+}
+
+
+class _ClassifyOutput(BaseModel):
+    """question_classify prompt 的 structured output schema."""
+
+    type: str
 
 
 class _PhenomenonOutput(BaseModel):
@@ -25,6 +51,58 @@ class BootstrapOutput(BaseModel):
     """variable_extraction prompt 的 structured output schema。"""
 
     phenomena: list[_PhenomenonOutput]
+
+
+async def _classify_question(
+    question: str,
+    light_llm: LLMClient,
+    main_llm: LLMClient,
+) -> QuestionType:
+    """Phase 17.2 Feature A: 前置问题分类.
+
+    走 light_llm + with_light_fallback (light 失败自动主 LLM). 任何错误 /
+    未知 type / parsed None → fallback "causal_modern" (默认安全, 跨域优先
+    跟 Phase 17.2 前行为一致).
+
+    永不 raise (除 caller 不可恢复 bug). 保证 bootstrap_phenomena 不会因为
+    classify 失败而挂.
+    """
+    prompt = load_prompt("question_classify")
+    messages = [
+        Message(role="system", content=prompt["system"]),
+        Message(
+            role="user",
+            content=prompt["user_template"].format(question=question),
+        ),
+    ]
+
+    async def _do_call(llm: LLMClient):
+        return await llm.chat(messages, schema=_ClassifyOutput)
+
+    try:
+        resp = await with_light_fallback(light_llm, main_llm, _do_call)
+    except Exception as exc:
+        logger.warning(
+            "classify 整体失败 (light + main 全挂), fallback causal_modern: %s",
+            exc,
+        )
+        return "causal_modern"
+
+    if resp.parsed is None:
+        logger.warning("classify 返 parsed=None, fallback causal_modern")
+        return "causal_modern"
+
+    if isinstance(resp.parsed, dict):
+        type_str = resp.parsed.get("type")
+    else:
+        type_str = getattr(resp.parsed, "type", None)
+
+    if type_str not in _VALID_TYPES:
+        logger.warning(
+            "classify 返未知 type %r, fallback causal_modern", type_str
+        )
+        return "causal_modern"
+    return type_str  # type: ignore[return-value]
 
 
 async def bootstrap_phenomena(
