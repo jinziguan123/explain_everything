@@ -73,15 +73,20 @@ async def enter_repl_async() -> None:
         chat: EphemeralChatSession | ChatSession = EphemeralChatSession(
             storage=storage,
             input_provider=_input_provider,
+            llm=llm,  # Phase 18 Task 16: /deepen handler 通过 chat.llm 调 promote
         )
 
         def _print_banner() -> None:
             """启动 banner — /new (slash_reset_to_ephemeral) 也用同一字符串
-            保证视觉一致性. 改这里同时影响启动 + reset 两处."""
+            保证视觉一致性. 改这里同时影响启动 + reset 两处.
+
+            Phase 18: ephemeral 下自然语言 → LLM system-1 chat (handle_user_input);
+            想触发深度建模 pipeline 用 /deepen [问题].
+            """
             console.print(
-                "[bold green]Explain REPL[/bold green] — ephemeral session. "
-                "输入问题创建持久 session, /help 看 slash, /quit 退出, "
-                "ctrl+o 看 log buffer."
+                "[bold green]Explain REPL[/bold green] — ephemeral chat. "
+                "输入问题让 LLM 直接答, /deepen 触发深度建模, "
+                "/help 看 slash, /quit 退出, ctrl+o 看 log buffer."
             )
 
         _print_banner()
@@ -155,23 +160,22 @@ async def enter_repl_async() -> None:
                 continue
 
             # ── 自然语言路径 ──
-            # ephemeral 时: promote_to_persistent (建 real session)
+            # Phase 18 Task 16: ephemeral 自然语言 → handle_user_input (LLM
+            # system-1 chat), 不再 auto promote_to_persistent. Promote 由
+            # 显式 /deepen slash 触发 (见 slash 分支 slash_deepen_promoted handler).
             if isinstance(chat, EphemeralChatSession):
                 if llm is None:
                     console.print(
-                        "[red]LLM 未配置, 无法 bootstrap. 设 LLM_* env 后重启.[/red]"
+                        "[red]LLM 未配置, 无法 chat. 设 LLM_* env 后重启.[/red]"
                     )
                     continue
                 try:
-                    chat = await chat.promote_to_persistent(text, llm)
+                    async for ev in chat.handle_user_input(text, llm):
+                        _render_event(console, ev)
                 except Exception as exc:
                     console.print(
-                        f"[red]建 session 失败: {type(exc).__name__}: {exc}[/red]"
+                        f"[red]chat 失败: {type(exc).__name__}: {exc}[/red]"
                     )
-                    continue
-                console.print(
-                    f"[green]Session {chat.sid} 已创建, 进入 chat 模式.[/green]"
-                )
                 continue
 
             # real chat 时: query_loop
