@@ -107,12 +107,16 @@ def pg_test_dsn():
 
 
 @pytest.fixture
-def reset_pg(pg_test_dsn, monkeypatch):
+async def reset_pg(pg_test_dsn, monkeypatch):
     """Phase 17.1: TRUNCATE per test 跨 test 隔离 + 设 EXPLAIN_DB_URL = test dsn.
 
     NOT autouse — 显式 usefixtures 才触发, 既有 1135 test 不触本 fixture.
 
     lexicon_pg test 标 @pytest.mark.usefixtures("reset_pg") (class 或 function 级).
+
+    **async fixture (Wave 2 修正)**: teardown 需 await pool.close() 显式关
+    psycopg_pool 的 background workers (num_workers=3), 否则 pytest-asyncio
+    function-scoped event loop teardown 时 workers 还活着, loop.close() hang.
 
     **3 层安全 guard 防误清生产数据**:
     1. pg_test_dsn 必须存在 (None 时 skip, 即 EXPLAIN_TEST_DB_URL 未设)
@@ -146,10 +150,15 @@ def reset_pg(pg_test_dsn, monkeypatch):
             "WHERE id = 1"
         )
     yield
-    # 清 module-level pool (避免 pool 跨 test 持 connection 致测试相互污染)
+    # 清 module-level pool — 先 await close() 让 workers 退出, 再清引用
     try:
         from explain_engine.persistence import lexicon_pg
-        lexicon_pg._async_pool = None
-        lexicon_pg._sync_pool = None
+
+        if lexicon_pg._async_pool is not None:
+            await lexicon_pg._async_pool.close()
+            lexicon_pg._async_pool = None
+        if lexicon_pg._sync_pool is not None:
+            lexicon_pg._sync_pool.close()
+            lexicon_pg._sync_pool = None
     except ImportError:
         pass  # Wave 2 之前 lexicon_pg 还没建
