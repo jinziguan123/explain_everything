@@ -1198,7 +1198,9 @@ def _ephemeral_reject(name: str) -> list[ChatEvent]:
 
 
 @with_stage_gate(
-    allowed=["bootstrap_pending", "insight_pending"],
+    # Phase 17.1 Wave 8: +done/converged 允许重入 — /predict 加新 L0 后用户可
+    # 再次 /compress 把新 L0 归 L1. 重复 L1 由 lexicon dedup (cosine > 0.85) 兜底.
+    allowed=["bootstrap_pending", "insight_pending", "done", "converged"],
     success_stage="done",
     fail_hint_key="need_promote_first",
     success_hint_key="after_compress",

@@ -1877,26 +1877,96 @@ class TestSlashStageGateRescore:
 
 
 class TestSlashStageGateCompress:
-    """Phase 14: /compress stage gate (allowed=[bp,ip], success_stage=done)."""
+    """Phase 14: /compress stage gate.
+    Phase 17.1 Wave 8 修正: allowed 加 done/converged 让重入支持 — 用户 /predict
+    加新 L0 后可再 /compress 把新 L0 归 L1, 重复 L1 由 lexicon dedup 兜底.
+    """
 
     @pytest.mark.asyncio
-    async def test_compress_blocked_at_done(self):
-        """重跑 /compress on done session → gate 拒."""
+    async def test_compress_allowed_at_done(self, monkeypatch):
+        """Phase 17.1 Wave 8 Task 8.2: 重跑 /compress on done session → 允许通过, stage 保 done."""
         from explain_engine.chat.session import ChatSession
         _make_done_session("s_e000000c", stage="done")
         chat = ChatSession("s_e000000c", llm=object())  # type: ignore[arg-type]
+
+        # Mock 4 engine 跑通整 handler 流程 (跟 bp 路径同 fake)
+        async def fake_propose(state, llm, min_count=3, max_count=5, **kwargs):
+            state.insight_candidates = ["c_002"]
+
+        async def fake_score(state, llm):
+            pass
+
+        async def fake_review(state, input_provider, console=None):
+            pass
+
+        async def fake_flush(session, storage, llm=None):
+            return 0
+
+        monkeypatch.setattr(
+            "explain_engine.engines.compression.propose_candidates", fake_propose
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.evaluation.score_all", fake_score
+        )
+        monkeypatch.setattr(
+            "explain_engine.hitl.cli_interactive.review_insights_async", fake_review
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.lexicon.flush_to_lexicon", fake_flush
+        )
+
         events = await dispatch_slash(chat, "/compress")
-        assert any(e.type == "slash_error" for e in events)
-        assert any(e.type == "slash_next_step_hint" for e in events)
+        types = [e.type for e in events]
+        assert "slash_compress" in types
+        assert "slash_error" not in types  # 不被 stage gate 拒
+        # stage 保 done — decorator success_stage='done' 改 in-memory meta.
+        # 注: handler 内 mid-stage persist 落盘 stage="insight_pending", decorator
+        # 之后改 in-memory 但不再 persist, 所以验 in-memory 而非 reload from disk.
+        assert chat._session.meta.stage == "done"
 
     @pytest.mark.asyncio
-    async def test_compress_blocked_at_converged(self):
-        """重跑 /compress on converged session → gate 拒."""
+    async def test_compress_allowed_at_converged_falls_back_to_done(self, monkeypatch):
+        """Phase 17.1 Wave 8 Task 8.3: /compress 在 converged 也允许, stage 回退到 done.
+
+        语义: converged = '已推理' → re-compress 加 L1 后需重新 /run 推理, 所以
+        stage 应回到 done (= '已归纳, 待推理'). decorator success_stage='done'
+        覆盖任何入口 stage.
+        """
         from explain_engine.chat.session import ChatSession
         _make_done_session("s_e000000d", stage="converged")
         chat = ChatSession("s_e000000d", llm=object())  # type: ignore[arg-type]
+
+        async def fake_propose(state, llm, min_count=3, max_count=5, **kwargs):
+            state.insight_candidates = ["c_003"]
+
+        async def fake_score(state, llm):
+            pass
+
+        async def fake_review(state, input_provider, console=None):
+            pass
+
+        async def fake_flush(session, storage, llm=None):
+            return 0
+
+        monkeypatch.setattr(
+            "explain_engine.engines.compression.propose_candidates", fake_propose
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.evaluation.score_all", fake_score
+        )
+        monkeypatch.setattr(
+            "explain_engine.hitl.cli_interactive.review_insights_async", fake_review
+        )
+        monkeypatch.setattr(
+            "explain_engine.engines.lexicon.flush_to_lexicon", fake_flush
+        )
+
         events = await dispatch_slash(chat, "/compress")
-        assert any(e.type == "slash_error" for e in events)
+        types = [e.type for e in events]
+        assert "slash_compress" in types
+        assert "slash_error" not in types
+        # converged → done 回退 (in-memory check, 同上理由)
+        assert chat._session.meta.stage == "done"
 
     @pytest.mark.asyncio
     async def test_compress_allowed_at_bootstrap_pending_pushes_done(self, monkeypatch):

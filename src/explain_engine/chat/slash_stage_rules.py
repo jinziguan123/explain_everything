@@ -68,7 +68,19 @@ def with_stage_gate(
                 return events
 
             # ④ stage transition + persist
-            if success_stage is not None and stage != success_stage:
+            #
+            # Phase 17.1 Wave 8 修正: 老代码用 entry stage (`stage`) 比, 假设
+            # handler 不改 stage 内部. _handle_compress 因 mid-stage save 改成
+            # 'insight_pending', entry='done' == success_stage='done' 时不刷回 →
+            # 错误 final stage='insight_pending'.
+            # 改用 **current stage** (handler 跑后的 chat._session.meta.stage) 比.
+            # entry=done + handler 改 insight_pending → current insight_pending !=
+            # done → 刷回 + persist (Wave 8 用例). entry=done + handler 不改 →
+            # current=done == success_stage → 不动 (idempotent, 保留老行为).
+            if (
+                success_stage is not None
+                and chat._session.meta.stage != success_stage
+            ):
                 chat._session.meta.stage = success_stage
                 if (
                     hasattr(chat, "persist")
