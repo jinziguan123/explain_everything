@@ -410,6 +410,24 @@ Phase 5 起协议跟供应商解耦，配 4 个 env var:
 
 可选: `LLM_STRUCTURED_OUTPUT_MODE` (openai 协议下 `json_schema` (默认) / `json_object`)
 
+### Light-model 配置 (Phase 17.2)
+
+Phase 17.2 起支持 **可选 light-model** (cheap LLM, 例 `claude-haiku-4-5` / `gpt-4o-mini`),
+用于 classify 问题分类 + lexicon canonical_mechanism 这类简单 task 省 token. 失败时 (网络 /
+schema 不 fit) 由 `with_light_fallback` 自动 fallback 主 LLM, caller 零感知.
+
+配 5 个可选 env var (任一缺失 → 该字段 fallback 主 `LLM_*`, 全空则 light = main, 行为
+跟 Phase 17.2 前 100% 等价):
+
+- `LLM_LIGHT_PROTOCOL`: `anthropic` 或 `openai` (默 = `LLM_PROTOCOL`)
+- `LLM_LIGHT_BASE_URL`: API 入口 (默 = `LLM_BASE_URL`)
+- `LLM_LIGHT_API_KEY`: API key (默 = `LLM_API_KEY`)
+- `LLM_LIGHT_MODEL`: cheap 模型名, 推荐 `claude-haiku-4-5` / `gpt-4o-mini` (默 = `LLM_MODEL`)
+- `LLM_LIGHT_MAX_TOKENS`: 整数 (默 = `LLM_MAX_TOKENS` 或 SDK 默)
+
+适用场景: classify / canonical signature 输入 token ~500, 输出 ~50, 用 haiku 比 opus 省
+~10x cost + 快 ~3x.
+
 ## Lexicon 数据库配置 (Phase 17.1+)
 
 Phase 17.1 起 lexicon (cross-session variable 库) 走远程 PostgreSQL + pgvector,
