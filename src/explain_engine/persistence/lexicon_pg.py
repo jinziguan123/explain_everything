@@ -488,6 +488,37 @@ async def flush_to_lexicon(
     return promoted
 
 
+def _dict_to_variable_node(row: dict[str, Any]) -> Any:
+    """Phase 17.1 Task 4.6: DB row dict → VariableNode 实例.
+
+    lexicon DB 不存 confidence (老 lexicon JSON 也不存), 默认填 0.7 — 跟老
+    _make_node helper 默认一致. 其他必填字段直接从 row 映射.
+
+    Wave 4 暂不映射 fitness 字段进 VariableNode (它们是 var 维度 metadata,
+    VariableNode 是 session-level state). Wave 7+ 视需求再加.
+    """
+    from explain_engine.schema.nodes import VariableNode
+
+    return VariableNode(
+        id=row["global_id"],
+        name=row["name"],
+        description=row["description"],
+        abstraction_level=row["abstraction_level"],
+        confidence=0.7,  # lexicon var 不存 confidence, 默认 0.7
+        epistemic=row["epistemic"],
+    )
+
+
+def get_top_n_vars(storage: Any, n: int) -> list[Any]:
+    """Phase 17.1 Task 4.6: sync API — 返 list[VariableNode] (跟老 lexicon 同).
+
+    内部复用 get_lexicon_top_k_for_compress → 转 VariableNode list.
+    chat /compress 上下文显式需要 VariableNode 实例 (不是 dict) 时调本函数.
+    """
+    rows = get_lexicon_top_k_for_compress(storage, k=n)
+    return [_dict_to_variable_node(row) for row in rows]
+
+
 def get_lexicon_top_k_for_compress(
     storage: Any,  # 保 signature, PG impl 不读 file
     k: int = 20,

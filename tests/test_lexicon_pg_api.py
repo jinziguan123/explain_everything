@@ -461,3 +461,46 @@ class TestGetLexiconTopKForCompress:
 
         rows = get_lexicon_top_k_for_compress(storage=None, k=20)
         assert rows == []
+
+
+# ── Task 4.6: get_top_n_vars ────────────────────────────────────────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestGetTopNVars:
+    """Phase 17.1 Task 4.6: get_top_n_vars 返 list[VariableNode] (跟老 lexicon API 同)."""
+
+    def test_get_top_n_vars_returns_variable_node_list(self):
+        from explain_engine.persistence.lexicon_pg import get_top_n_vars
+
+        _insert_sample_var_sync(
+            "v_n_top001", name="顶级 abstraction", abstraction_level=2,
+            avg_essentialness=0.9, avg_consistency=0.9, reuse_count=10,
+            epistemic="insight",
+        )
+        _insert_sample_var_sync(
+            "v_n_mid001", name="中级 abstraction",
+            avg_essentialness=0.5, avg_consistency=0.5, reuse_count=4,
+        )
+        _insert_sample_var_sync(
+            "v_n_low001", name="低级 abstraction",
+            avg_essentialness=0.1, avg_consistency=0.1, reuse_count=1,
+        )
+
+        nodes = get_top_n_vars(storage=None, n=2)
+        assert len(nodes) == 2
+        # 全是 VariableNode 实例
+        for node in nodes:
+            assert isinstance(node, VariableNode)
+        # 排序: top 优先
+        assert nodes[0].name == "顶级 abstraction"
+        assert nodes[0].id == "v_n_top001"
+        assert nodes[0].abstraction_level == 2
+        assert nodes[0].epistemic == "insight"
+        assert nodes[1].name == "中级 abstraction"
+
+    def test_get_top_n_vars_empty_returns_empty_list(self):
+        from explain_engine.persistence.lexicon_pg import get_top_n_vars
+
+        assert get_top_n_vars(storage=None, n=10) == []
