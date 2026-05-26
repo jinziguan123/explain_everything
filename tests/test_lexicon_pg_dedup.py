@@ -313,3 +313,80 @@ class TestRetroactiveDedupPg:
         assert abs(winner["avg_essentialness"] - 0.64) < 1e-6
         # avg_cons running-avg = (0.6*3 + 0.9*2) / 5 = 0.72
         assert abs(winner["avg_consistency"] - 0.72) < 1e-6
+
+
+# ── Wave 6 Task 6.5: merge audit 写 lexicon_merge_audit ─────────────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestRetroactiveDedupAudit:
+    """Phase 17.1 Task 6.5: dedup 触发后 lexicon_merge_audit 表写 1 row 含 (
+    merged_into, merged_into_canon, merged_from_canon, sim, evidence_session_ids).
+
+    canon 字段截 80 char (init.sql 无长度限制, 但 impl 主动 [:80] cap 防超长 LLM
+    输出污染 audit 表).
+    """
+
+    @pytest.mark.asyncio
+    async def test_audit_row_written_with_correct_fields(self):
+        import numpy as np
+
+        from explain_engine.persistence.lexicon_pg import (
+            _insert_var,
+            _maybe_lazy_dedup,
+            get_async_pool,
+        )
+
+        pool = await get_async_pool()
+        rng = np.random.default_rng(seed=7)
+        winner_emb = rng.random(1024).astype(np.float32)
+        loser_emb = winner_emb + rng.normal(0, 0.001, 1024).astype(np.float32)
+        from datetime import timedelta
+        t_winner = datetime.now(UTC)
+        t_loser = t_winner + timedelta(seconds=1)
+
+        async with pool.connection() as conn:
+            await _bulk_insert_dummies(conn, 108, prefix="v_aud")
+            await _insert_var(conn, _sample_var(
+                global_id="v_aud_win01",
+                canonical_mechanism="winner 的 canonical mechanism 描述",
+                first_seen_at=t_winner,
+                last_seen_at=t_winner,
+                source_sessions=["s_audw1"],
+                embedding=winner_emb.tolist(),
+            ))
+            await _insert_var(conn, _sample_var(
+                global_id="v_aud_los01",
+                canonical_mechanism="loser 的 canonical mechanism 描述",
+                first_seen_at=t_loser,
+                last_seen_at=t_loser,
+                source_sessions=["s_audl1", "s_audl2"],
+                embedding=loser_emb.tolist(),
+            ))
+            await conn.execute(
+                "UPDATE lexicon_meta SET flush_count_since = 5 WHERE id = 1"
+            )
+
+        merged = await _maybe_lazy_dedup(pool)
+        assert merged == 1
+
+        # 查 audit 表
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT merged_into, merged_into_canon, merged_from_canon,
+                          sim, evidence_session_ids
+                   FROM lexicon_merge_audit
+                   ORDER BY ts DESC LIMIT 1"""
+            )
+            row = await cur.fetchone()
+        assert row is not None, "audit 表应有 1 row (merge 触发了)"
+        merged_into, into_canon, from_canon, sim, evidence_sessions = row
+        assert merged_into == "v_aud_win01"
+        # canon 字段截 80 字符 (本 test canon ≈ 24 字符不会截, 但验非空)
+        assert into_canon == "winner 的 canonical mechanism 描述"
+        assert from_canon == "loser 的 canonical mechanism 描述"
+        # sim ~ 0.999 (winner_emb / loser_emb 微扰)
+        assert sim > 0.99
+        # evidence = loser 的 source_sessions
+        assert evidence_sessions == ["s_audl1", "s_audl2"]
