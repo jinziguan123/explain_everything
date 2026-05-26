@@ -112,3 +112,78 @@ def make_llm_client() -> LLMClient:
     raise ValueError(
         f"Unknown LLM_PROTOCOL: {proto!r}, must be 'anthropic' or 'openai'"
     )
+
+
+def make_light_llm_client() -> LLMClient:
+    """light-model factory. 读 LLM_LIGHT_* env, 缺则 fallback 主 LLM_*.
+
+    Phase 17.2 Feature B: cheap LLM (haiku / gpt-4o-mini) 给 classify /
+    canonical signature 这种简单 task 用. 失败由 with_light_fallback 自动
+    回退到主 LLM.
+
+    env precedence (per field): LLM_LIGHT_<X> 设了用它, 否则 fallback LLM_<X>.
+    LIGHT_* 全空时该 client 跟主 LLM 配置完全一致 (零行为差).
+
+    必填 (主 fallback): LLM_PROTOCOL / LLM_BASE_URL / LLM_API_KEY / LLM_MODEL.
+
+    可选: LLM_LIGHT_PROTOCOL / LLM_LIGHT_BASE_URL / LLM_LIGHT_API_KEY /
+    LLM_LIGHT_MODEL / LLM_LIGHT_MAX_TOKENS.
+    """
+    load_dotenv(override=False)
+    try:
+        proto = os.environ.get("LLM_LIGHT_PROTOCOL") or os.environ["LLM_PROTOCOL"]
+        base_url = (
+            os.environ.get("LLM_LIGHT_BASE_URL") or os.environ["LLM_BASE_URL"]
+        )
+        api_key = os.environ.get("LLM_LIGHT_API_KEY") or os.environ["LLM_API_KEY"]
+        model = os.environ.get("LLM_LIGHT_MODEL") or os.environ["LLM_MODEL"]
+    except KeyError as exc:
+        raise KeyError(
+            f"missing required env var: {exc.args[0]} "
+            f"(LIGHT 可缺, 但主 LLM_PROTOCOL / LLM_BASE_URL / LLM_API_KEY / "
+            f"LLM_MODEL 必填)"
+        ) from exc
+
+    max_tokens_env = os.environ.get("LLM_LIGHT_MAX_TOKENS") or os.environ.get(
+        "LLM_MAX_TOKENS"
+    )
+    max_tokens: int | None = None
+    if max_tokens_env is not None:
+        try:
+            max_tokens = int(max_tokens_env)
+            if max_tokens < 1:
+                raise ValueError(
+                    f"LLM_LIGHT_MAX_TOKENS must be >= 1, got {max_tokens}"
+                )
+        except ValueError as exc:
+            raise ValueError(
+                f"LLM_LIGHT_MAX_TOKENS must be a positive integer, "
+                f"got {max_tokens_env!r}: {exc}"
+            ) from exc
+
+    if proto == "anthropic":
+        return AnthropicProtocolClient(
+            api_key=api_key,
+            default_model=model,
+            base_url=base_url,
+            max_tokens=max_tokens,
+        )
+    if proto == "openai":
+        mode_str = os.environ.get("LLM_STRUCTURED_OUTPUT_MODE", "json_schema")
+        if mode_str not in ("json_schema", "json_object"):
+            raise ValueError(
+                f"LLM_STRUCTURED_OUTPUT_MODE must be 'json_schema' or 'json_object', "
+                f"got {mode_str!r}"
+            )
+        mode: Mode = mode_str  # type: ignore[assignment]
+        return OpenAIProtocolClient(
+            api_key=api_key,
+            default_model=model,
+            base_url=base_url,
+            mode=mode,
+            max_tokens=max_tokens,
+        )
+    raise ValueError(
+        f"Unknown LLM_LIGHT_PROTOCOL (or LLM_PROTOCOL): {proto!r}, "
+        f"must be 'anthropic' or 'openai'"
+    )
