@@ -1,4 +1,4 @@
-"""EphemeralChatSession.send_user_message — Phase 18 Task 2."""
+"""EphemeralChatSession.handle_user_input — Phase 18 Task 2."""
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,7 +8,7 @@ from explain_engine.persistence.storage_v2 import StorageV2
 
 
 @pytest.mark.asyncio
-async def test_send_user_message_yields_assistant_text(tmp_path, monkeypatch):
+async def test_handle_user_input_yields_assistant_text(tmp_path, monkeypatch):
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
@@ -21,7 +21,7 @@ async def test_send_user_message_yields_assistant_text(tmp_path, monkeypatch):
     llm.chat.return_value = resp
 
     events = []
-    async for ev in ephemeral.send_user_message("为什么烧水能沸", llm):
+    async for ev in ephemeral.handle_user_input("为什么烧水能沸", llm):
         events.append(ev)
 
     assistant_events = [e for e in events if e.type == "assistant_text"]
@@ -33,7 +33,7 @@ async def test_send_user_message_yields_assistant_text(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_user_message_llm_error_no_transcript_pollution(tmp_path, monkeypatch):
+async def test_handle_user_input_llm_error_no_transcript_pollution(tmp_path, monkeypatch):
     from explain_engine.llm.errors import LLMError
 
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
@@ -46,7 +46,7 @@ async def test_send_user_message_llm_error_no_transcript_pollution(tmp_path, mon
     llm.chat.side_effect = LLMError("network down")
 
     events = []
-    async for ev in ephemeral.send_user_message("hi", llm):
+    async for ev in ephemeral.handle_user_input("hi", llm):
         events.append(ev)
 
     error_events = [e for e in events if e.type == "slash_error"]
@@ -57,7 +57,7 @@ async def test_send_user_message_llm_error_no_transcript_pollution(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_send_user_message_multi_turn_transcript_accumulates(tmp_path, monkeypatch):
+async def test_handle_user_input_multi_turn_transcript_accumulates(tmp_path, monkeypatch):
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
@@ -70,9 +70,9 @@ async def test_send_user_message_multi_turn_transcript_accumulates(tmp_path, mon
     resp2 = MagicMock(text="第二轮回答")
     llm.chat.side_effect = [resp1, resp2]
 
-    async for _ in ephemeral.send_user_message("问题1", llm):
+    async for _ in ephemeral.handle_user_input("问题1", llm):
         pass
-    async for _ in ephemeral.send_user_message("问题2", llm):
+    async for _ in ephemeral.handle_user_input("问题2", llm):
         pass
 
     assert len(ephemeral.transcript) == 4
@@ -83,7 +83,7 @@ async def test_send_user_message_multi_turn_transcript_accumulates(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_send_user_message_second_turn_passes_history_to_llm(tmp_path, monkeypatch):
+async def test_handle_user_input_second_turn_passes_history_to_llm(tmp_path, monkeypatch):
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
@@ -98,7 +98,7 @@ async def test_send_user_message_second_turn_passes_history_to_llm(tmp_path, mon
     resp = MagicMock(text="新回答")
     llm.chat.return_value = resp
 
-    async for _ in ephemeral.send_user_message("新问题", llm):
+    async for _ in ephemeral.handle_user_input("新问题", llm):
         pass
 
     # 验 LLM messages 含 history
@@ -114,7 +114,7 @@ async def test_send_user_message_second_turn_passes_history_to_llm(tmp_path, mon
 
 @pytest.mark.asyncio
 async def test_ephemeral_chat_does_not_persist_transcript(tmp_path, monkeypatch):
-    """ephemeral 下 send_user_message 后, storage_v2 不写 transcript.jsonl."""
+    """ephemeral 下 handle_user_input 后, storage_v2 不写 transcript.jsonl."""
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
@@ -124,7 +124,7 @@ async def test_ephemeral_chat_does_not_persist_transcript(tmp_path, monkeypatch)
     llm = AsyncMock()
     llm.chat.return_value = MagicMock(text="answer")
 
-    async for _ in ephemeral.send_user_message("问题", llm):
+    async for _ in ephemeral.handle_user_input("问题", llm):
         pass
 
     # 验 storage_v2 没有任何 session_dir (ephemeral.sid is None)

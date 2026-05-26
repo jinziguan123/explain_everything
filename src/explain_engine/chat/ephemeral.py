@@ -13,10 +13,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from explain_engine.chat.session import ChatSession, ChatStateDict
+from explain_engine.chat.session import ChatEvent, ChatSession, ChatStateDict
 from explain_engine.config import make_light_llm_client
 from explain_engine.engines.bootstrap import bootstrap_phenomena
 from explain_engine.hitl.cli_interactive import review_phenomena_async
+from explain_engine.llm.client import Message
+from explain_engine.llm.errors import LLMError
+from explain_engine.llm.prompts._loader import load_prompt
 from explain_engine.persistence.session import Session, SessionMeta, SessionStore
 from explain_engine.schema.state import CognitiveState
 
@@ -42,6 +45,7 @@ class EphemeralChatSession:
     - is_ephemeral: 永 True
 
     Method:
+    - handle_user_input(text, llm): Ephemeral 下 LLM system-1 chat (Phase 18).
     - promote_to_persistent(question, llm): 跑 bootstrap + HITL + save → real ChatSession.
       失败 (LLMError / SchemaValidationError) → 抛, caller 留 ephemeral.
 
@@ -66,7 +70,7 @@ class EphemeralChatSession:
     def is_ephemeral(self) -> bool:
         return True
 
-    async def send_user_message(
+    async def handle_user_input(
         self,
         text: str,
         llm: LLMClient,
@@ -76,14 +80,11 @@ class EphemeralChatSession:
         yield assistant_text + turn_complete events. transcript in-memory append
         (不持久 — storage_v2 不写 transcript.jsonl).
 
-        LLM 失败 (LLMError / SchemaValidationError) → yield slash_error event,
+        LLM 失败 (LLMError) → yield slash_error event,
         transcript 不变 (retry 友好).
-        """
-        from explain_engine.chat.session import ChatEvent
-        from explain_engine.llm.client import Message
-        from explain_engine.llm.errors import LLMError, SchemaValidationError
-        from explain_engine.llm.prompts._loader import load_prompt
 
+        命名: 跟 ChatSession.handle_user_input 对齐, Wave 2 caller 同名调用.
+        """
         prompt = load_prompt("ephemeral_chat")
         messages: list[Message] = [Message(role="system", content=prompt["system"])]
         # 拼现有 transcript (in-memory)
@@ -93,14 +94,14 @@ class EphemeralChatSession:
 
         try:
             resp = await llm.chat(messages)
-        except (LLMError, SchemaValidationError) as exc:
+        except LLMError as exc:
             yield ChatEvent(
                 type="slash_error",
                 content=f"LLM 调用失败: {type(exc).__name__}: {exc}",
             )
             return
 
-        assistant_text = resp.text or ""
+        assistant_text = resp.text
         # transcript append (in-memory, 不持久)
         self.transcript.append({"role": "user", "content": text})
         self.transcript.append({"role": "assistant", "content": assistant_text})
