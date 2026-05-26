@@ -66,3 +66,16 @@ async def test_with_light_fallback_schema_error_falls_back():
     assert result == "response-from-main"
     assert light.call_count == 1
     assert main.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_with_light_fallback_skip_when_same_client():
+    """light is main (同 client 实例) → 跳 fallback 逻辑, 仅调 1 次."""
+    main = _StubClient("main")
+
+    result = await with_light_fallback(
+        main, main, lambda llm: llm.chat("hi")
+    )
+
+    assert result == "response-from-main"
+    assert main.call_count == 1
