@@ -466,3 +466,63 @@ class TestCacheMissThenHit:
             )
         assert result_2 == "first canon"
         build_mock_2.assert_not_called()
+
+
+# ── Task 5.6: CANONICAL_MODEL_VERSION bump invalidate cache ───────────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestModelVerBumpInvalidates:
+    """Phase 17.1 Task 5.6: CANONICAL_MODEL_VERSION bump 'v2' → 旧 v1 cache 全 miss.
+
+    场景: prompt 升级了 (新 'v2' canonical 风格), 想全量重 build canonical.
+    实现: bump module 常量 CANONICAL_MODEL_VERSION = 'v2', 旧 v1 行 model_ver
+    不匹, SELECT 自然 miss, _cached 调 LLM 重 build.
+
+    monkeypatch.setattr 改 module 常量, 函数下次 globals lookup 取新值.
+    """
+
+    @pytest.mark.asyncio
+    async def test_model_ver_bump_v2_invalidates_v1_cache(self, monkeypatch):
+        from explain_engine.persistence import lexicon_pg
+        from explain_engine.persistence.lexicon_pg import (
+            _build_canonical_mechanism_cached,
+            get_async_pool,
+        )
+
+        # 1. insert v1 var: signature='sig_z', canonical='v1 canon', model_ver='v1'
+        _insert_var_with_signature(
+            global_id="v_z0000001",
+            name="z var",
+            description="z desc",
+            abstraction_level=1,
+            epistemic="insight",
+            canonical_mechanism="v1 canon",
+            canonical_signature="sig_z_aaaaaaa1",
+            canonical_model_ver="v1",
+        )
+
+        # 2. bump CANONICAL_MODEL_VERSION = 'v2'
+        monkeypatch.setattr(lexicon_pg, "CANONICAL_MODEL_VERSION", "v2")
+
+        # 3. mock signature 算出 'sig_z_aaaaaaa1' (但 model_ver 是 v2 不匹)
+        #    + _build_canonical_mechanism 返 'v2 canon'
+        node = _FakeNode(id="n_z", name="any")
+        session = _FakeSession(edges=[])
+        pool = await get_async_pool()
+        build_mock = AsyncMock(return_value="v2 canon")
+
+        with patch.object(
+            lexicon_pg, "compute_canonical_signature",
+            return_value="sig_z_aaaaaaa1",
+        ), patch.object(
+            lexicon_pg, "_build_canonical_mechanism", new=build_mock,
+        ):
+            result = await _build_canonical_mechanism_cached(
+                node, session, llm=None, pool=pool,
+            )
+
+        # 4. v2 cache 不命中 → LLM 调 1 次, 返新 canonical
+        assert result == "v2 canon"
+        build_mock.assert_called_once()
