@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -329,3 +329,65 @@ class TestBuildCanonicalMechanismCachedLookup:
                 node, session, llm=None, pool=pool,
             )
         assert result == "cached canon"
+
+
+# ── Task 5.4: cache hit 跳 LLM 验证 (强 assert_not_called + 用 MagicMock llm) ──
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestCacheHitSkipsLlm:
+    """Phase 17.1 Task 5.4: cache hit 时 llm 对象 + _build_canonical_mechanism
+    全无调用 (strict assert_not_called, 比 5.3 的 raise 更直接).
+
+    场景: llm 是 MagicMock — 若代码路径错误进 _build_canonical_mechanism,
+    llm.chat 会被调, 测试自然 fail.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_does_not_invoke_llm_mock(self):
+        """signature 命中后, 既不调 _build_canonical_mechanism 也不 touch llm."""
+        from explain_engine.persistence import lexicon_pg
+        from explain_engine.persistence.lexicon_pg import (
+            _build_canonical_mechanism_cached,
+            get_async_pool,
+        )
+
+        # 1. 预存 cache: signature='sig_hit_v1_1234', canonical='hit canon'
+        _insert_var_with_signature(
+            global_id="v_hit00001",
+            name="hit var",
+            description="d",
+            abstraction_level=1,
+            epistemic="insight",
+            canonical_mechanism="hit canon",
+            canonical_signature="sig_hit_v1_1234",
+            canonical_model_ver="v1",
+        )
+
+        # 2. llm 是 strict MagicMock — 任何 attr access (.chat etc) 都会记录
+        llm_mock = MagicMock(name="llm")
+        # AsyncMock 包 _build_canonical_mechanism — 严格 not_called
+        build_mock = AsyncMock(return_value="should not happen")
+
+        node = _FakeNode(id="n_hit", name="hit any")
+        session = _FakeSession(edges=[_FakeEdge("n_hit", "n_other")])
+        pool = await get_async_pool()
+
+        with patch.object(
+            lexicon_pg, "compute_canonical_signature",
+            return_value="sig_hit_v1_1234",
+        ), patch.object(
+            lexicon_pg, "_build_canonical_mechanism", new=build_mock,
+        ):
+            result = await _build_canonical_mechanism_cached(
+                node, session, llm=llm_mock, pool=pool,
+            )
+
+        # 3. 验证: 返已存 canonical
+        assert result == "hit canon"
+        # 4. 验证: LLM 完全没被 touch (没访问任何 attr, 没调任何 method)
+        llm_mock.assert_not_called()
+        assert llm_mock.method_calls == []
+        # 5. 验证: _build_canonical_mechanism 也没被调
+        build_mock.assert_not_called()
