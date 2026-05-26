@@ -145,3 +145,56 @@ class TestMigrateJsonToPg:
         result = await migrate_json_to_pg(storage)
         assert result["migrated"] == 0
         assert "reason" in result
+
+
+# ── Task 7.2: ON CONFLICT DO NOTHING idempotent ──────────────────────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestMigrateIdempotent:
+    """Phase 17.1 Task 7.2: ON CONFLICT DO NOTHING — 重跑只插新, 已存在 skip.
+
+    模拟用户重跑 migrate (e.g. 上次成功后误把 .migrated 改回 variables.json)
+    或在多机器上重复跑 — 第 2 次应全 skip, 不报错不重复 insert.
+    """
+
+    @pytest.mark.asyncio
+    async def test_migrate_idempotent_on_conflict_skips(self, tmp_path):
+        """跑 2 次 migrate, 第 2 次返 {migrated:0, skipped:N}, DB count 不变."""
+        from explain_engine.persistence.lexicon_migrations import (
+            migrate_json_to_pg,
+        )
+        from explain_engine.persistence.lexicon_pg import get_async_pool
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        storage = StorageV2()
+        kd = storage.knowledge_dir()
+        var = _make_legacy_var(global_id="v_idem001", name="幂等测试")
+        json_path = _write_legacy_lexicon(kd, [var])
+
+        # 第 1 次: 正常 insert
+        r1 = await migrate_json_to_pg(storage)
+        assert r1 == {"migrated": 1, "skipped": 0}
+        assert not json_path.exists()  # 已 rename .migrated
+
+        # 模拟用户重跑: 把 .migrated 改回 variables.json
+        backup = json_path.with_suffix(".json.migrated")
+        backup.rename(json_path)
+
+        # 第 2 次: ON CONFLICT → 全 skip
+        r2 = await migrate_json_to_pg(storage)
+        assert r2 == {"migrated": 0, "skipped": 1}
+
+        # DB count 仍 1
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM variables WHERE global_id = %s",
+                ("v_idem001",),
+            )
+            count = (await cur.fetchone())[0]
+        assert count == 1
+
+        # json 没 rename (因 inserted == 0, 保留让用户 inspect)
+        assert json_path.exists()
