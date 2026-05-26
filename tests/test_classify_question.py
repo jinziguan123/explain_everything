@@ -52,3 +52,41 @@ async def test_classify_returns_phenomenon():
 
     result = await _classify_question("为什么彩虹有七色", light, main)
     assert result == "phenomenon"
+
+
+# ----- Task 13: fallback paths -----
+
+
+async def test_classify_unknown_type_fallback_causal_modern():
+    """light 返奇怪 type → fallback causal_modern."""
+    light = AsyncMock()
+    main = AsyncMock()
+    light.chat = AsyncMock(return_value=_mock_classify_resp("weirdcategory"))
+
+    result = await _classify_question("anything", light, main)
+    assert result == "causal_modern"
+
+
+async def test_classify_parsed_none_fallback():
+    """light 返 parsed=None → fallback causal_modern."""
+    light = AsyncMock()
+    main = AsyncMock()
+    light.chat = AsyncMock(return_value=_mock_classify_resp(None))
+
+    result = await _classify_question("anything", light, main)
+    assert result == "causal_modern"
+
+
+async def test_classify_total_failure_fallback():
+    """light + main 都 raise LLMError → fallback causal_modern (永不挂)."""
+    from explain_engine.llm.errors import LLMError
+
+    light = AsyncMock()
+    main = AsyncMock()
+    light.chat = AsyncMock(side_effect=LLMError("net down"))
+    main.chat = AsyncMock(side_effect=LLMError("net down"))
+
+    result = await _classify_question("anything", light, main)
+    assert result == "causal_modern"
+    assert light.chat.call_count == 1
+    assert main.chat.call_count == 1
