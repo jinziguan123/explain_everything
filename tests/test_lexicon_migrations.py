@@ -301,3 +301,47 @@ class TestMigratedModelVersion:
             row = await cur.fetchone()
         assert row is not None
         assert row[0] == "v1-migrated"
+
+
+# ── Task 7.4: --dry-run mode ──────────────────────────────────────────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestMigrateDryRun:
+    """Phase 17.1 Task 7.4: dry_run=True 仅 preview, 不写 DB, 不 rename json."""
+
+    @pytest.mark.asyncio
+    async def test_migrate_dry_run_writes_nothing(self, tmp_path):
+        from explain_engine.persistence.lexicon_migrations import (
+            migrate_json_to_pg,
+        )
+        from explain_engine.persistence.lexicon_pg import get_async_pool
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        storage = StorageV2()
+        kd = storage.knowledge_dir()
+        json_path = _write_legacy_lexicon(
+            kd,
+            [
+                _make_legacy_var(global_id="v_dry001"),
+                _make_legacy_var(global_id="v_dry002", name="二号"),
+            ],
+        )
+
+        r = await migrate_json_to_pg(storage, dry_run=True)
+        assert r == {"would_migrate": 2, "dry_run": True}
+
+        # DB count = 0 (没写)
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM variables WHERE global_id LIKE %s",
+                ("v_dry%",),
+            )
+            count = (await cur.fetchone())[0]
+        assert count == 0
+
+        # variables.json 还在 (没 rename)
+        assert json_path.exists()
+        assert not json_path.with_suffix(".json.migrated").exists()
