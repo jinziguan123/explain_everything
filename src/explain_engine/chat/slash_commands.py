@@ -1,4 +1,4 @@
-"""Phase 9 Wave F.1 + Phase 11 Wave 3/4: 17 default slash commands + 1 alias.
+"""Phase 9 Wave F.1 + Phase 11 Wave 3/4: 24 default slash commands + 1 alias (/cf → counterfactual).
 
 设计参考 Claude Code 同款 slash 模式 — 本地 intercept 不走 LLM,
 廉价 inspection + exit + force compact 等管理命令; slash 不计入
@@ -207,7 +207,7 @@ def _wrap_handler(name: str, handler):
     """Wave 3: 中央 wrapper — snapshot before → handler → snapshot after → 写 entry.
 
     设计 §4.1 + §4.4 + §7:
-    - 21 个 handler 零感知 wrapper 存在 (DEFAULT_COMMANDS 注册时一次套).
+    - 所有 handler 零感知 wrapper 存在 (DEFAULT_COMMANDS 注册时一次套).
     - ephemeral / sid is None 时跳 history 写入 (无 sidecar 可写), 但仍正常调 handler.
     - KeyboardInterrupt 直 propagate, 不写 history (用户主动放弃, design §7.5).
     - 其他 Exception: 先写 error entry, 再 raise (用户重启后 banner 可见失败记录).
@@ -2086,17 +2086,24 @@ async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]
 
 
 async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
-    """Phase 18: /deepen [question] — ephemeral 状态显式触发 bootstrap pipeline."""
+    """Phase 18: /deepen [question] — ephemeral 状态显式触发 bootstrap pipeline.
+
+    Wave 2 review (I-1, M-1, M-2 fix):
+    - 用 `getattr(chat, "is_ephemeral", False)` duck-typing 跟现 19 handler 一致,
+      去掉局部 `from explain_engine.chat.ephemeral import EphemeralChatSession`.
+    - 删 `_llm_for_test` test-only fallback — test 改用显式
+      EphemeralChatSession(llm=MagicMock()) 注入.
+    - promote 失败用 `err_failed("deepen", exc)` 复用现 chat_copy helper.
+    """
     from explain_engine.chat.chat_copy import (
         err_deepen_already_promoted,
         err_deepen_no_question,
         msg_deepen_promote_start,
     )
-    from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.session import ChatEvent
 
     # 已 promote 的 ChatSession 内 /deepen → 拒绝 + 提示 /new
-    if not isinstance(chat, EphemeralChatSession):
+    if not getattr(chat, "is_ephemeral", False):
         # ChatSession.state 是 CognitiveState (field=root_question, 非 question);
         # _handle_show 用 chat._session.meta.question, 这里跟它一致.
         sess_meta = getattr(chat, "_session", None)
@@ -2121,9 +2128,10 @@ async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
         if question is None:
             return [ChatEvent(type="slash_error", content=err_deepen_no_question())]
 
-    # LLM 注入: Task 12 加 EphemeralChatSession.llm field 让 REPL outer loop
-    # 注入; test 路径用 _llm_for_test 占位 (handler 内 fallback).
-    llm = getattr(chat, "llm", None) or getattr(chat, "_llm_for_test", None)
+    # LLM: Task 12 加 EphemeralChatSession.llm field; Task 16 让 REPL outer loop
+    # 构造时注入. Test 路径直接 EphemeralChatSession(llm=MagicMock()), 不再
+    # 走 _llm_for_test fallback (M-1).
+    llm = getattr(chat, "llm", None)
     if llm is None:
         return [ChatEvent(
             type="slash_error",
@@ -2135,7 +2143,7 @@ async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
     except Exception as exc:
         return [ChatEvent(
             type="slash_error",
-            content=f"建模失败: {type(exc).__name__}: {exc}",
+            content=err_failed("deepen", exc),
         )]
 
     return [ChatEvent(
@@ -2145,12 +2153,12 @@ async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
     )]
 
 
-# Registry — 17 default slash commands + 1 alias (/cf → counterfactual).
+# Registry — 24 default slash commands + 1 alias (/cf → counterfactual).
 # 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作 → engines → cross-session"分组.
 #
 # Phase 16.2 Wave 3: 所有 handler 经 _wrap_handler 包装 — 自动 snapshot graph
 # 前后 diff 算 delta + 写 repl_history.jsonl entry (ephemeral / sid=None 时
-# noop, 仅调原 handler). 21 个 handler 本身完全不知道 wrapper 存在, 零侵入.
+# noop, 仅调原 handler). handler 本身完全不知道 wrapper 存在, 零侵入.
 DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("quit",           COMMAND_DESCRIPTIONS["quit"],           _wrap_handler("quit", _handle_quit)),
     SlashCommand("help",           COMMAND_DESCRIPTIONS["help"],           _wrap_handler("help", _handle_help)),

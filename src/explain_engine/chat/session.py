@@ -116,6 +116,12 @@ class ChatEvent:
     - slash_next_step_hint: str — 灰色 dim 渲染. 在普通 slash output event 之后,
       给用户提示当前 stage 下推荐的下一步命令. Producer: with_stage_gate decorator
       (chat/slash_stage_rules.py, Phase 14).
+    - slash_deepen_promoted: str (info text) + metadata={"sid": real_chat.sid}
+      — Phase 18 起新约定: REPL outer loop 用 metadata.sid 切 chat var 到新建的
+      ChatSession (跟 slash_switch_session 用 content["sid"] 不同 pattern,
+      因为 slash_deepen_promoted 还要带人话 info 给用户看, content 留给字符串).
+      Producer: _handle_deepen (Phase 18).
+      Consumer: repl_entry.enter_repl_async (Phase 18 Task 17).
     """
 
     type: str

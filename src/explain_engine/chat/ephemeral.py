@@ -1,10 +1,15 @@
-"""Phase 11 Wave 1: EphemeralChatSession — in-memory chat before persistent /new.
+"""Phase 11 Wave 1 + Phase 18: EphemeralChatSession — in-memory chat REPL pre-persistent /deepen.
 
-REPL 启动时建. 用户输自然语言时 promote_to_persistent 把 question 跑
-bootstrap+HITL+save, 切到真 ChatSession.
+REPL 启动时建. user 输自然语言时调 handle_user_input(text, llm) 走 LLM system-1
+chat (transcript in-memory, 不持久). 显式 /deepen [Q] 触发 promote_to_persistent
+→ 进 bootstrap pipeline (Phase 17.2 classify + dispatch yaml + light_llm) → 切到
+真 ChatSession (sid 落盘).
+
+Phase 18 起 user 输自然语言不再自动 promote — system-1 chat 不写 storage_v2,
+显式 escalate 才进 reasoning pipeline. 见 docs/plans/2026-05-26-phase-18-deepen-design.md.
 
 设计: docs/plans/2026-05-18-phase11-repl-unification-design.md §5
-Plan: docs/plans/2026-05-18-phase11-repl-unification-plan.md Wave 1 Task 1.A
++ docs/plans/2026-05-26-phase-18-deepen-design.md
 """
 
 from __future__ import annotations

@@ -20,12 +20,13 @@ async def test_deepen_with_explicit_question(tmp_path, monkeypatch):
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
     storage = StorageV2()
-    ephemeral = EphemeralChatSession(storage=storage)
+    # Phase 18 Wave 2 review M-1: 直接 EphemeralChatSession(llm=...) 显式注入,
+    # 不再走 _llm_for_test fallback (handler 已删 fallback path).
+    ephemeral = EphemeralChatSession(storage=storage, llm=MagicMock())
 
-    # 注入 fake llm + mock promote_to_persistent 避真 LLM 调用
+    # mock promote_to_persistent 避真 LLM 调用 (test 只验 handler 派发, 非 promote 内部)
     fake_real_chat = MagicMock(sid="s_test1234")
     ephemeral.promote_to_persistent = AsyncMock(return_value=fake_real_chat)
-    ephemeral._llm_for_test = MagicMock()  # Task 9 placeholder, Task 12 wire chat.llm
 
     cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
     events = await cmd.handler(ephemeral, ["为什么", "烧水", "能沸"])
@@ -43,7 +44,8 @@ async def test_deepen_without_args_uses_last_user_msg(tmp_path, monkeypatch):
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
     storage = StorageV2()
-    ephemeral = EphemeralChatSession(storage=storage)
+    # Phase 18 Wave 2 review M-1: 显式 llm 注入, 不走 _llm_for_test fallback.
+    ephemeral = EphemeralChatSession(storage=storage, llm=MagicMock())
     ephemeral.transcript = [
         {"role": "user", "content": "为什么烧水能沸"},
         {"role": "assistant", "content": "因为蒸汽压..."},
@@ -51,7 +53,6 @@ async def test_deepen_without_args_uses_last_user_msg(tmp_path, monkeypatch):
     ]
     fake_real_chat = MagicMock(sid="s_test1234")
     ephemeral.promote_to_persistent = AsyncMock(return_value=fake_real_chat)
-    ephemeral._llm_for_test = MagicMock()
 
     cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
     await cmd.handler(ephemeral, [])
