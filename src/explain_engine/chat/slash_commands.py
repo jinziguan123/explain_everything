@@ -1652,6 +1652,77 @@ async def _handle_list(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     )]
 
 
+async def _handle_delete(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase 17.2 Feature C: 删某个 session.
+
+    用法:
+      /delete <sid> --force    # 必须 --force, 简化版无真二次 confirm
+                                # (chat REPL 内嵌 confirm I/O 复杂, 此 phase 跳过)
+
+    边界:
+    - 无参数 / 仅 --force → slash_error 提示用法
+    - 不带 --force → slash_error 提示加 --force
+    - 删当前活动 session (chat.sid == sid) → 拒绝, 提示 /resume 或 /new
+    - 不存在 sid → err_delete_not_found
+    - 删成功 → slash_delete event (msg_delete_done)
+
+    Lexicon 不动 — PG var.source_sessions 可保留 dangling sid, 长期跨 session
+    累积价值仍在 (设计决定, 见 docs/plans/2026-05-26-phase-17.2-design.md
+    Feature C "不动 lexicon" 段).
+    """
+    from explain_engine.chat.chat_copy import (
+        err_delete_active,
+        err_delete_not_found,
+        msg_delete_done,
+    )
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.persistence.session import SessionStore
+
+    force = "--force" in args
+    pos_args = [a for a in args if a != "--force"]
+    if not pos_args:
+        return [ChatEvent(
+            type="slash_error",
+            content="用法: /delete <sid> --force",
+        )]
+    sid = pos_args[0]
+
+    # 拒绝删自身 — 否则 chat REPL 状态会指向已删 session, 行为不可恢复.
+    if chat.sid == sid:
+        return [ChatEvent(
+            type="slash_error",
+            content=err_delete_active(sid),
+        )]
+
+    if not force:
+        return [ChatEvent(
+            type="slash_error",
+            content=(
+                f"/delete <sid> 需加 --force (chat 内简化为强制 flag, "
+                f"误删风险大). 用法: /delete {sid} --force"
+            ),
+        )]
+
+    store = SessionStore()
+    try:
+        store.delete(sid)
+    except FileNotFoundError:
+        return [ChatEvent(
+            type="slash_error",
+            content=err_delete_not_found(sid),
+        )]
+    except OSError as exc:
+        return [ChatEvent(
+            type="slash_error",
+            content=f"删除失败 (IO/权限): {exc}",
+        )]
+
+    return [ChatEvent(
+        type="slash_delete",
+        content=msg_delete_done(sid),
+    )]
+
+
 async def _handle_lexicon(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     """Phase 11 Wave 4: 列 cross-session lexicon variables (Phase 10).
 
@@ -2010,6 +2081,8 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("rescore",        COMMAND_DESCRIPTIONS["rescore"],        _wrap_handler("rescore", _handle_rescore)),
     # Phase 11 Wave 4: 3 cross-session slash (不依赖 single session, ephemeral 也 work).
     SlashCommand("list",           COMMAND_DESCRIPTIONS["list"],           _wrap_handler("list", _handle_list)),
+    # Phase 17.2 Feature C: /delete <sid> --force (拒绝当前 session, 否则删).
+    SlashCommand("delete",         COMMAND_DESCRIPTIONS["delete"],         _wrap_handler("delete", _handle_delete)),
     SlashCommand("lexicon",        COMMAND_DESCRIPTIONS["lexicon"],        _wrap_handler("lexicon", _handle_lexicon)),
     # Phase 16 Task 13: /theories cross-session inspect (跨 session theory list).
     SlashCommand("theories",       COMMAND_DESCRIPTIONS["theories"],       _wrap_handler("theories", _handle_theories)),
