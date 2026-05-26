@@ -631,3 +631,30 @@ class TestPgvectorVsNumpyCosine:
         assert abs(pg_sim - numpy_sim) < 1e-4, (
             f"pgvector ({pg_sim}) != numpy ({numpy_sim}), diff={abs(pg_sim - numpy_sim)}"
         )
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestEmbeddingNullLegacy:
+    """Phase 17.1 Task 3.5: embedding=None 允许 insert + 读出仍 None.
+
+    legacy var (Phase 10 等 embedding 之前生成的) 没 embedding 数据, 必须
+    能继续存 / 读 / list, 不强制要求所有 var 有 embedding.
+    """
+
+    @pytest.mark.asyncio
+    async def test_insert_var_embedding_null_allowed(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _find_var_by_id,
+            _insert_var,
+            get_async_pool,
+        )
+
+        var = _sample_var(global_id="v_null0001", embedding=None)
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await _insert_var(conn, var)
+            row = await _find_var_by_id(conn, "v_null0001")
+        assert row is not None
+        assert row["global_id"] == "v_null0001"
+        assert row["embedding"] is None
