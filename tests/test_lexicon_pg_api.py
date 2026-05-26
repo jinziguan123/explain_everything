@@ -83,3 +83,113 @@ class TestShouldPromote:
             abstraction_level=1, activation=0.3, lifecycle_state="active",
         )
         assert _should_promote(node) is False
+
+
+# ── Task 4.2: _build_canonical_mechanism ────────────────────────────────
+
+
+class _FakeEdge:
+    def __init__(self, source_node: str, target_node: str):
+        self.source_node = source_node
+        self.target_node = target_node
+
+
+class _FakeGraph:
+    def __init__(self, nodes: dict, edges: dict):
+        self.nodes = nodes
+        self.edges = edges
+
+
+class _FakeState:
+    def __init__(self, graph: _FakeGraph):
+        self.graph = graph
+
+
+class _FakeMeta:
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+
+
+class _FakeSession:
+    def __init__(self, graph: _FakeGraph, session_id: str = "s_fake0001"):
+        self.state = _FakeState(graph)
+        self.meta = _FakeMeta(session_id)
+
+
+def _build_simple_session(node_name: str = "n_a") -> _FakeSession:
+    """造一个 session: node_name 有 1 outgoing (n_b) + 1 incoming (n_c)."""
+    n_a = _make_node(nid=node_name, name=node_name)
+    n_b = _make_node(nid="n_b", name="n_b 后继")
+    n_c = _make_node(nid="n_c", name="n_c 前驱")
+    edges = {
+        "e1": _FakeEdge(source_node=node_name, target_node="n_b"),
+        "e2": _FakeEdge(source_node="n_c", target_node=node_name),
+    }
+    nodes = {node_name: n_a, "n_b": n_b, "n_c": n_c}
+    return _FakeSession(_FakeGraph(nodes, edges))
+
+
+class TestBuildCanonicalMechanism:
+    """Phase 17.1 Task 4.2: _build_canonical_mechanism edge fallback + LLM 路径."""
+
+    @pytest.mark.asyncio
+    async def test_build_canonical_mechanism_no_llm(self):
+        """llm=None 走 edge fallback, 返非空 str (含 outgoing / incoming neighbor name)."""
+        from explain_engine.persistence.lexicon_pg import (
+            _build_canonical_mechanism,
+        )
+
+        session = _build_simple_session("n_a")
+        node = session.state.graph.nodes["n_a"]
+        mech = await _build_canonical_mechanism(node, session, llm=None)
+        assert isinstance(mech, str)
+        assert len(mech) > 0
+        assert "n_b 后继" in mech
+        assert "n_c 前驱" in mech
+
+    @pytest.mark.asyncio
+    async def test_build_canonical_mechanism_no_neighbors_fallback(self):
+        """孤立 node (无 edge) 时返默认 '<name> (无 edge 上下文)'."""
+        from explain_engine.persistence.lexicon_pg import (
+            _build_canonical_mechanism,
+        )
+
+        n_iso = _make_node(nid="n_iso", name="孤岛")
+        session = _FakeSession(_FakeGraph({"n_iso": n_iso}, {}))
+        mech = await _build_canonical_mechanism(n_iso, session, llm=None)
+        assert "孤岛" in mech
+
+    @pytest.mark.asyncio
+    async def test_build_canonical_mechanism_with_llm_mock(self, mock_llm_response):
+        """llm 非 None 时调 LLM, 返 response.text (cap 100 chars / 第 1 行)."""
+        from explain_engine.persistence.lexicon_pg import (
+            _build_canonical_mechanism,
+        )
+
+        # mock LLM: chat() 返一个 Response, text = '通常 cause X; 由 Y cause'
+        class _MockLLM:
+            async def chat(self, messages, schema=None, model=None):
+                return mock_llm_response({}, raw_text="通常 cause X; 由 Y cause")
+
+        session = _build_simple_session("n_a")
+        node = session.state.graph.nodes["n_a"]
+        mech = await _build_canonical_mechanism(node, session, llm=_MockLLM())
+        assert mech == "通常 cause X; 由 Y cause"
+
+    @pytest.mark.asyncio
+    async def test_build_canonical_mechanism_llm_error_fallback(self):
+        """LLM 调 raise LLMError → fall back to edge-based summary."""
+        from explain_engine.llm.errors import LLMError
+        from explain_engine.persistence.lexicon_pg import (
+            _build_canonical_mechanism,
+        )
+
+        class _BadLLM:
+            async def chat(self, messages, schema=None, model=None):
+                raise LLMError("boom")
+
+        session = _build_simple_session("n_a")
+        node = session.state.graph.nodes["n_a"]
+        mech = await _build_canonical_mechanism(node, session, llm=_BadLLM())
+        # fallback 应含 neighbor name
+        assert "n_b 后继" in mech
