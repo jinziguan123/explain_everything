@@ -1,7 +1,10 @@
 """with_light_fallback helper — Phase 17.2 Task 3+."""
 
+import logging
+
 import pytest
 
+from explain_engine.llm.errors import LLMError
 from explain_engine.llm.light_fallback import with_light_fallback
 
 
@@ -31,3 +34,20 @@ async def test_with_light_fallback_light_success_skips_main():
     assert result == "response-from-light"
     assert light.call_count == 1
     assert main.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_with_light_fallback_light_llm_error_falls_back(caplog):
+    """light raise LLMError → 调主 + log warning."""
+    caplog.set_level(logging.WARNING, logger="explain_engine.llm.light_fallback")
+    light = _StubClient("light", raises=LLMError("connection refused"))
+    main = _StubClient("main")
+
+    result = await with_light_fallback(
+        light, main, lambda llm: llm.chat("hi")
+    )
+
+    assert result == "response-from-main"
+    assert light.call_count == 1
+    assert main.call_count == 1
+    assert any("light_llm 失败" in r.message for r in caplog.records)
