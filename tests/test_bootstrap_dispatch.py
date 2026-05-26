@@ -2,8 +2,6 @@
 
 from unittest.mock import AsyncMock
 
-import pytest
-
 from explain_engine.engines.bootstrap import bootstrap_phenomena
 from explain_engine.llm.client import Response
 

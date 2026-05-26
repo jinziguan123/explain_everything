@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from explain_engine.chat.session import ChatSession, ChatStateDict
+from explain_engine.config import make_light_llm_client
 from explain_engine.engines.bootstrap import bootstrap_phenomena
 from explain_engine.hitl.cli_interactive import review_phenomena_async
 from explain_engine.persistence.session import Session, SessionMeta, SessionStore
@@ -114,6 +115,9 @@ class EphemeralChatSession:
 
         # bootstrap (raise → caller 留 ephemeral; ephemeral.state 不动)
         # 2026-05-19 polish: Rich Status spinner LLM 调用期间反馈 (5-15s)
+        # Phase 17.2 Feature A: light_llm for classify (haiku 走 fallback 主 LLM
+        # 若未配 LLM_LIGHT_*).
+        light_llm = make_light_llm_client()
         from rich.console import Console
         _console = Console()
         with _console.status("[bold green]调 LLM 生现象...[/bold green]"):
@@ -123,6 +127,7 @@ class EphemeralChatSession:
                 lexicon=lexicon if lexicon else None,
                 lexicon_top_k=20,
                 theories=stable_theories,  # Phase 16
+                light_llm=light_llm,  # Phase 17.2 Feature A
             )
 
         # HITL — Wave 1 stub: 全 accept. Wave 2 接 input_provider + k/e/d.

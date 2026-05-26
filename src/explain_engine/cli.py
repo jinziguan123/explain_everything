@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 from rich.console import Console
 from rich.table import Table
 
-from explain_engine.config import Settings, make_llm_client
+from explain_engine.config import Settings, make_light_llm_client, make_llm_client
 from explain_engine.engines._propagation import WEAK_CHAIN_THRESHOLD
 from explain_engine.engines.bootstrap import bootstrap_phenomena
 from explain_engine.engines.compression import propose_candidates
@@ -104,6 +104,9 @@ async def _run_new(
 ) -> None:
     settings = Settings()
     llm = make_llm_client()
+    # Phase 17.2 Feature A: light_llm for classify (haiku / gpt-4o-mini).
+    # LLM_LIGHT_* 未配则 fallback 主 LLM (= zero classify cost saving 但功能等价).
+    light_llm = make_light_llm_client()
 
     # Phase 10 Wave 4: load lexicon prior (lexicon_top_k=0 跳过)
     from explain_engine.engines.lexicon import _load_lexicon
@@ -122,6 +125,7 @@ async def _run_new(
         phenomena = await bootstrap_phenomena(
             question, llm,
             lexicon=lexicon, lexicon_top_k=lexicon_top_k,
+            light_llm=light_llm,
         )
     except SchemaValidationError as exc:
         console.print(f"[red]LLM 输出不合规: {exc}[/red]")
