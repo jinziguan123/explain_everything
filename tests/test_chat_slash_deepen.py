@@ -81,3 +81,53 @@ async def test_deepen_empty_transcript_no_args(tmp_path, monkeypatch):
     # 不该 触发 promote — ephemeral 没 mock promote_to_persistent, 触发会 LLMError
     # 直接 ' slash_deepen_promoted' 不应在 events 中
     assert not any(e.type == "slash_deepen_promoted" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_deepen_uses_chat_llm_field(tmp_path, monkeypatch):
+    """Task 12: EphemeralChatSession.llm field (REPL 注入) 优先于 _llm_for_test.
+
+    验证: 构造时传 llm=...; handler 取 chat.llm 调 promote;
+    metadata.sid 含 promote 返 ChatSession 的 sid (REPL outer loop Wave 3 会接).
+    """
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    injected_llm = MagicMock(name="injected_llm")
+    ephemeral = EphemeralChatSession(storage=storage, llm=injected_llm)
+
+    fake_real_chat = MagicMock(sid="s_promoted")
+    ephemeral.promote_to_persistent = AsyncMock(return_value=fake_real_chat)
+    # 故意不设 _llm_for_test, 验 chat.llm 走通
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(ephemeral, ["为什么 X"])
+
+    # promote 被调, llm 参数 = 注入的 chat.llm
+    ephemeral.promote_to_persistent.assert_called_once()
+    call = ephemeral.promote_to_persistent.call_args
+    passed_llm = call[0][1] if len(call[0]) >= 2 else call.kwargs.get("llm")
+    assert passed_llm is injected_llm
+
+    # slash_deepen_promoted event 带 metadata.sid
+    promoted = [e for e in events if e.type == "slash_deepen_promoted"]
+    assert len(promoted) == 1
+    assert promoted[0].metadata["sid"] == "s_promoted"
+
+
+@pytest.mark.asyncio
+async def test_deepen_no_llm_at_all(tmp_path, monkeypatch):
+    """没 chat.llm 也没 _llm_for_test → slash_error 提示 LLM 未配置."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)  # 不传 llm
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(ephemeral, ["为什么"])
+
+    error_events = [e for e in events if e.type == "slash_error"]
+    assert len(error_events) == 1
+    assert "LLM" in error_events[0].content

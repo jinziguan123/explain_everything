@@ -49,8 +49,10 @@ class EphemeralChatSession:
     - promote_to_persistent(question, llm): 跑 bootstrap + HITL + save → real ChatSession.
       失败 (LLMError / SchemaValidationError) → 抛, caller 留 ephemeral.
 
-    Note: LLM client 仅在 promote_to_persistent(llm=...) 显式传入,
-    不持有 instance field — 避免双 source-of-truth (REPL 的 llm 唯一来源).
+    Note: LLM client 在 promote_to_persistent(llm=...) 显式传入仍 work;
+    Phase 18 Task 12 加 llm dataclass field 让 REPL outer loop 构造 ephemeral
+    时注入, /deepen slash 内 fallback `chat.llm` 调 promote. 两路兼存 (显式 arg
+    优先 — promote 内不读 self.llm), 简化 REPL 注入唯一通道.
     """
 
     storage: StorageV2
@@ -61,6 +63,10 @@ class EphemeralChatSession:
     transcript: list[dict] = field(default_factory=list)
     input_provider: Callable[[str], Awaitable[str]] | None = None
     memory_md: str = ""
+    # Phase 18 Task 12: REPL outer loop 注入用. /deepen slash handler 通过
+    # `getattr(chat, 'llm', None)` 取此 field 调 promote_to_persistent.
+    # Wave 2 不动 repl_entry.py — production 路径需 Wave 3 Task 16 接.
+    llm: LLMClient | None = None
 
     @property
     def sid(self) -> None:
