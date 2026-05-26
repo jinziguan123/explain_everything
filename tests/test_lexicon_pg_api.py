@@ -193,3 +193,28 @@ class TestBuildCanonicalMechanism:
         mech = await _build_canonical_mechanism(node, session, llm=_BadLLM())
         # fallback 应含 neighbor name
         assert "n_b 后继" in mech
+
+
+# ── Task 4.3: _batch_embed ──────────────────────────────────────────────
+
+
+class TestBatchEmbed:
+    """Phase 17.1 Task 4.3: _batch_embed (BGE-M3 + EXPLAIN_EMBEDDING_DISABLED fallback)."""
+
+    @pytest.mark.asyncio
+    async def test_batch_embed_disabled_returns_none_list(self, monkeypatch):
+        """EXPLAIN_EMBEDDING_DISABLED=1 → 返 [None] * len(canonicals), 不 load BGE-M3."""
+        from explain_engine.persistence.lexicon_pg import _batch_embed
+
+        # conftest autouse 已 set 这个 env (默认 disabled), 显式确认
+        monkeypatch.setenv("EXPLAIN_EMBEDDING_DISABLED", "1")
+        out = await _batch_embed(["a", "b", "c"])
+        assert out == [None, None, None]
+
+    @pytest.mark.asyncio
+    async def test_batch_embed_empty_returns_empty(self):
+        """空 input 返 [] (省 model load)."""
+        from explain_engine.persistence.lexicon_pg import _batch_embed
+
+        out = await _batch_embed([])
+        assert out == []

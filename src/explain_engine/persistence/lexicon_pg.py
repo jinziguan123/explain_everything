@@ -344,3 +344,32 @@ async def _build_canonical_mechanism(
     except LLMError:
         # 老 lexicon Wave 2 review I-1: 窄化到 LLMError (非 LLM 异常应 propagate).
         return _fallback()
+
+
+async def _batch_embed(canonicals: list[str]) -> list[list[float] | None]:
+    """Phase 17.1 Task 4.3: BGE-M3 batch embed canonical mechanisms.
+
+    Behavior:
+    - 空 input 直返 [] (省 embedder load).
+    - EXPLAIN_EMBEDDING_DISABLED=1 → 返 [None] * N (test 模式默认走这条).
+    - Embedder load / encode 异常 → log warning, 返 [None] * N (best-effort,
+      不 raise — 让 flush_to_lexicon 仍能继续 insert, embedding=None 即 legacy).
+    """
+    if not canonicals:
+        return []
+    if os.environ.get("EXPLAIN_EMBEDDING_DISABLED") == "1":
+        return [None] * len(canonicals)
+    try:
+        from explain_engine.embedding.bge_m3 import get_embedder
+
+        embedder = get_embedder()
+        vecs = embedder.embed(canonicals)
+        return [vec.tolist() for vec in vecs]
+    except Exception as exc:
+        import logging
+
+        logging.warning(
+            f"_batch_embed: BGE-M3 batch embed failed: "
+            f"{type(exc).__name__}: {exc}. Falling back to embedding=None for all."
+        )
+        return [None] * len(canonicals)
