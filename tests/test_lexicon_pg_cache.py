@@ -9,6 +9,8 @@ Wave 5 加 `compute_canonical_signature` + `_build_canonical_mechanism_cached`,
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -200,3 +202,130 @@ class TestGetNodeEdges:
         node = _FakeNode(id="n1")
         session = _FakeSession(edges=[])
         assert _get_node_edges(node, session) == []
+
+
+# ── DB helper for Task 5.3+ (insert pre-existing var into PG) ──────────────
+
+
+def _insert_var_with_signature(
+    global_id: str,
+    name: str,
+    description: str,
+    abstraction_level: int,
+    epistemic: str,
+    canonical_mechanism: str,
+    canonical_signature: str,
+    canonical_model_ver: str = "v1",
+):
+    """sync helper: 把 1 个 var (含 canonical_signature) insert 进 DB.
+
+    模拟 flush_to_lexicon 写 var 之后的 state — cache test 前置条件.
+    """
+    import psycopg
+
+    from explain_engine.persistence.lexicon_pg import _get_dsn
+
+    now = datetime.now(UTC)
+    with psycopg.connect(_get_dsn()) as conn:
+        conn.execute(
+            """INSERT INTO variables (
+                global_id, name, description, abstraction_level, epistemic,
+                canonical_mechanism, canonical_signature, canonical_model_ver,
+                reuse_count, avg_essentialness, avg_consistency,
+                first_seen_at, last_seen_at, source_sessions
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s,
+                %s, %s, %s,
+                %s, %s, %s
+            )""",
+            (
+                global_id, name, description, abstraction_level, epistemic,
+                canonical_mechanism, canonical_signature, canonical_model_ver,
+                1, 0.5, 0.5,
+                now, now, ["s_pre"],
+            ),
+        )
+        conn.commit()
+
+
+# ── Task 5.3: _build_canonical_mechanism_cached (cache-lookup-first) ──────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestBuildCanonicalMechanismCachedLookup:
+    """Phase 17.1 Task 5.3: _build_canonical_mechanism_cached cache-lookup-first.
+
+    - Cache miss (DB 无匹 signature 行) → 调 Wave 4 _build_canonical_mechanism (真 LLM).
+    - Cache hit (signature + model_ver 匹) → 直返已存 canonical_mechanism, 跳 LLM.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_calls_llm(self):
+        """空 DB, _build_canonical_mechanism 被 mock 返 'X canon', _cached 应返同值
+        + mock 被调 1 次."""
+        from explain_engine.persistence import lexicon_pg
+        from explain_engine.persistence.lexicon_pg import (
+            _build_canonical_mechanism_cached,
+            get_async_pool,
+        )
+
+        node = _FakeNode(id="n1", name="X")
+        session = _FakeSession(edges=[_FakeEdge("n1", "n2")])
+        pool = await get_async_pool()
+
+        with patch.object(
+            lexicon_pg,
+            "_build_canonical_mechanism",
+            new_callable=AsyncMock,
+            return_value="X canon",
+        ) as mock_build:
+            result = await _build_canonical_mechanism_cached(
+                node, session, llm=None, pool=pool,
+            )
+        assert result == "X canon"
+        mock_build.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_returns_stored_canonical(self):
+        """先 insert var with signature='sig_x' + canonical='cached canon'.
+        mock compute_canonical_signature 返 'sig_x'. _build_canonical_mechanism
+        被 mock 抛 RuntimeError (若被调即 fail). 调 _cached 返 'cached canon'."""
+        from explain_engine.persistence import lexicon_pg
+        from explain_engine.persistence.lexicon_pg import (
+            _build_canonical_mechanism_cached,
+            get_async_pool,
+        )
+
+        # 先 insert 已存 var (cache state)
+        _insert_var_with_signature(
+            global_id="v_cached01",
+            name="缓存 var",
+            description="d",
+            abstraction_level=1,
+            epistemic="insight",
+            canonical_mechanism="cached canon",
+            canonical_signature="sig_x_aaa1bbcc",  # 16 char-like
+            canonical_model_ver="v1",
+        )
+
+        node = _FakeNode(id="n1", name="any")  # name irrelevant — signature mock
+        session = _FakeSession(edges=[])
+        pool = await get_async_pool()
+
+        # mock signature 算法返已存的 sig_x_aaa1bbcc + LLM 路径若被调即 boom
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("LLM should NOT be called on cache hit")
+
+        with patch.object(
+            lexicon_pg, "compute_canonical_signature",
+            return_value="sig_x_aaa1bbcc",
+        ), patch.object(
+            lexicon_pg, "_build_canonical_mechanism",
+            new=_boom,
+        ):
+            result = await _build_canonical_mechanism_cached(
+                node, session, llm=None, pool=pool,
+            )
+        assert result == "cached canon"

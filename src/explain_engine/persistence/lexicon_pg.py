@@ -608,6 +608,41 @@ def compute_canonical_signature(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+async def _build_canonical_mechanism_cached(
+    node: Any,
+    session: Any,
+    llm: Any | None,
+    pool: Any,  # AsyncConnectionPool
+) -> str:
+    """Phase 17.1 Task 5.3: cache-lookup-first wrapper.
+
+    Algo:
+      1. signature = compute_canonical_signature(node, _get_node_edges(node, session))
+      2. SELECT canonical_mechanism FROM variables WHERE
+         canonical_signature = signature AND canonical_model_ver = CANONICAL_MODEL_VERSION
+      3. Hit → 返 row[0] (跳 LLM, 省 1 次 canonical call).
+      4. Miss → 调 Wave 4 _build_canonical_mechanism (真 LLM or edge fallback).
+
+    Wave 5 暂只加本函数, 不改 flush_to_lexicon 调点 (Wave 6/7 接入). 这样 cache
+    层完全独立, 测试容易. CANONICAL_MODEL_VERSION 是 module-level 常量, monkeypatch
+    改值后下次 globals lookup 自动取新 (test 用此机制验 model_ver bump invalidate).
+    """
+    edges = _get_node_edges(node, session)
+    signature = compute_canonical_signature(node, edges)
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """SELECT canonical_mechanism FROM variables
+               WHERE canonical_signature = %s AND canonical_model_ver = %s
+               LIMIT 1""",
+            (signature, CANONICAL_MODEL_VERSION),
+        )
+        row = await cur.fetchone()
+    if row:
+        return row[0]
+    # Cache miss → 真 LLM (Wave 4 写)
+    return await _build_canonical_mechanism(node, session, llm)
+
+
 def _render_lexicon_for_prompt(vars_list: list[dict[str, Any]]) -> str:
     """Phase 17.1 Task 4.7: 渲 lexicon prior section 进 LLM prompt.
 
