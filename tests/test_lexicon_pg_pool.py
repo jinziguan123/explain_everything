@@ -595,3 +595,39 @@ class TestHNSWIndexUsed:
         assert "idx_variables_embedding" in plan_text, (
             f"plan did not use HNSW index:\n{plan_text}"
         )
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestPgvectorVsNumpyCosine:
+    """Phase 17.1 Task 3.4: pgvector cosine 跟 numpy cosine 数学等价验证.
+
+    pgvector `<=>` = 1 - cos(a, b), 即 cosine distance.
+    numpy cos(a, b) = a·b / (||a|| ||b||).
+    两者应等价到 float32 精度内 (绝对差 < 1e-4).
+    """
+
+    @pytest.mark.asyncio
+    async def test_pgvector_cosine_equals_numpy_cosine(self):
+        import numpy as np
+
+        from explain_engine.persistence.lexicon_pg import get_async_pool
+
+        rng = np.random.default_rng(seed=42)
+        a = rng.random(1024).astype(np.float32)
+        b = rng.random(1024).astype(np.float32)
+        # numpy cosine sim
+        numpy_sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+        # PG cosine sim = 1 - distance
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT 1 - (%s::vector <=> %s::vector) AS sim",
+                (a.tolist(), b.tolist()),
+            )
+            pg_sim = (await cur.fetchone())[0]
+
+        assert abs(pg_sim - numpy_sim) < 1e-4, (
+            f"pgvector ({pg_sim}) != numpy ({numpy_sim}), diff={abs(pg_sim - numpy_sim)}"
+        )
