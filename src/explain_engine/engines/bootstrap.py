@@ -113,6 +113,7 @@ async def bootstrap_phenomena(
     lexicon: list[dict] | None = None,
     lexicon_top_k: int = 20,
     theories: "list[Theory] | None" = None,
+    light_llm: LLMClient | None = None,
 ) -> list[VariableNode]:
     """调 variable_extraction prompt 生 concrete phenomena。
 
@@ -127,10 +128,17 @@ async def bootstrap_phenomena(
     框架下生现象 (但允许偏离). JEPA prediction-as-loss + 哲学 §9.4 落地.
     theories=None/[] 时行为不变 (backward compat).
 
+    Phase 17.2 Feature A: optional light_llm 注入 — 非 None 时前置 4-class
+    classify (走 light_llm + with_light_fallback), 按 type 选 variable_extraction
+    [_<type>].yaml (concept_explanation / mechanism / phenomenon / 默 causal_modern).
+    **light_llm=None 时跳 classify, 走 variable_extraction.yaml** (= Phase 17.2 前
+    100% 等价, 零回归).
+
     Args:
         lexicon: knowledge/variables.json 的 "variables" list (or None).
         lexicon_top_k: 取 Top-K 进 prompt (默认 20, ~1.7k token).
         theories: 跨 session stable theory list (or None). 限 top-5 防 prompt 爆.
+        light_llm: Phase 17.2 cheap LLM for classify (or None for backward compat).
 
     Raises:
         SchemaValidationError: LLM 未返回 parsed 内容
@@ -151,7 +159,20 @@ async def bootstrap_phenomena(
     if theories:
         theories_section = _build_theories_prompt_section(theories)
 
-    prompt = load_prompt("variable_extraction")
+    # Phase 17.2 Feature A: classify → per-type yaml dispatch.
+    # light_llm=None → 跳 classify, 走 variable_extraction.yaml (= causal_modern,
+    # 100% 等价 Phase 17.2 前行为).
+    if light_llm is not None:
+        qtype = await _classify_question(question, light_llm, llm)
+    else:
+        qtype = "causal_modern"
+
+    yaml_name = (
+        "variable_extraction"
+        if qtype == "causal_modern"
+        else f"variable_extraction_{qtype}"
+    )
+    prompt = load_prompt(yaml_name)
     user_content = prompt["user_template"].format(
         question=question,
         min_count=min_count,
