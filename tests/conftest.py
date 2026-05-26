@@ -71,51 +71,66 @@ def mock_llm_response():
     return _make
 
 
-# ── Phase 17.1 Wave 1: testcontainers pgvector container per test session ──
+# ── Phase 17.1 Wave 1: 远程 explain_test database (user 自部署 in 172.30.26.12) ──
 #
-# Lazy: 只在 test 显式引用 pg_container fixture (或经 reset_pg 间接引用) 才 spin.
-# 既有 1135 test 不触本 fixture, 启动速度不受影响.
+# 设计修正 (2026-05-26): 撤 testcontainers — user 单人 dev 已有远程 PG, 本机
+# spin container 是 over-engineering. 改用同 PG instance 不同 database (production
+# = 'explain', test = 'explain_test', 物理隔离).
 #
-# 首次跑: docker pull pgvector/pgvector:pg16 (~150MB), 30s-2min 取决于网络.
-# 后续: container 复用整 test session, 各 test 经 reset_pg TRUNCATE 隔离.
+# 用户需在 172.30.26.12 跑一次:
+#   ssh user@172.30.26.12 'docker exec explain-postgres psql -U explain -c "CREATE DATABASE explain_test"'
+#   ssh user@172.30.26.12 'docker exec -i explain-postgres psql -U explain -d explain_test' < deploy/postgres/init/01-init.sql
+#
+# 然后 .env 加 EXPLAIN_TEST_DB_URL=postgresql://explain:<密码>@172.30.26.12:5432/explain_test
+#
+# 没设 EXPLAIN_TEST_DB_URL 时, lexicon_pg test 自动 SKIP (既有 1135 test 不挂).
 
 
 @pytest.fixture(scope="session")
-def pg_container():
-    """Phase 17.1: pgvector container per session, 跑 DDL_INIT_SQL 起 schema."""
-    pytest.importorskip("testcontainers.postgres")
-    import psycopg
-    from testcontainers.postgres import PostgresContainer
+def pg_test_dsn():
+    """Phase 17.1: 远程 explain_test database DSN, 读自 EXPLAIN_TEST_DB_URL env.
 
-    from explain_engine.persistence.lexicon_pg_schema import DDL_INIT_SQL
-
-    pg = PostgresContainer("pgvector/pgvector:pg16")
-    pg.start()
-    try:
-        # testcontainers 默认返 SQLAlchemy 风格 dsn, 剥前缀给 psycopg3
-        url = pg.get_connection_url()
-        dsn = url.replace("postgresql+psycopg2://", "postgresql://")
-        # Apply schema (CREATE EXTENSION + 3 tables + 4 indexes + trigger + meta seed)
-        with psycopg.connect(dsn, autocommit=True) as conn:
-            conn.execute(DDL_INIT_SQL)
-        yield dsn
-    finally:
-        pg.stop()
+    未设环境变量时返 None (Test 标 @_skip_no_test_db 自动 skip).
+    设了即返 dsn, 允许 reset_pg fixture TRUNCATE.
+    """
+    import os
+    return os.environ.get("EXPLAIN_TEST_DB_URL")
 
 
 @pytest.fixture
-def reset_pg(pg_container, monkeypatch):
-    """Phase 17.1: TRUNCATE per test 跨 test 隔离 + 设 EXPLAIN_DB_URL.
+def reset_pg(pg_test_dsn, monkeypatch):
+    """Phase 17.1: TRUNCATE per test 跨 test 隔离 + 设 EXPLAIN_DB_URL = test dsn.
 
-    NOT autouse — 显式 usefixtures 才触发, 既有 1135 test 不触 pg_container, 启动
-    速度不影响.
+    NOT autouse — 显式 usefixtures 才触发, 既有 1135 test 不触本 fixture.
 
     lexicon_pg test 标 @pytest.mark.usefixtures("reset_pg") (class 或 function 级).
+
+    **3 层安全 guard 防误清生产数据**:
+    1. pg_test_dsn 必须存在 (None 时 skip, 即 EXPLAIN_TEST_DB_URL 未设)
+    2. dsn 必须含 '_test' 子串 (database 名应是 explain_test, 不能是 explain)
+    3. dsn 不能等于 EXPLAIN_DB_URL (production)
     """
+    import os
+
     import psycopg
 
-    monkeypatch.setenv("EXPLAIN_DB_URL", pg_container)
-    with psycopg.connect(pg_container, autocommit=True) as conn:
+    if pg_test_dsn is None:
+        pytest.skip("EXPLAIN_TEST_DB_URL not set — lexicon_pg test 需远程 explain_test db")
+
+    # Guard 2: dsn 必须含 '_test'
+    assert "_test" in pg_test_dsn, (
+        f"reset_pg TRUNCATE 拒绝在非 test database 上跑 (got dsn={pg_test_dsn!r}). "
+        "EXPLAIN_TEST_DB_URL 应指向 explain_test 库, 不能是生产 explain 库."
+    )
+    # Guard 3: 跟 production DSN 区分
+    prod_dsn = os.environ.get("EXPLAIN_DB_URL")
+    assert pg_test_dsn != prod_dsn, (
+        "reset_pg TRUNCATE 拒绝在生产 DSN 上跑 "
+        "(EXPLAIN_TEST_DB_URL 跟 EXPLAIN_DB_URL 不能相同)."
+    )
+
+    monkeypatch.setenv("EXPLAIN_DB_URL", pg_test_dsn)
+    with psycopg.connect(pg_test_dsn, autocommit=True) as conn:
         conn.execute(
             "TRUNCATE variables, lexicon_merge_audit; "
             "UPDATE lexicon_meta SET flush_count_since = 0, last_retro_dedup_at = NULL "
