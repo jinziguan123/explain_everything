@@ -461,3 +461,90 @@ class TestInsertVarWithEmbedding:
         assert row[0] is not None
         # pgvector adapter 应返 numpy array (1024,)
         assert len(row[0]) == 1024
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestFindDuplicate:
+    """Phase 17.1 Task 3.2: _find_duplicate pgvector cosine query.
+
+    pgvector <=> 是 cosine distance (0 = 完全相同, 2 = 完全反向).
+    similarity = 1 - distance, threshold > 0.85 即相似度 > 85%.
+    """
+
+    @pytest.mark.asyncio
+    async def test_find_duplicate_returns_similar_winner(self):
+        import numpy as np
+
+        from explain_engine.persistence.lexicon_pg import (
+            _find_duplicate,
+            _insert_var,
+            get_async_pool,
+        )
+
+        rng = np.random.default_rng(seed=1)
+        base = rng.random(1024).astype(np.float32)
+        # near = base + 极小扰动 (sim > 0.95)
+        near = base + rng.normal(0, 0.001, 1024).astype(np.float32)
+        # far = 不同 random (sim ~ 0.7 在 1024 维 random)
+        far = rng.random(1024).astype(np.float32)
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await _insert_var(
+                conn, _sample_var(global_id="v_near0001", embedding=near.tolist())
+            )
+            await _insert_var(
+                conn, _sample_var(global_id="v_far00001", embedding=far.tolist())
+            )
+            # query with base, near 应胜出 (sim 接近 1)
+            winner = await _find_duplicate(conn, base.tolist(), threshold=0.85)
+        assert winner == "v_near0001"
+
+    @pytest.mark.asyncio
+    async def test_find_duplicate_returns_none_when_nothing_above_threshold(self):
+        import numpy as np
+
+        from explain_engine.persistence.lexicon_pg import (
+            _find_duplicate,
+            _insert_var,
+            get_async_pool,
+        )
+
+        rng = np.random.default_rng(seed=2)
+        # 库里 1 个明显远的 var
+        far = rng.random(1024).astype(np.float32)
+        query = rng.random(1024).astype(np.float32)
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await _insert_var(
+                conn, _sample_var(global_id="v_only0001", embedding=far.tolist())
+            )
+            # threshold = 0.99 几乎不可能 hit
+            winner = await _find_duplicate(conn, query.tolist(), threshold=0.99)
+        assert winner is None
+
+    @pytest.mark.asyncio
+    async def test_find_duplicate_skips_rows_with_null_embedding(self):
+        """embedding IS NULL 的行不参与 cosine query (避免 NULL pg 报错)."""
+        import numpy as np
+
+        from explain_engine.persistence.lexicon_pg import (
+            _find_duplicate,
+            _insert_var,
+            get_async_pool,
+        )
+
+        rng = np.random.default_rng(seed=3)
+        emb = rng.random(1024).astype(np.float32)
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            # 1 行无 embedding (legacy)
+            await _insert_var(
+                conn, _sample_var(global_id="v_legacy01", embedding=None)
+            )
+            # 库里只 legacy, query 应返 None (没 embedding 可比)
+            winner = await _find_duplicate(conn, emb.tolist(), threshold=0.5)
+        assert winner is None

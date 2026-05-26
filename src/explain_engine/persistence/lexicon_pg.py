@@ -184,3 +184,34 @@ async def _delete_var(conn, global_id: str) -> bool:
         "DELETE FROM variables WHERE global_id = %s", (global_id,)
     )
     return cur.rowcount > 0
+
+
+# ── Wave 3: pgvector cosine dedup ───────────────────────────────────────
+
+
+async def _find_duplicate(
+    conn,
+    embedding: list[float] | Any,  # list[float] | np.ndarray
+    threshold: float = 0.85,
+) -> str | None:
+    """pgvector cosine dedup query — N=10k ms 级 (HNSW O(log N)).
+
+    pgvector `<=>` 是 cosine distance ∈ [0, 2]; similarity = 1 - distance.
+    threshold 是 similarity 下限 (相似度 > threshold 才算 dup).
+
+    embedding IS NULL 的行天然不进比 (`<=>` NULL 会 NULL 而非比). 显式
+    `WHERE embedding IS NOT NULL` 防 planner 把 NULL 行带进 ORDER BY.
+
+    返胜出的 global_id (sim 最大那行), 或 None (库空 / 无超 threshold).
+    """
+    cur = await conn.execute(
+        """SELECT global_id, 1 - (embedding <=> %s::vector) AS sim
+           FROM variables
+           WHERE embedding IS NOT NULL
+             AND 1 - (embedding <=> %s::vector) > %s
+           ORDER BY embedding <=> %s::vector
+           LIMIT 1""",
+        (embedding, embedding, threshold, embedding),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else None
