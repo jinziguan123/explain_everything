@@ -131,3 +131,35 @@ async def test_deepen_no_llm_at_all(tmp_path, monkeypatch):
     error_events = [e for e in events if e.type == "slash_error"]
     assert len(error_events) == 1
     assert "LLM" in error_events[0].content
+
+
+@pytest.mark.asyncio
+async def test_deepen_in_persistent_session_rejected(tmp_path, monkeypatch):
+    """已 promote 的 ChatSession 内 /deepen → err_deepen_already_promoted + 提示 /new."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    from explain_engine.chat.session import ChatSession
+    from explain_engine.persistence.session import Session, SessionMeta, SessionStore
+    from explain_engine.schema.state import CognitiveState
+
+    # 预存一个 persistent session
+    state = CognitiveState.bootstrap("已建模问题", budget=20)
+    meta = SessionMeta.new("已建模问题")
+    SessionStore().save(Session(meta=meta, state=state))
+
+    chat = ChatSession(meta.session_id, llm=MagicMock())
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(chat, ["别的问题"])
+
+    error_events = [e for e in events if e.type == "slash_error"]
+    assert len(error_events) == 1
+    content = error_events[0].content
+    # 拒绝文案 — 包含 "已建模" 或 "已 /deepen" 任一, 必含 /new + 当前 question
+    assert "已 /deepen" in content or "已建模" in content
+    assert "/new" in content
+    assert "已建模问题" in content
+
+    # 不该触发 promote
+    assert not any(e.type == "slash_deepen_promoted" for e in events)
