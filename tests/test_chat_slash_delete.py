@@ -73,3 +73,39 @@ class TestSlashDeleteHandler:
         events = await cmd.handler(chat, ["s_notexist", "--force"])
         assert events[0].type == "slash_error"
         assert "不存在" in events[0].content
+
+
+class TestSlashDeleteCurrentSession:
+    """Phase 17.2 Task 26: 拒绝删自身 (chat.sid == sid)."""
+
+    @pytest.mark.asyncio
+    async def test_delete_current_session_rejected_even_with_force(self):
+        """chat 在 s_current, /delete s_current --force → err_delete_active,
+        session 仍在 (没被删)."""
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        _make_done_session("s_de200001")
+        chat = ChatSession("s_de200001")
+        cmd = _command_by_name("delete")
+
+        # 跟 chat.sid 相同 → 拒绝
+        events = await cmd.handler(chat, ["s_de200001", "--force"])
+        assert events[0].type == "slash_error"
+        content = events[0].content
+        assert "s_de200001" in content
+        assert "当前" in content
+
+        # 确认 session_dir 未被删
+        assert StorageV2().session_dir("s_de200001").exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_current_session_rejected_without_force_too(self):
+        """没 --force 时仍优先拒绝自身 (err_delete_active), 不漏 --force hint."""
+        _make_done_session("s_de200002")
+        chat = ChatSession("s_de200002")
+        cmd = _command_by_name("delete")
+
+        events = await cmd.handler(chat, ["s_de200002"])
+        # 拒绝逻辑应先于 --force 检查, content 应包含 "当前"
+        assert events[0].type == "slash_error"
+        assert "当前" in events[0].content
