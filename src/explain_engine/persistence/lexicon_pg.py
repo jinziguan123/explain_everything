@@ -62,3 +62,23 @@ def get_sync_pool() -> ConnectionPool:
         )
         _sync_pool.open()
     return _sync_pool
+
+
+async def verify_connection() -> None:
+    """启动 fail-fast — chat REPL 启动前调.
+
+    成功: SELECT 1 返 1, 不抛.
+    失败: 抛 LexiconDBError, 含 dsn host (mask 密码) + 原因 + Hint (server / env 检查).
+    """
+    try:
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await conn.execute("SELECT 1")
+    except Exception as exc:
+        # mask 密码: 取 '@' 后部分 (host:port/db)
+        dsn_tail = _get_dsn().split("@")[-1]
+        raise LexiconDBError(
+            f"无法连接 lexicon DB ({dsn_tail}): "
+            f"{type(exc).__name__}: {exc}\n"
+            f"Hint: 检查 server (ssh 172.30.26.12 'docker compose ps') / EXPLAIN_DB_URL."
+        ) from exc

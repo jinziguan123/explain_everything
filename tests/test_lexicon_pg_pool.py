@@ -140,3 +140,46 @@ class TestGetAsyncPool:
         pool1 = await get_async_pool()
         pool2 = await get_async_pool()
         assert pool1 is pool2
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestVerifyConnectionOk:
+    """Phase 17.1 Task 2.3: verify_connection 走真 PG 应不抛."""
+
+    @pytest.mark.asyncio
+    async def test_verify_connection_ok(self):
+        from explain_engine.persistence.lexicon_pg import verify_connection
+
+        # reset_pg fixture 已 set EXPLAIN_DB_URL = test dsn, verify 应成功不抛
+        await verify_connection()
+
+
+class TestVerifyConnectionFail:
+    """Phase 17.1 Task 2.3: verify_connection 失败抛 LexiconDBError + 友好 Hint."""
+
+    @pytest.mark.asyncio
+    async def test_verify_connection_fails_with_friendly_hint(self, monkeypatch):
+        from explain_engine.persistence import lexicon_pg
+        from explain_engine.persistence.lexicon_pg import (
+            LexiconDBError,
+            verify_connection,
+        )
+
+        # 指向不存在的 PG (port 1, 无服务)
+        monkeypatch.setenv(
+            "EXPLAIN_DB_URL", "postgresql://nouser:nopass@127.0.0.1:1/nodb"
+        )
+        # 缩短 pool connect timeout 避免 test 跑太久
+        monkeypatch.setenv("EXPLAIN_DB_CONNECT_TIMEOUT_S", "2")
+        # 清单例 pool, 让重新用新 dsn 建
+        lexicon_pg._async_pool = None
+        try:
+            with pytest.raises(LexiconDBError) as exc_info:
+                await verify_connection()
+            msg = str(exc_info.value)
+            assert "无法连接" in msg
+            assert "Hint" in msg
+        finally:
+            # 清理避免污染其他 test
+            lexicon_pg._async_pool = None
