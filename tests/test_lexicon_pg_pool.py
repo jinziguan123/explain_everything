@@ -80,3 +80,35 @@ class TestPgContainerFixture:
             )
             tables = {row[0] for row in cur.fetchall()}
         assert tables == {"variables", "lexicon_merge_audit", "lexicon_meta"}
+
+
+@_skip_no_docker
+@pytest.mark.usefixtures("reset_pg")
+class TestResetPgFixture:
+    """Phase 17.1: reset_pg autouse TRUNCATE 跨 test 隔离验证."""
+
+    def test_reset_pg_truncates_variables_on_entry(self, pg_container):
+        """每 test 进入时 variables 表空 (reset_pg fixture 已 TRUNCATE)."""
+        import psycopg
+
+        with psycopg.connect(pg_container) as conn:
+            cnt = conn.execute("SELECT COUNT(*) FROM variables").fetchone()[0]
+        assert cnt == 0
+
+    def test_reset_pg_sets_explain_db_url_env(self, pg_container):
+        """reset_pg fixture 同时 monkeypatch EXPLAIN_DB_URL = pg_container dsn."""
+        import os
+
+        assert os.environ.get("EXPLAIN_DB_URL") == pg_container
+
+    def test_reset_pg_resets_lexicon_meta_state(self, pg_container):
+        """reset_pg fixture 重置 lexicon_meta.flush_count_since=0 + last_retro_dedup_at=NULL."""
+        import psycopg
+
+        with psycopg.connect(pg_container) as conn:
+            cur = conn.execute(
+                "SELECT flush_count_since, last_retro_dedup_at FROM lexicon_meta WHERE id = 1"
+            )
+            row = cur.fetchone()
+        assert row[0] == 0
+        assert row[1] is None

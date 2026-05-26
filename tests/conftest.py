@@ -101,3 +101,31 @@ def pg_container():
         yield dsn
     finally:
         pg.stop()
+
+
+@pytest.fixture
+def reset_pg(pg_container, monkeypatch):
+    """Phase 17.1: TRUNCATE per test 跨 test 隔离 + 设 EXPLAIN_DB_URL.
+
+    NOT autouse — 显式 usefixtures 才触发, 既有 1135 test 不触 pg_container, 启动
+    速度不影响.
+
+    lexicon_pg test 标 @pytest.mark.usefixtures("reset_pg") (class 或 function 级).
+    """
+    import psycopg
+
+    monkeypatch.setenv("EXPLAIN_DB_URL", pg_container)
+    with psycopg.connect(pg_container, autocommit=True) as conn:
+        conn.execute(
+            "TRUNCATE variables, lexicon_merge_audit; "
+            "UPDATE lexicon_meta SET flush_count_since = 0, last_retro_dedup_at = NULL "
+            "WHERE id = 1"
+        )
+    yield
+    # 清 module-level pool (避免 pool 跨 test 持 connection 致测试相互污染)
+    try:
+        from explain_engine.persistence import lexicon_pg
+        lexicon_pg._async_pool = None
+        lexicon_pg._sync_pool = None
+    except ImportError:
+        pass  # Wave 2 之前 lexicon_pg 还没建
