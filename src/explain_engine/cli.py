@@ -911,6 +911,41 @@ def list_cmd() -> None:
     console.print(table)
 
 
+@app.command(name="delete")
+def delete_cmd(
+    session_id: str = typer.Argument(..., help="要删的 session id (s_xxxxxxxx)"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="跳过二次确认直接删",
+    ),
+) -> None:
+    """删除某个 session (含 graph / transcript / chat_state / repl_history).
+
+    Phase 17.2 Feature C: 默认 y/N 二次确认; --force 跳确认.
+    不存在的 sid 红字报错 exit 1.
+    """
+    from explain_engine.chat.chat_copy import (
+        STATUS_DELETE_CONFIRM,
+        err_delete_not_found,
+        msg_delete_done,
+    )
+
+    store = _get_store()
+    if not force:
+        prompt = STATUS_DELETE_CONFIRM.format(sid=session_id).rstrip(": ")
+        if not typer.confirm(prompt, default=False):
+            console.print("[yellow]已取消[/yellow]")
+            raise typer.Exit(code=0)
+    try:
+        store.delete(session_id)
+    except FileNotFoundError:
+        console.print(f"[red]{err_delete_not_found(session_id)}[/red]")
+        raise typer.Exit(code=1) from None
+    except OSError as exc:
+        console.print(f"[red]删除失败 (IO/权限): {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]{msg_delete_done(session_id)}[/green]")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 9 Wave F.2: chat REPL + migrate
 # ─────────────────────────────────────────────────────────────────────────────
