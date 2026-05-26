@@ -54,3 +54,29 @@ async def test_send_user_message_llm_error_no_transcript_pollution(tmp_path, mon
     assert "LLMError" in error_events[0].content
     # transcript 不变 (retry 友好)
     assert ephemeral.transcript == []
+
+
+@pytest.mark.asyncio
+async def test_send_user_message_multi_turn_transcript_accumulates(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+
+    llm = AsyncMock()
+    # 2 轮 chat
+    resp1 = MagicMock(text="第一轮回答")
+    resp2 = MagicMock(text="第二轮回答")
+    llm.chat.side_effect = [resp1, resp2]
+
+    async for _ in ephemeral.send_user_message("问题1", llm):
+        pass
+    async for _ in ephemeral.send_user_message("问题2", llm):
+        pass
+
+    assert len(ephemeral.transcript) == 4
+    assert ephemeral.transcript[0] == {"role": "user", "content": "问题1"}
+    assert ephemeral.transcript[1] == {"role": "assistant", "content": "第一轮回答"}
+    assert ephemeral.transcript[2] == {"role": "user", "content": "问题2"}
+    assert ephemeral.transcript[3] == {"role": "assistant", "content": "第二轮回答"}
