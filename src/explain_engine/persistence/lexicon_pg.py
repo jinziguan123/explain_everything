@@ -160,3 +160,11 @@ async def _list_vars_top_k(conn, k: int = 20) -> list[dict[str, Any]]:
             (k,),
         )
         return await cur.fetchall()
+
+
+async def _delete_var(conn, global_id: str) -> bool:
+    """DELETE FROM variables WHERE global_id. 返 True iff 真删了 1 行."""
+    cur = await conn.execute(
+        "DELETE FROM variables WHERE global_id = %s", (global_id,)
+    )
+    return cur.rowcount > 0

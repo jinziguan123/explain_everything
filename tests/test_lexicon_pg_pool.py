@@ -390,3 +390,41 @@ class TestListVarsTopK:
                 await _insert_var(conn, _sample_var(global_id=f"v_dflt{i:04d}"))
             rows = await _list_vars_top_k(conn)
         assert len(rows) == 3
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestDeleteVar:
+    """Phase 17.1 Task 2.8: _delete_var DELETE FROM variables WHERE global_id."""
+
+    @pytest.mark.asyncio
+    async def test_delete_var_removes_row(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _delete_var,
+            _find_var_by_id,
+            _insert_var,
+            get_async_pool,
+        )
+
+        var = _sample_var(global_id="v_delete01")
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await _insert_var(conn, var)
+            assert await _find_var_by_id(conn, "v_delete01") is not None
+            deleted = await _delete_var(conn, "v_delete01")
+        assert deleted is True
+
+        async with pool.connection() as conn2:
+            assert await _find_var_by_id(conn2, "v_delete01") is None
+
+    @pytest.mark.asyncio
+    async def test_delete_var_missing_returns_false(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _delete_var,
+            get_async_pool,
+        )
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            result = await _delete_var(conn, "v_doesnt_exist")
+        assert result is False
