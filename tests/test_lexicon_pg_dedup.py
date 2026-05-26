@@ -49,6 +49,34 @@ def _sample_var(
     return base
 
 
+async def _bulk_insert_dummies(conn, n: int, prefix: str = "v_dum") -> None:
+    """Wave 6 test helper — executemany 批量 insert N 行无 embedding var.
+
+    跑 ~100 行远程 PG <2s (避免 N 次 single-row insert 慢).
+    embedding 全 NULL — Wave 6 dedup test 需要 N ≥ 100 触发, 但不一定需要
+    所有行有 embedding (cross-join WHERE embedding IS NOT NULL 自然跳).
+    """
+    now = datetime.now(UTC)
+    args = [
+        (
+            f"{prefix}{i:04d}", "测试 var", "用于 dedup test", 1, "insight",
+            "test mech", "abc12345", "v1",
+            1, 0.5, 0.7,
+            now, now, ["s_test0001"], None,
+        )
+        for i in range(n)
+    ]
+    await conn.cursor().executemany(
+        """INSERT INTO variables (
+            global_id, name, description, abstraction_level, epistemic,
+            canonical_mechanism, canonical_signature, canonical_model_ver,
+            reuse_count, avg_essentialness, avg_consistency,
+            first_seen_at, last_seen_at, source_sessions, embedding
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        args,
+    )
+
+
 # ── Wave 6 Task 6.1: lexicon_meta seed 验证 ─────────────────────────────
 
 
@@ -124,3 +152,65 @@ class TestMaybeLazyDedupSkipsBelow100:
         # N<100 早 return — flush_count_since 仍 10 (没 increment), last_retro_at 仍 NULL
         assert row[0] == 10
         assert row[1] is None
+
+
+# ── Wave 6 Task 6.3: flush_count 阈值 5 触发 ────────────────────────────
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestMaybeLazyDedupIncrementsCountThenRuns:
+    """Phase 17.1 Task 6.3: N >= 100 时 flush_count_since 阈值算法.
+
+    阈值 logic (lexicon_pg._maybe_lazy_dedup):
+      - flush_count < 5 → +1, return 0
+      - flush_count >= 5 → 跑 _retroactive_dedup_pg + reset 0
+
+    Test scenario (reset_pg 起始 flush_count = 0):
+      调用次数 1: count 0 → 1, return 0
+      调用次数 2: count 1 → 2, return 0
+      调用次数 3: count 2 → 3, return 0
+      调用次数 4: count 3 → 4, return 0
+      调用次数 5: count 4 → 5, return 0
+      调用次数 6: count 5 >= 5, 跑 dedup → reset 0, last_retro_at = NOW()
+
+    Task 6.4 前 _retroactive_dedup_pg 是 stub 返 0, 所以 merged 字段 == 0;
+    但 reset + last_retro_at 写入 行为应该已就绪.
+    """
+
+    @pytest.mark.asyncio
+    async def test_increments_then_runs_after_threshold(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _maybe_lazy_dedup,
+            get_async_pool,
+        )
+
+        pool = await get_async_pool()
+        # 批量 insert 110 dummy var (跨 N>=100 阈值; executemany 1 round)
+        async with pool.connection() as conn:
+            await _bulk_insert_dummies(conn, 110)
+
+        # 前 5 次 — flush_count_since 累 1→5, return 0, last_retro_at 仍 NULL
+        for expected_count in range(1, 6):
+            merged = await _maybe_lazy_dedup(pool)
+            assert merged == 0, f"call #{expected_count} 应 return 0 (count<阈值)"
+            async with pool.connection() as conn:
+                cur = await conn.execute(
+                    "SELECT flush_count_since, last_retro_dedup_at FROM lexicon_meta WHERE id=1"
+                )
+                row = await cur.fetchone()
+            assert row[0] == expected_count, (
+                f"call #{expected_count}: flush_count 应 {expected_count}, got {row[0]}"
+            )
+            assert row[1] is None, "未到阈值, last_retro_at 应仍 NULL"
+
+        # 第 6 次 — flush_count 已 5 >= 5, 触发 dedup, reset 0, 写 last_retro_at
+        merged = await _maybe_lazy_dedup(pool)
+        assert merged == 0  # Task 6.2 stub 返 0; Task 6.4 后真合 sim>0.85 才 > 0
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT flush_count_since, last_retro_dedup_at FROM lexicon_meta WHERE id=1"
+            )
+            row = await cur.fetchone()
+        assert row[0] == 0, f"第 6 次后 flush_count_since 应 reset 0, got {row[0]}"
+        assert row[1] is not None, "第 6 次后 last_retro_dedup_at 应写 NOW()"
