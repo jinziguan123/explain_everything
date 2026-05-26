@@ -373,3 +373,91 @@ class TestFlushToLexicon:
         # source_sessions union 含新 sid
         assert "s_dup00001" in row[1]
         assert "s_orig0001" in row[1]
+
+
+# ── Task 4.5: get_lexicon_top_k_for_compress (sync) ─────────────────────
+
+
+def _insert_sample_var_sync(global_id: str, **fitness_kw):
+    """sync helper: psycopg.connect 直接 insert (用于 sync API test)."""
+    import psycopg
+    from psycopg.rows import dict_row  # noqa: F401
+
+    from explain_engine.persistence.lexicon_pg import _get_dsn
+
+    now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+    defaults = {
+        "global_id": global_id,
+        "name": f"name_{global_id}",
+        "description": "desc",
+        "abstraction_level": 1,
+        "epistemic": "insight",
+        "canonical_mechanism": "mech",
+        "canonical_signature": "sig",
+        "canonical_model_ver": "v1",
+        "reuse_count": 1,
+        "avg_essentialness": 0.5,
+        "avg_consistency": 0.5,
+        "first_seen_at": now,
+        "last_seen_at": now,
+        "source_sessions": ["s_x"],
+    }
+    defaults.update(fitness_kw)
+    with psycopg.connect(_get_dsn()) as conn:
+        conn.execute(
+            """INSERT INTO variables (
+                global_id, name, description, abstraction_level, epistemic,
+                canonical_mechanism, canonical_signature, canonical_model_ver,
+                reuse_count, avg_essentialness, avg_consistency,
+                first_seen_at, last_seen_at, source_sessions
+            ) VALUES (
+                %(global_id)s, %(name)s, %(description)s, %(abstraction_level)s, %(epistemic)s,
+                %(canonical_mechanism)s, %(canonical_signature)s, %(canonical_model_ver)s,
+                %(reuse_count)s, %(avg_essentialness)s, %(avg_consistency)s,
+                %(first_seen_at)s, %(last_seen_at)s, %(source_sessions)s
+            )""",
+            defaults,
+        )
+        conn.commit()
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestGetLexiconTopKForCompress:
+    """Phase 17.1 Task 4.5: get_lexicon_top_k_for_compress (sync API)."""
+
+    def test_get_lexicon_top_k_returns_dict_list_sorted_by_composite(self):
+        from explain_engine.persistence.lexicon_pg import (
+            get_lexicon_top_k_for_compress,
+        )
+
+        # 3 var: composite = ess * cons * reuse
+        # v_low: 0.1 * 0.1 * 1 = 0.01
+        # v_mid: 0.5 * 0.5 * 4 = 1.00
+        # v_top: 0.9 * 0.9 * 10 = 8.10
+        _insert_sample_var_sync(
+            "v_low00001", avg_essentialness=0.1, avg_consistency=0.1, reuse_count=1,
+        )
+        _insert_sample_var_sync(
+            "v_mid00001", avg_essentialness=0.5, avg_consistency=0.5, reuse_count=4,
+        )
+        _insert_sample_var_sync(
+            "v_top00001", avg_essentialness=0.9, avg_consistency=0.9, reuse_count=10,
+        )
+
+        rows = get_lexicon_top_k_for_compress(storage=None, k=2)
+        assert isinstance(rows, list)
+        assert len(rows) == 2
+        gids = [r["global_id"] for r in rows]
+        assert gids == ["v_top00001", "v_mid00001"]
+        # 是 dict (含其他字段)
+        assert "name" in rows[0]
+        assert "canonical_mechanism" in rows[0]
+
+    def test_get_lexicon_top_k_empty_db_returns_empty(self):
+        from explain_engine.persistence.lexicon_pg import (
+            get_lexicon_top_k_for_compress,
+        )
+
+        rows = get_lexicon_top_k_for_compress(storage=None, k=20)
+        assert rows == []

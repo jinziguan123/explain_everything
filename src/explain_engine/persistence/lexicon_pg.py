@@ -486,3 +486,32 @@ async def flush_to_lexicon(
                 await _insert_new_var(conn, node, canon, emb, session)
                 promoted += 1
     return promoted
+
+
+def get_lexicon_top_k_for_compress(
+    storage: Any,  # 保 signature, PG impl 不读 file
+    k: int = 20,
+) -> list[dict[str, Any]]:
+    """Phase 17.1 Task 4.5: sync API — chat /compress 前调取 LLM prior.
+
+    ORDER BY composite score (avg_essentialness * avg_consistency * reuse_count) DESC,
+    LIMIT k. 返 list[dict] (psycopg dict_row factory), 含 variables 全列.
+
+    sync 而非 async — chat /compress 调点是 sync subcommand handler (避免上层
+    强行套 asyncio.run). 用 module-level sync ConnectionPool (跟 async pool 分开
+    实例, 不依赖 event loop).
+
+    Wave 4 默认 k=20 (跟老 lexicon._select_top_k_vars 同). k<=0 返 [].
+    """
+    if k <= 0:
+        return []
+    pool = get_sync_pool()
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """SELECT * FROM variables
+                   ORDER BY (avg_essentialness * avg_consistency * reuse_count) DESC
+                   LIMIT %s""",
+                (k,),
+            )
+            return cur.fetchall()
