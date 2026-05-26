@@ -548,3 +548,50 @@ class TestFindDuplicate:
             # 库里只 legacy, query 应返 None (没 embedding 可比)
             winner = await _find_duplicate(conn, emb.tolist(), threshold=0.5)
         assert winner is None
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestHNSWIndexUsed:
+    """Phase 17.1 Task 3.3: 验 HNSW 索引被 query 命中 (EXPLAIN ANALYZE).
+
+    N=20 时 PG planner 偏 Seq Scan (cost 12.75 < HNSW lookup overhead, 真实合理),
+    所以本 test 用 `SET LOCAL enable_seqscan = off` 强制走 index, 目的是验证:
+    1. idx_variables_embedding 索引在 schema 里真存在并可用
+    2. <=> cosine query 形态 + 参数绑定真能命中 HNSW (而非 fallback Seq Scan)
+
+    生产 N=10k+ 时 planner 自然倾向 HNSW (本 test 不验 planner 选择, 只验 index OK).
+    """
+
+    @pytest.mark.asyncio
+    async def test_hnsw_index_used_in_query_plan(self):
+        import numpy as np
+
+        from explain_engine.persistence.lexicon_pg import (
+            _insert_var,
+            get_async_pool,
+        )
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            for i in range(20):
+                emb = np.random.rand(1024).astype(np.float32).tolist()
+                await _insert_var(
+                    conn,
+                    _sample_var(global_id=f"v_idx{i:04d}", embedding=emb),
+                )
+            # 显式开 txn + SET LOCAL 强制 HNSW (N=20 时 planner 偏 Seq Scan)
+            async with conn.transaction():
+                await conn.execute("SET LOCAL enable_seqscan = off")
+                query_emb = np.random.rand(1024).astype(np.float32).tolist()
+                cur = await conn.execute(
+                    "EXPLAIN ANALYZE SELECT * FROM variables "
+                    "ORDER BY embedding <=> %s::vector LIMIT 1",
+                    (query_emb,),
+                )
+                plan_lines = [row[0] for row in await cur.fetchall()]
+        plan_text = "\n".join(plan_lines)
+        # 强制 seqscan=off 后, 应走 HNSW index scan
+        assert "idx_variables_embedding" in plan_text, (
+            f"plan did not use HNSW index:\n{plan_text}"
+        )
