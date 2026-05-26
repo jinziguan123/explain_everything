@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 DEFAULT_DSN = "postgresql://explain:changeme@127.0.0.1:5432/explain"
@@ -110,3 +111,12 @@ async def _insert_var(conn, var: dict[str, Any]) -> None:
         )""",
         var,
     )
+
+
+async def _find_var_by_id(conn, global_id: str) -> dict[str, Any] | None:
+    """SELECT 全列 by global_id, 返 dict (用 dict_row factory) 或 None."""
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            "SELECT * FROM variables WHERE global_id = %s", (global_id,)
+        )
+        return await cur.fetchone()

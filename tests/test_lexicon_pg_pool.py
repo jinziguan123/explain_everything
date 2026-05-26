@@ -241,3 +241,41 @@ class TestInsertVar:
         assert row[3] is None
         # 顺带 sanity: psycopg 真的连了一次
         assert isinstance(conn, psycopg.AsyncConnection)
+
+
+@_skip_no_test_db
+@pytest.mark.usefixtures("reset_pg")
+class TestFindVarById:
+    """Phase 17.1 Task 2.5: _find_var_by_id 返 dict 或 None."""
+
+    @pytest.mark.asyncio
+    async def test_find_var_by_id_returns_dict(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _find_var_by_id,
+            _insert_var,
+            get_async_pool,
+        )
+
+        var = _sample_var(global_id="v_findme01", name="找我")
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            await _insert_var(conn, var)
+            row = await _find_var_by_id(conn, "v_findme01")
+        assert row is not None
+        assert isinstance(row, dict)
+        assert row["global_id"] == "v_findme01"
+        assert row["name"] == "找我"
+        assert row["source_sessions"] == ["s_test0001"]
+        assert row["reuse_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_find_var_by_id_returns_none_when_missing(self):
+        from explain_engine.persistence.lexicon_pg import (
+            _find_var_by_id,
+            get_async_pool,
+        )
+
+        pool = await get_async_pool()
+        async with pool.connection() as conn:
+            row = await _find_var_by_id(conn, "v_nonexistent")
+        assert row is None
