@@ -8,21 +8,19 @@ Phase 19 Wave 6 Task 32: init_lexicon_backend "搬家" 到 SplashScreen._init_le
 (决策 1, splash 真显示"加载 lexicon..."). 仅 `show_splash=False` 路径 (cli
 `--no-splash`) repl_entry 自己跑 init.
 
-Phase 19 Wave 7 hotfix Bug 2: macOS Terminal.app 不支持 kitty CSI-u 增强键盘协议.
-textual 默 enable 会导致用户输汉字 IME 提交时显 raw `[49;;{codepoint}u` escape
-而不是真字符. textual.constants.DISABLE_KITTY_KEY 在 module-level 读 env var
-`TEXTUAL_DISABLE_KITTY_KEY` (Final, evaluate 一次), 故必须在 `import textual.*`
-**之前** set. _disable_kitty_keys_if_apple_terminal() 在 enter_repl_async 函数体
-最顶端 (在 lazy import textual app 之前) 调, 跟 textual 设计约束一致.
+Phase 19 Wave 7 hotfix Bug 2 + 后续 hotfix: textual 默 enable kitty CSI-u
+增强键盘协议导致跨终端兼容性问题 (raw `[49;;{codepoint}u` 显屏). 修法上移
+到 `explain_engine/__init__.py` 顶部 setdefault `TEXTUAL_DISABLE_KITTY_KEY=1`
+— 保证任何 textual import 之前 env 已就位. 老在本文件 `enter_repl_async`
+函数体顶端 detect TERM_PROGRAM 的 helper 已删除 (时序+覆盖范围都不对).
 
 新 enter_repl_async 流程:
-1. macOS Terminal.app detect → setdefault TEXTUAL_DISABLE_KITTY_KEY=1 (Bug 2 fix).
-2. make_llm_client / make_light_llm_client (LLM 未配 → None, slash 仍可用).
-3. show_splash=False → 自跑 init_lexicon_backend (best-effort);
+1. make_llm_client / make_light_llm_client (LLM 未配 → None, slash 仍可用).
+2. show_splash=False → 自跑 init_lexicon_backend (best-effort);
    show_splash=True → 跳, splash 内会跑.
-4. 建 EphemeralChatSession (启始 chat var).
-5. 建 ExplainChatApp(llm, light_llm, ephemeral_chat, show_splash=...).
-6. await app.run_async() — textual outer loop, exit() / Ctrl+C 退出.
+3. 建 EphemeralChatSession (启始 chat var).
+4. 建 ExplainChatApp(llm, light_llm, ephemeral_chat, show_splash=...).
+5. await app.run_async() — textual outer loop, exit() / Ctrl+C 退出.
 
 outer loop / chat var 切换 (ephemeral ↔ ChatSession) / slash dispatch 移进
 tui_app.py: Input.Submitted handler 调 dispatch_slash, _render_event 接
@@ -33,30 +31,6 @@ slash_deepen_promoted / slash_reset_to_ephemeral / slash_quit 改 self.chat
 """
 
 from __future__ import annotations
-
-import os
-
-
-def _disable_kitty_keys_if_apple_terminal() -> None:
-    """Wave 7 hotfix Bug 2: macOS Terminal.app detect → 关 textual kitty CSI-u.
-
-    macOS Terminal.app 不支持 kitty 增强键盘协议 (CSI-u escape sequence). textual
-    8.x 默 enable, 用户输汉字 IME commit 时终端把汉字 codepoint 走 kitty 编码
-    `[49;;{cp1}:{cp2}u` 发回 textual, 但 macOS Terminal.app 自己不识别这些 escape
-    → 终端直接把 raw escape 字符显在屏上 (bug 2 production smoke 实证).
-
-    textual.constants 第 116 行:
-        DISABLE_KITTY_KEY: Final[bool] = _get_environ_bool("TEXTUAL_DISABLE_KITTY_KEY")
-    是 `Final`, 在 `from textual import constants` 时一次性 evaluate. 故 fix 必须
-    在 textual import **之前** set env var — 本函数在 enter_repl_async 最顶端
-    (lazy import textual app 之前) 调.
-
-    setdefault 而非 [] 赋值: user 显式 set TEXTUAL_DISABLE_KITTY_KEY=0 时不覆盖
-    (explicit > convention). 非 Apple_Terminal (iTerm2 / kitty / WezTerm) 跳过,
-    保留 textual 默 enhanced 模式 (更精准 key event).
-    """
-    if os.environ.get("TERM_PROGRAM") == "Apple_Terminal":
-        os.environ.setdefault("TEXTUAL_DISABLE_KITTY_KEY", "1")
 
 
 async def enter_repl_async(show_splash: bool = True) -> None:
@@ -78,12 +52,10 @@ async def enter_repl_async(show_splash: bool = True) -> None:
     - slash_deepen_promoted → app.chat 切到 ChatSession (用 metadata.sid).
     - slash_reset_to_ephemeral → app.chat 重建 EphemeralChatSession.
     - slash_quit / Ctrl+C → app.exit() 退出.
-    """
-    # 0. Wave 7 hotfix Bug 2: 必在 import textual.* **之前** detect TERM_PROGRAM →
-    # set TEXTUAL_DISABLE_KITTY_KEY. textual.constants.DISABLE_KITTY_KEY 是
-    # module-level Final, 一次性 evaluate, 故 import 前 set 是唯一稳路径.
-    _disable_kitty_keys_if_apple_terminal()
 
+    注: textual kitty CSI-u disable 已在 `explain_engine/__init__.py` 顶部
+    setdefault, 不再在本函数内 detect TERM_PROGRAM.
+    """
     # 1. LLM clients — make_llm_client 抛 KeyError 若 env 未配; slash 仍可工作.
     from explain_engine.config import make_light_llm_client, make_llm_client
 
