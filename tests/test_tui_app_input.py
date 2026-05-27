@@ -18,7 +18,8 @@ async def test_input_submitted_slash_dispatch(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_tui_input")
 
-    from textual.widgets import Input, RichLog
+    from textual.containers import VerticalScroll
+    from textual.widgets import Input, Static
 
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.tui_app import ExplainChatApp
@@ -40,9 +41,10 @@ async def test_input_submitted_slash_dispatch(tmp_path, monkeypatch) -> None:
         await pilot.pause()
         await pilot.pause()
 
-        # /help yield 一个 slash_help event (str content) → 写入 log
-        log = app.query_one("#output", RichLog)
-        assert len(log.lines) >= 1
+        # /help yield 一个 slash_help event (str content) → mount Static
+        container = app.query_one("#output", VerticalScroll)
+        statics = list(container.query(Static))
+        assert len(statics) >= 1
         # Input value 已清空
         assert prompt.value == ""
 
@@ -53,7 +55,8 @@ async def test_input_submitted_natural_language(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_tui_input_nl")
 
-    from textual.widgets import Input, RichLog
+    from textual.containers import VerticalScroll
+    from textual.widgets import Input, Static
 
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.tui_app import ExplainChatApp
@@ -82,9 +85,10 @@ async def test_input_submitted_natural_language(tmp_path, monkeypatch) -> None:
 
         # LLM chat 调用过
         llm.chat.assert_called()
-        # log 含 answer
-        log = app.query_one("#output", RichLog)
-        assert len(log.lines) >= 1
+        # answer 已 mount Static
+        container = app.query_one("#output", VerticalScroll)
+        statics = list(container.query(Static))
+        assert len(statics) >= 1
         assert prompt.value == ""
 
 

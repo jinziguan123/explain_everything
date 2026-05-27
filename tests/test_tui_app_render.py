@@ -14,11 +14,12 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_render_assistant_text_writes_to_log(tmp_path, monkeypatch) -> None:
-    """assistant_text event → log.write content."""
+    """assistant_text event → mount Static 到 #output (Wave 4)."""
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
-    from textual.widgets import RichLog
+    from textual.containers import VerticalScroll
+    from textual.widgets import Static
 
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.session import ChatEvent
@@ -35,9 +36,9 @@ async def test_render_assistant_text_writes_to_log(tmp_path, monkeypatch) -> Non
         await pilot.pause()
         await app._render_event(ChatEvent(type="assistant_text", content="hello world"))
         await pilot.pause()
-        log = app.query_one("#output", RichLog)
-        # RichLog.lines 是 list[Strip]; 检查 1 行被 write 即可.
-        assert len(log.lines) >= 1
+        container = app.query_one("#output", VerticalScroll)
+        statics = list(container.query(Static))
+        assert len(statics) >= 1
 
 
 @pytest.mark.asyncio
@@ -68,11 +69,12 @@ async def test_render_slash_quit_exits(tmp_path, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_render_unknown_event_dim_fallback(tmp_path, monkeypatch) -> None:
-    """未知 event type → dim fallback 写到 log (不崩)."""
+    """未知 event type → dim fallback mount Static (不崩)."""
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
-    from textual.widgets import RichLog
+    from textual.containers import VerticalScroll
+    from textual.widgets import Static
 
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.session import ChatEvent
@@ -90,18 +92,19 @@ async def test_render_unknown_event_dim_fallback(tmp_path, monkeypatch) -> None:
         # 一个 Wave 3 未支持的 type
         await app._render_event(ChatEvent(type="some_unknown_type", content="x"))
         await pilot.pause()
-        log = app.query_one("#output", RichLog)
-        # 至少有一行 (dim fallback)
-        assert len(log.lines) >= 1
+        container = app.query_one("#output", VerticalScroll)
+        statics = list(container.query(Static))
+        assert len(statics) >= 1
 
 
 @pytest.mark.asyncio
 async def test_render_slash_help_renders_text(tmp_path, monkeypatch) -> None:
-    """slash_help / slash_show 等普通 text event → 写到 log."""
+    """slash_help / slash_show 等普通 text event → mount Static."""
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
-    from textual.widgets import RichLog
+    from textual.containers import VerticalScroll
+    from textual.widgets import Static
 
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.session import ChatEvent
@@ -118,8 +121,9 @@ async def test_render_slash_help_renders_text(tmp_path, monkeypatch) -> None:
         await pilot.pause()
         await app._render_event(ChatEvent(type="slash_help", content="HELP TEXT"))
         await pilot.pause()
-        log = app.query_one("#output", RichLog)
-        assert len(log.lines) >= 1
+        container = app.query_one("#output", VerticalScroll)
+        statics = list(container.query(Static))
+        assert len(statics) >= 1
 
 
 @pytest.mark.asyncio
@@ -248,11 +252,12 @@ async def test_render_slash_reset_to_ephemeral(tmp_path, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_render_slash_error_renders_text(tmp_path, monkeypatch) -> None:
-    """slash_error → 红色 (markup) 写到 log."""
+    """slash_error → mount Static (红色 markup)."""
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
-    from textual.widgets import RichLog
+    from textual.containers import VerticalScroll
+    from textual.widgets import Static
 
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.session import ChatEvent
@@ -269,8 +274,9 @@ async def test_render_slash_error_renders_text(tmp_path, monkeypatch) -> None:
         await pilot.pause()
         await app._render_event(ChatEvent(type="slash_error", content="some error"))
         await pilot.pause()
-        log = app.query_one("#output", RichLog)
-        assert len(log.lines) >= 1
+        container = app.query_one("#output", VerticalScroll)
+        statics = list(container.query(Static))
+        assert len(statics) >= 1
 
 
 @pytest.mark.asyncio
@@ -352,7 +358,8 @@ async def test_render_slash_switch_session_missing_sid_keeps_chat(
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_tui_render_switch_missing")
 
-    from textual.widgets import RichLog
+    from textual.containers import VerticalScroll
+    from textual.widgets import Static
 
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.session import ChatEvent
@@ -381,6 +388,7 @@ async def test_render_slash_switch_session_missing_sid_keeps_chat(
         await pilot.pause()
         assert app.chat is ephemeral
 
-        # 验有红字提示写到 log (至少 1 行)
-        log = app.query_one("#output", RichLog)
-        assert len(log.lines) >= 1
+        # 验有红字提示 mount 到 #output (至少 1 个 Static)
+        container = app.query_one("#output", VerticalScroll)
+        statics = list(container.query(Static))
+        assert len(statics) >= 1

@@ -1,7 +1,9 @@
-"""Phase 19 Wave 3 Task 13: ExplainChatApp scaffolding.
+"""Phase 19 Wave 3-4: ExplainChatApp scaffolding.
 
-验 textual App 基本壳: compose Header + RichLog#output + Input#prompt + Footer,
+验 textual App 基本壳: compose Header + VerticalScroll#output + Input#prompt + Footer,
 BINDINGS Ctrl+O/Ctrl+C/Ctrl+L, CSS_PATH 指 tui_app.tcss.
+
+Wave 4: RichLog → VerticalScroll 激进迁移; 文本走 Static mount.
 """
 
 from __future__ import annotations
@@ -33,11 +35,12 @@ async def test_explain_chat_app_constructs(tmp_path, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_explain_chat_app_composes_widgets(tmp_path, monkeypatch) -> None:
-    """run_test pilot 启 app, 验 Input#prompt + RichLog#output mount."""
+    """run_test pilot 启 app, 验 Input#prompt + VerticalScroll#output mount."""
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
-    from textual.widgets import Input, RichLog
+    from textual.containers import VerticalScroll
+    from textual.widgets import Input
 
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.tui_app import ExplainChatApp
@@ -52,7 +55,7 @@ async def test_explain_chat_app_composes_widgets(tmp_path, monkeypatch) -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         prompt = app.query_one("#prompt", Input)
-        output = app.query_one("#output", RichLog)
+        output = app.query_one("#output", VerticalScroll)
         assert prompt is not None
         assert output is not None
 
@@ -81,11 +84,12 @@ async def test_explain_chat_app_css_path(tmp_path, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_action_clear_log(tmp_path, monkeypatch) -> None:
-    """action_clear_log 调 RichLog.clear."""
+    """action_clear_log 移走 #output 容器所有 children (Wave 4 RichLog → VerticalScroll)."""
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
-    from textual.widgets import RichLog
+    from textual.containers import VerticalScroll
+    from textual.widgets import Static
 
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.tui_app import ExplainChatApp
@@ -99,10 +103,10 @@ async def test_action_clear_log(tmp_path, monkeypatch) -> None:
     )
     async with app.run_test() as pilot:
         await pilot.pause()
-        log = app.query_one("#output", RichLog)
-        log.write("hello")
+        container = app.query_one("#output", VerticalScroll)
+        await container.mount(Static("hello"))
         await pilot.pause()
-        # action_clear_log 调用后 lines 应为 0
+        # action_clear_log 调用后 children 应为 0
         app.action_clear_log()
         await pilot.pause()
-        assert len(log.lines) == 0
+        assert len(container.children) == 0

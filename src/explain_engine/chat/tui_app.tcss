@@ -1,13 +1,14 @@
-/* Phase 19 Wave 3 Task 13: ExplainChatApp 基础 CSS.
+/* Phase 19 Wave 3-4: ExplainChatApp 基础 CSS.
  * 设计参考 docs/plans/2026-05-27-phase-19-tui-design.md §4.3.
- * Wave 4 加 Collapsible.thinking 样式, Wave 6 加 splash-* 类.
+ * Wave 4: RichLog → VerticalScroll 激进迁移 + Collapsible thinking 样式.
+ * Wave 6 加 splash-* 类.
  */
 
 Screen {
     background: $surface;
 }
 
-RichLog#output {
+VerticalScroll#output {
     border: solid $primary;
     padding: 1;
 }
@@ -15,4 +16,12 @@ RichLog#output {
 Input#prompt {
     dock: bottom;
     border: tall $primary;
+}
+
+/* Wave 4: thinking Collapsible — dim 边框 + 紧凑 padding. */
+Collapsible {
+    background: $surface;
+    border: tall $surface-lighten-1;
+    padding: 0 1;
+    margin: 0 0 1 0;
 }
