@@ -2138,19 +2138,30 @@ async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
             content="LLM 未配置, 无法 /deepen. 设 LLM_* env 后重启 REPL.",
         )]
 
+    # Phase 19 Task 10: promote_to_persistent 跑 bootstrap pipeline (classify +
+    # variable_extraction + HITL review + persist), 5-10s 长. 包对 status_start/end
+    # event 让 textual TUI 在期间 visible 显示 LoadingIndicator.
+    # 失败也 yield status_end 保 spinner 一定清.
+    events: list[ChatEvent] = [
+        ChatEvent(type="status_start", content="启动深度建模 — classify 中..."),
+    ]
     try:
         real_chat = await chat.promote_to_persistent(question, llm)
     except Exception as exc:
-        return [ChatEvent(
+        events.append(ChatEvent(type="status_end", content=None))
+        events.append(ChatEvent(
             type="slash_error",
             content=err_failed("deepen", exc),
-        )]
+        ))
+        return events
 
-    return [ChatEvent(
+    events.append(ChatEvent(type="status_end", content=None))
+    events.append(ChatEvent(
         type="slash_deepen_promoted",
         content=msg_deepen_promote_start(question),
         metadata={"sid": real_chat.sid},
-    )]
+    ))
+    return events
 
 
 # Registry — 24 default slash commands + 1 alias (/cf → counterfactual).

@@ -258,3 +258,130 @@ async def test_deepen_preserves_ephemeral_chat_state_budget(
     rebuilt = ChatSession(real_chat.sid, llm=llm)
     assert rebuilt.chat_state.budget_per_turn_limit == 5
     assert rebuilt.chat_state.budget_per_session_limit == 50
+
+
+# ---- Phase 19 Task 10: _handle_deepen yield status_start/end ----
+
+
+@pytest.mark.asyncio
+async def test_deepen_yields_status_start_before_promote(tmp_path, monkeypatch):
+    """promote_to_persistent 调用前 yield status_start("启动深度建模 — classify 中...").
+
+    textual TUI 在 5-10s bootstrap pipeline 期间 visible 显示 LoadingIndicator.
+    """
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage, llm=MagicMock())
+    fake_real_chat = MagicMock(sid="s_test1234")
+    ephemeral.promote_to_persistent = AsyncMock(return_value=fake_real_chat)
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(ephemeral, ["为什么", "X"])
+
+    types = [e.type for e in events]
+    assert "status_start" in types
+    # 找 status_start event 验内容
+    status_start = next(e for e in events if e.type == "status_start")
+    assert "启动深度建模" in status_start.content or "classify" in status_start.content
+
+
+@pytest.mark.asyncio
+async def test_deepen_yields_status_end_after_promote_success(tmp_path, monkeypatch):
+    """promote 成功后 yield status_end. 顺序: status_start → status_end → slash_deepen_promoted."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage, llm=MagicMock())
+    fake_real_chat = MagicMock(sid="s_test1234")
+    ephemeral.promote_to_persistent = AsyncMock(return_value=fake_real_chat)
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(ephemeral, ["为什么"])
+
+    types = [e.type for e in events]
+    assert types.index("status_start") < types.index("status_end") < types.index("slash_deepen_promoted")
+
+
+@pytest.mark.asyncio
+async def test_deepen_yields_status_end_on_promote_failure(tmp_path, monkeypatch):
+    """promote 失败也 yield status_end (清 spinner) + slash_error.
+    顺序: status_start → status_end → slash_error.
+    """
+    from explain_engine.llm.errors import LLMError
+
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage, llm=MagicMock())
+    ephemeral.promote_to_persistent = AsyncMock(side_effect=LLMError("classify failed"))
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(ephemeral, ["为什么"])
+
+    types = [e.type for e in events]
+    assert "status_start" in types
+    assert "status_end" in types
+    assert "slash_error" in types
+    assert types.index("status_start") < types.index("status_end") < types.index("slash_error")
+
+
+@pytest.mark.asyncio
+async def test_deepen_no_status_when_already_promoted(tmp_path, monkeypatch):
+    """ChatSession 内 /deepen 直接拒绝 (无 promote 调用), 不 yield status (无 spinner 必要)."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    # 构造一个 fake "已 promote" 的 chat (is_ephemeral=False)
+    chat = MagicMock(is_ephemeral=False)
+    chat._session = MagicMock()
+    chat._session.meta = MagicMock(question="已建模问题")
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(chat, ["别的问题"])
+
+    types = [e.type for e in events]
+    assert "status_start" not in types
+    assert "status_end" not in types
+    # 只有 slash_error 拒绝
+    assert "slash_error" in types
+
+
+@pytest.mark.asyncio
+async def test_deepen_no_status_when_empty_transcript_no_args(tmp_path, monkeypatch):
+    """transcript 空 + 不带 args → 用法 slash_error, 不 yield status (没真调 LLM)."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+    # transcript 空 + 不带 args
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(ephemeral, [])
+
+    types = [e.type for e in events]
+    assert "status_start" not in types
+    assert "status_end" not in types
+    assert "slash_error" in types
+
+
+@pytest.mark.asyncio
+async def test_deepen_no_status_when_llm_not_configured(tmp_path, monkeypatch):
+    """ephemeral.llm = None → 早 return slash_error, 不 yield status."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage, llm=None)
+
+    cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+    events = await cmd.handler(ephemeral, ["为什么"])
+
+    types = [e.type for e in events]
+    assert "status_start" not in types
+    assert "status_end" not in types
+    assert "slash_error" in types
