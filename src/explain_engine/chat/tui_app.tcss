@@ -25,3 +25,9 @@ Collapsible {
     padding: 0 1;
     margin: 0 0 1 0;
 }
+
+/* Wave 4 review C-1: thinking 内容用 markup=False 避免 LLM reasoning 含
+ * [INST]/[FOO] 等被 Content markup parser 吃掉. dim 样式走 CSS class. */
+Static.thinking-content {
+    color: $text-muted;
+}

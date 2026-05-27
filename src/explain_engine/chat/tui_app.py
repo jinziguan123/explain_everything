@@ -27,6 +27,7 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import VerticalScroll
+from textual.content import Content, Span
 from textual.widgets import Collapsible, Footer, Header, Input, Static
 
 if TYPE_CHECKING:
@@ -84,10 +85,48 @@ class ExplainChatApp(App):
 
         替代 RichLog.write — 现在所有 user-visible 文本都用 Static widget
         mount, 跟 Collapsible/LoadingIndicator 等结构性 widget 一致.
-        Static 支持 Rich markup ([red]/[dim]/[bold] 等).
+        Static 支持 textual markup ([red]/[dim]/[bold] 等).
+
+        ⚠️ Wave 4 review C-1: 该 helper 假定 `text` 是 **trusted markup
+        string** (例如 chat_copy 模块 zh msg + 我们写的 inline markup).
+        若需要插入 user/LLM 输入, 用 _write_styled(prefix_markup, *parts).
         """
         container = self.query_one("#output", VerticalScroll)
         await container.mount(Static(text))
+
+    async def _write_styled(
+        self,
+        prefix_markup: str,
+        *plain_parts: str,
+        suffix_style: str = "",
+    ) -> None:
+        """Wave 4 review C-1: 安全 mount markup-prefix + plain user/LLM text.
+
+        prefix_markup: trusted markup (例 "[bold cyan]>[/bold cyan] " /
+                       "[red]chat 失败: [/red]")
+        plain_parts:   untrusted (user input / LLM 异常 str / sid 等),
+                       直接 append 为 plain text (markup parser 不解析,
+                       `[INST]` / `x[0]` / `[Smith, 2020]` 等不被吃).
+        suffix_style:  optional textual Style name 应用到 plain_parts
+                       (例 "dim" / "red") — 取代 inline [dim]...[/dim]
+                       前后包裹模式 (那种含 user content 也会被 markup 解析).
+
+        textual Content markup parser 跟 rich.markup 不一致 — rich.escape()
+        仅转 "valid tag 模样" 的 `[red]` 等, 但 `[INST]` rich 不转,
+        textual.Content 当 unknown style 静默吃. 用 from_markup(prefix) +
+        append(plain) 是唯一稳路径.
+        """
+        container = self.query_one("#output", VerticalScroll)
+        content = Content.from_markup(prefix_markup)
+        for part in plain_parts:
+            if suffix_style:
+                plain_content = Content(
+                    part, spans=[Span(0, len(part), suffix_style)]
+                )
+            else:
+                plain_content = Content(part)
+            content = content.append(plain_content)
+        await container.mount(Static(content))
 
     # ─── Input handler (Task 16) ───
     @on(Input.Submitted, "#prompt")
@@ -107,7 +146,10 @@ class ExplainChatApp(App):
             return
 
         # 回显用户 input — 文本前缀 [bold cyan]>[/bold cyan].
-        await self._write(f"[bold cyan]>[/bold cyan] {text}")
+        # Wave 4 review C-1: 走 _write_styled 防 markup 注入
+        # (textual Content markup parser 把 [INST] / [FOO] 当未知 style
+        # 吃掉, rich.escape() 对它不转, 故用 prefix + plain append).
+        await self._write_styled("[bold cyan]>[/bold cyan] ", text)
 
         if text.startswith("/"):
             from explain_engine.chat.slash_commands import dispatch_slash
@@ -115,8 +157,11 @@ class ExplainChatApp(App):
             try:
                 events = await dispatch_slash(self.chat, text)
             except Exception as exc:
-                await self._write(
-                    f"[red]slash 失败: {type(exc).__name__}: {exc}[/red]"
+                # Wave 4 review C-1: 异常 str 当 plain text append + dim 红.
+                await self._write_styled(
+                    "[red]slash 失败: [/red]",
+                    f"{type(exc).__name__}: {exc}",
+                    suffix_style="red",
                 )
                 return
             for ev in events:
@@ -128,7 +173,12 @@ class ExplainChatApp(App):
             async for ev in self.chat.handle_user_input(text, self.llm):
                 await self._render_event(ev)
         except Exception as exc:
-            await self._write(f"[red]chat 失败: {type(exc).__name__}: {exc}[/red]")
+            # Wave 4 review C-1: 异常 str 当 plain text append.
+            await self._write_styled(
+                "[red]chat 失败: [/red]",
+                f"{type(exc).__name__}: {exc}",
+                suffix_style="red",
+            )
 
     # ─── Event render ───
     async def _render_event(self, ev: ChatEvent) -> None:
@@ -157,16 +207,25 @@ class ExplainChatApp(App):
 
         if ev_type == "slash_quit":
             if content:
-                await self._write(f"[dim]{content}[/dim]")
+                # Wave 4 review C-1: slash content 当 plain text + dim style
+                # (避免 inline [dim]...[/dim] 包裹 markup-looking content
+                # 被 textual Content parser 吃).
+                await self._write_styled(
+                    "", str(content), suffix_style="dim"
+                )
             self.exit()
             return
 
         if ev_type == "slash_error" or ev_type == "slash_unknown":
-            await self._write(f"[red]{content}[/red]")
+            await self._write_styled(
+                "", str(content), suffix_style="red"
+            )
             return
 
         if ev_type == "slash_next_step_hint":
-            await self._write(f"[dim]{content}[/dim]")
+            await self._write_styled(
+                "", str(content), suffix_style="dim"
+            )
             return
 
         # Task 15: /deepen 成功 promote → 切到新 ChatSession.
@@ -209,10 +268,13 @@ class ExplainChatApp(App):
                 )
                 return
             self._thinking_visible = meta["visible"]
-            for c in self.query(Collapsible):
-                c.collapsed = not self._thinking_visible
+            self._sync_thinking_collapsibles()
             if isinstance(content, str) and content:
-                await self._write(f"[dim]{content}[/dim]")
+                # Wave 4 review C-1: content (chat_copy zh msg) 当 plain
+                # text + dim style. trusted 但 future-proof.
+                await self._write_styled(
+                    "", content, suffix_style="dim"
+                )
             return
 
         # Wave 5/6 加 status_start / status_end. 现阶段视为 no-op.
@@ -239,12 +301,20 @@ class ExplainChatApp(App):
 
         - title: "thinking ({N} 字)" — N 是 content 字符数 (D2 决策).
         - collapsed: not _thinking_visible — visible=True 默 expand (D3).
-        - 内嵌 Static 用 dim markup, 视觉上跟主 assistant_text 区分.
+        - 内嵌 Static 用 dim 颜色 (走 .thinking-content CSS class), 跟主
+          assistant_text 区分.
+
+        Wave 4 review C-1: LLM reasoning 内容用 `markup=False` 完全 bypass
+        textual Content markup parser — rich.markup.escape() 仅转 "看起来像
+        valid tag" 的 `[red]` 等, 但对 `[INST]` / `[FOO]` 这类 LLM 几乎必
+        碰的 unknown bracket-tag 不会转 (rich.escape 留它原样, 但 textual
+        Content parser 会把它当 unknown style 静默吃). markup=False 是唯一
+        稳路径. dim 样式走 CSS class 而非 inline [dim].
         """
         char_count = len(content)
         container = self.query_one("#output", VerticalScroll)
         col = Collapsible(
-            Static(f"[dim]{content}[/dim]"),
+            Static(content, markup=False, classes="thinking-content"),
             title=f"thinking ({char_count} 字)",
             collapsed=not self._thinking_visible,
         )
@@ -263,14 +333,25 @@ class ExplainChatApp(App):
             from explain_engine.chat.session import ChatSession
             new_chat = ChatSession(sid, llm=self.llm)
         except Exception as exc:
-            await self._write(
-                f"[red]切换至新 session 失败: {type(exc).__name__}: {exc}[/red]"
+            # Wave 4 review C-1: exception str 当 plain text append + red.
+            await self._write_styled(
+                "[red]切换至新 session 失败: [/red]",
+                f"{type(exc).__name__}: {exc}",
+                suffix_style="red",
             )
             return
         self.chat = new_chat
-        await self._write(
-            f"[green]已进入持久 session {sid}, 可继续 /compress /run 等.[/green]"
+        # sid 是 chat_copy / persistence 返的 trusted id (e.g. "s_xxx"),
+        # 但保险用 plain text append, 后缀文本走 markup.
+        container = self.query_one("#output", VerticalScroll)
+        line = (
+            Content.from_markup("[green]已进入持久 session [/green]")
+            .append(Content(str(sid), spans=[Span(0, len(str(sid)), "green")]))
+            .append(Content.from_markup(
+                "[green], 可继续 /compress /run 等.[/green]"
+            ))
         )
+        await container.mount(Static(line))
 
     async def _reset_to_ephemeral(self) -> None:
         """Phase 18 /new — 清屏 + (若 ChatSession) aclose + 重建 ephemeral."""
@@ -282,8 +363,11 @@ class ExplainChatApp(App):
             try:
                 await self.chat.aclose()
             except Exception as exc:
-                await self._write(
-                    f"[yellow]aclose 当前 session 失败 (继续 reset): {exc}[/yellow]"
+                # Wave 4 review C-1: exception str 当 plain text append.
+                await self._write_styled(
+                    "[yellow]aclose 当前 session 失败 (继续 reset): [/yellow]",
+                    str(exc),
+                    suffix_style="yellow",
                 )
         container = self.query_one("#output", VerticalScroll)
         await container.remove_children()
@@ -297,6 +381,17 @@ class ExplainChatApp(App):
             "/help 看 slash, /quit 退出."
         )
 
+    # ─── Wave 4 review I-1 (DRY): 抽 _sync_thinking_collapsibles helper ───
+    def _sync_thinking_collapsibles(self) -> None:
+        """同步所有现 mount Collapsible.collapsed = not self._thinking_visible.
+
+        Wave 4 review I-1: 被 action_toggle_thinking (Ctrl+O) +
+        slash_thinking_toggle handler (_render_event 内) 共用. Phase 20 加更多
+        Collapsible source (e.g. /lexicon 嵌套 collapse) 时只改一处.
+        """
+        for c in self.query(Collapsible):
+            c.collapsed = not self._thinking_visible
+
     # ─── Actions ───
     def action_toggle_thinking(self) -> None:
         """Wave 4 Task 20: 切 _thinking_visible + 同步现 mount Collapsible.collapsed.
@@ -304,8 +399,7 @@ class ExplainChatApp(App):
         Ctrl+O 触发. visible=True ↔ collapsed=False 反向关系.
         """
         self._thinking_visible = not self._thinking_visible
-        for c in self.query(Collapsible):
-            c.collapsed = not self._thinking_visible
+        self._sync_thinking_collapsibles()
 
     def action_quit_app(self) -> None:
         """优雅退出 — Ctrl+C 触发."""

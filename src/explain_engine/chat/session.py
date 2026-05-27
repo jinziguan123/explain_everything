@@ -123,6 +123,14 @@ class ChatEvent:
       因为 slash_deepen_promoted 还要带人话 info 给用户看, content 留给字符串).
       Producer: _handle_deepen (Phase 18).
       Consumer: repl_entry.enter_repl_async (Phase 18 Task 17).
+    - slash_thinking_toggle: str (zh msg echo) + metadata={"visible": bool}.
+      Phase 19 Wave 4 Task 21: /thinking on|off slash 触发, REPL 接 → 强制 set
+      _thinking_visible = metadata["visible"] (跟 action_toggle_thinking
+      Ctrl+O 等价路径, 但 set 而非 toggle — 保证 on/off 幂等), 同步现 mount
+      Collapsible.collapsed, 再 echo 中文 msg 给用户.
+      Producer: _handle_thinking (chat/slash_commands.py).
+      Consumer: tui_app._render_event 走 _sync_thinking_collapsibles helper.
+      textual 框架渲染.
     - thinking_text: str — LLM reasoning 段内容 (extended thinking / reasoning_content).
       Phase 19 起约定: 在 assistant_text 之前 yield, 跟 Response.reasoning 字段对齐.
       Producer: ephemeral.handle_user_input (resp.reasoning 非 None 时), ChatSession
