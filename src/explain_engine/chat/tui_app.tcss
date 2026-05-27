@@ -31,3 +31,17 @@ Collapsible {
 Static.thinking-content {
     color: $text-muted;
 }
+
+/* Wave 5 Task 24: status spinner (LoadingIndicator + label) 样式.
+ * label dim text + 紧贴 indicator (margin 0). LoadingIndicator
+ * accent 色让转圈 visible. */
+LoadingIndicator {
+    color: $accent;
+    height: 1;
+}
+
+Static.status-label {
+    color: $text-muted;
+    padding: 0 1;
+    height: 1;
+}

@@ -28,7 +28,14 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import VerticalScroll
 from textual.content import Content, Span
-from textual.widgets import Collapsible, Footer, Header, Input, Static
+from textual.widgets import (
+    Collapsible,
+    Footer,
+    Header,
+    Input,
+    LoadingIndicator,
+    Static,
+)
 
 if TYPE_CHECKING:
     from explain_engine.chat.ephemeral import EphemeralChatSession
@@ -277,10 +284,16 @@ class ExplainChatApp(App):
                 )
             return
 
-        # Wave 5/6 加 status_start / status_end. 现阶段视为 no-op.
+        # Wave 5 Task 24: status_start/end → mount/unmount LoadingIndicator.
+        if ev_type == "status_start":
+            await self._mount_status(content if isinstance(content, str) else "")
+            return
+        if ev_type == "status_end":
+            await self._unmount_status()
+            return
+
+        # Wave 6+ 用 — 现阶段 no-op (turn_complete / tool_use / tool_result).
         if ev_type in (
-            "status_start",
-            "status_end",
             "turn_complete",
             "tool_use",
             "tool_result",
@@ -319,6 +332,44 @@ class ExplainChatApp(App):
             collapsed=not self._thinking_visible,
         )
         await container.mount(col)
+
+    # ─── Wave 5 Task 24: status spinner mount/unmount helper ───
+    async def _mount_status(self, label: str) -> None:
+        """status_start event → mount LoadingIndicator + Static label.
+
+        固定 id "status-indicator" / "status-label" — 一时刻 1 个 active
+        status pair (design §5 决策, Phase 19 不支持 nested status).
+        若已有现存 status pair (e.g. 连续 status_start 无 status_end —
+        防御场景), 先 unmount 再 mount, 防 widget leak.
+
+        Wave 5 review C-1 preempt: label 走 markup=False — LLM-provided
+        status text (e.g. `"处理 [INST] 段..."`) 不被 textual Content markup
+        parser 吃, 跟 Wave 4 thinking_text 同款防御.
+        """
+        # 防 leak: 先清前一对 (若有)
+        await self._unmount_status()
+        container = self.query_one("#output", VerticalScroll)
+        indicator = LoadingIndicator(id="status-indicator")
+        label_static = Static(
+            label,
+            markup=False,
+            id="status-label",
+            classes="status-label",
+        )
+        await container.mount(indicator)
+        await container.mount(label_static)
+
+    async def _unmount_status(self) -> None:
+        """status_end event → 移走前一对 LoadingIndicator + label.
+
+        Idempotent — 无 active pair 时静默 no-op (handle_user_input
+        异常 path 可能 yield status_end 跳过 status_start, 或重复 yield).
+        用 query("#xxx") 找所有同 id widget (理论 1 个), 全部 remove.
+        """
+        for wid in list(self.query("#status-indicator")):
+            await wid.remove()
+        for wid in list(self.query("#status-label")):
+            await wid.remove()
 
     # ─── Chat var 切换 helper (Task 15) ───
     async def _switch_to_chat_session(self, metadata: dict) -> None:
