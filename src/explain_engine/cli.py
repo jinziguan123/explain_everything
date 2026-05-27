@@ -55,18 +55,28 @@ console = Console()
 
 
 @app.callback()
-def main(ctx: typer.Context) -> None:
+def main(
+    ctx: typer.Context,
+    no_splash: bool = typer.Option(
+        False, "--no-splash",
+        help="跳过启动 splash screen (CI / 测试 / 干净路径用 — 走 repl_entry "
+             "自行 init lexicon backend 而非 splash 内 SplashScreen._init_lexicon)",
+    ),
+) -> None:
     """Phase 11 Wave 1: 无 subcommand 时进 ephemeral REPL; 传 subcommand 走老 cli.
 
     typer @app.callback fires before every subcommand. 通过 ctx.invoked_subcommand
     区分:
     - None: 用户跑 `explain` 没传 subcommand → enter_repl_async (Phase 11 默认)
     - 非 None: `explain list` 等 → 让 typer 跑 subcommand, callback 立即返回
+
+    Phase 19 Wave 6 Task 32: `--no-splash` flag 传 show_splash=False, repl_entry
+    自跑 init_lexicon_backend (默 splash 路径 splash 内调 init).
     """
     if ctx.invoked_subcommand is None:
         from explain_engine.chat.repl_entry import enter_repl_async
 
-        asyncio.run(enter_repl_async())
+        asyncio.run(enter_repl_async(show_splash=not no_splash))
         raise typer.Exit()
 
 
