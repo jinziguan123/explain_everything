@@ -390,3 +390,142 @@ class TestLLMTurnHistory:
         # 多 key 也行
         e2 = ChatEvent(type="x", content="y", metadata={"a": 1, "b": 2})
         assert e2.metadata == {"a": 1, "b": 2}
+
+
+class TestChatSessionStatusYield:
+    """Phase 19 Task 9: ChatSession.handle_user_input yield status_start/end.
+
+    保守路线: 只 yield status_start/end (spinner mount/unmount signal), 不实装
+    thinking_text yield — 留 Phase 20 待 ToolsResponse 加 reasoning field 后跟进.
+
+    status 包 query_loop 整段 try/finally — LLMError 仍冒到 REPL outer loop
+    (跟现错误传播契约一致), finally 保 spinner 一定关.
+    """
+
+    @pytest.mark.asyncio
+    async def test_handle_user_input_yields_status_start_at_head(self, monkeypatch):
+        """非 slash + 有 llm 路径: 头部 yield status_start("思考中...")."""
+        from explain_engine.chat.loop import AssistantTextEvent
+
+        _make_done_session("s_aaa19001")
+        chat = ChatSession("s_aaa19001")
+
+        async def fake_query_loop(chat_arg, llm_arg):
+            yield AssistantTextEvent(content="answer")
+
+        monkeypatch.setattr("explain_engine.chat.loop.query_loop", fake_query_loop)
+
+        events: list[ChatEvent] = []
+        async for ev in chat.handle_user_input("问题", llm=object()):  # type: ignore[arg-type]
+            events.append(ev)
+
+        # status_start 在 query_loop event 之前
+        assert events[0].type == "status_start"
+        assert "思考中" in events[0].content
+
+    @pytest.mark.asyncio
+    async def test_handle_user_input_yields_status_end_after_query_loop(self, monkeypatch):
+        """query_loop 完整 yield 后, yield status_end. 顺序: start → assistant_text → end."""
+        from explain_engine.chat.loop import AssistantTextEvent
+
+        _make_done_session("s_19002001")
+        chat = ChatSession("s_19002001")
+
+        async def fake_query_loop(chat_arg, llm_arg):
+            yield AssistantTextEvent(content="answer")
+
+        monkeypatch.setattr("explain_engine.chat.loop.query_loop", fake_query_loop)
+
+        events: list[ChatEvent] = []
+        async for ev in chat.handle_user_input("问题", llm=object()):  # type: ignore[arg-type]
+            events.append(ev)
+
+        types = [e.type for e in events]
+        assert types.index("status_start") < types.index("assistant_text") < types.index("status_end")
+
+    @pytest.mark.asyncio
+    async def test_handle_user_input_yields_status_end_on_query_loop_error(self, monkeypatch):
+        """query_loop raise 时, status_end 经 try/finally yield, 然后异常冒到 caller.
+
+        这是跟 ephemeral try/except early return 行为不同 — ChatSession 现错误传播
+        契约 LLMError 仍冒到 REPL outer loop, finally 仅保 spinner 一定关.
+        """
+        from explain_engine.chat.loop import AssistantTextEvent
+
+        _make_done_session("s_19003001")
+        chat = ChatSession("s_19003001")
+
+        async def fake_query_loop(chat_arg, llm_arg):
+            yield AssistantTextEvent(content="开始")
+            raise RuntimeError("LLM 挂了")
+
+        monkeypatch.setattr("explain_engine.chat.loop.query_loop", fake_query_loop)
+
+        collected: list[ChatEvent] = []
+        with pytest.raises(RuntimeError, match="LLM 挂了"):
+            async for ev in chat.handle_user_input("问题", llm=object()):  # type: ignore[arg-type]
+                collected.append(ev)
+
+        # finally 块的 status_end 应已 yield 给 caller (Python async gen finally yield 行为)
+        types = [e.type for e in collected]
+        assert "status_start" in types
+        assert "status_end" in types
+        # 顺序: status_start → assistant_text → status_end (finally) → raise
+        assert types.index("status_start") < types.index("status_end")
+
+    @pytest.mark.asyncio
+    async def test_handle_user_input_no_thinking_text_yield_phase19_conservative(self, monkeypatch):
+        """Phase 19 ChatSession 保守路线: query_loop 不 yield thinking_text.
+
+        ToolsResponse 还没 reasoning field (Phase 20 跟进), 现 ChatSession 不实装.
+        若以后 query_loop 内自行 yield thinking_text event, ChatSession 透传 OK,
+        但 Phase 19 Wave 2 不主动加.
+        """
+        from explain_engine.chat.loop import AssistantTextEvent
+
+        _make_done_session("s_19004001")
+        chat = ChatSession("s_19004001")
+
+        async def fake_query_loop(chat_arg, llm_arg):
+            yield AssistantTextEvent(content="answer")
+
+        monkeypatch.setattr("explain_engine.chat.loop.query_loop", fake_query_loop)
+
+        events: list[ChatEvent] = []
+        async for ev in chat.handle_user_input("问题", llm=object()):  # type: ignore[arg-type]
+            events.append(ev)
+
+        types = [e.type for e in events]
+        assert "thinking_text" not in types
+
+    @pytest.mark.asyncio
+    async def test_handle_user_input_no_status_when_llm_none(self, monkeypatch):
+        """llm=None placeholder 分支不 yield status (没 LLM 调用 = 没必要 spinner)."""
+        _make_done_session("s_19005001")
+        chat = ChatSession("s_19005001")
+
+        events: list[ChatEvent] = []
+        async for ev in chat.handle_user_input("问题", llm=None):
+            events.append(ev)
+
+        types = [e.type for e in events]
+        assert "status_start" not in types
+        assert "status_end" not in types
+        assert "placeholder" in types  # 仍走老 placeholder 路径
+
+    @pytest.mark.asyncio
+    async def test_handle_user_input_no_status_on_slash_path(self, monkeypatch):
+        """slash command 走 dispatch_slash, 不调 LLM, 无 status yield.
+
+        Phase 19 Task 9 status 仅包 query_loop, 不影响 slash 本地路径.
+        """
+        _make_done_session("s_19006001")
+        chat = ChatSession("s_19006001")
+
+        events: list[ChatEvent] = []
+        async for ev in chat.handle_user_input("/help"):
+            events.append(ev)
+
+        types = [e.type for e in events]
+        assert "status_start" not in types
+        assert "status_end" not in types

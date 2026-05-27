@@ -312,66 +312,77 @@ class ChatSession:
                 content="no llm client provided (C.1 backward compat)",
             )
         else:
-            # C.2: dispatch 到 query_loop (LLM ↔ tools while-loop).
-            # local import 避 circular: loop.py imports ChatEvent from this module.
-            from explain_engine.chat.loop import query_loop
-            # Phase 16.2 Wave 6: 累 assistant_text 各 chunk, 末尾拼写 llm_turn 入
-            # repl_history.jsonl. LLM 异常 / SIGINT 不到 append 点 (设计契约).
-            _assistant_chunks: list[str] = []
-            async for ev in query_loop(self, llm):
-                if getattr(ev, "type", None) == "assistant_text":
-                    _assistant_chunks.append(getattr(ev, "content", "") or "")
-                yield ev
+            # Phase 19 Task 9: 调 LLM 前 yield status_start (spinner mount signal).
+            # 保守路线: 只 yield status_start/end, 不实装 thinking_text — 留 Phase 20
+            # 待 ToolsResponse 加 reasoning field 后跟进 (ChatEvent docstring 已说明).
+            yield ChatEvent(type="status_start", content="思考中...")
+            try:
+                # C.2: dispatch 到 query_loop (LLM ↔ tools while-loop).
+                # local import 避 circular: loop.py imports ChatEvent from this module.
+                from explain_engine.chat.loop import query_loop
+                # Phase 16.2 Wave 6: 累 assistant_text 各 chunk, 末尾拼写 llm_turn 入
+                # repl_history.jsonl. LLM 异常 / SIGINT 不到 append 点 (设计契约).
+                _assistant_chunks: list[str] = []
+                async for ev in query_loop(self, llm):
+                    if getattr(ev, "type", None) == "assistant_text":
+                        _assistant_chunks.append(getattr(ev, "content", "") or "")
+                    yield ev
 
-            # Phase 16.2 Wave 6: append llm_turn entry to repl_history.jsonl.
-            # 仅 LLM 全 yield 完才写; ephemeral / sid=None 跳过; storage 失败 silent.
-            if not getattr(self, "is_ephemeral", False) and self.sid is not None:
-                from datetime import datetime
+                # Phase 16.2 Wave 6: append llm_turn entry to repl_history.jsonl.
+                # 仅 LLM 全 yield 完才写; ephemeral / sid=None 跳过; storage 失败 silent.
+                if not getattr(self, "is_ephemeral", False) and self.sid is not None:
+                    from datetime import datetime
+                    try:
+                        self.storage.append_repl_history(self.sid, {
+                            "ts": datetime.now(UTC).astimezone().isoformat(),
+                            "type": "llm_turn",
+                            "user_input": text,
+                            "assistant_text": "".join(_assistant_chunks),
+                        })
+                    except Exception as exc:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            f"append llm_turn history failed for {self.sid}: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+
+                # Wave D.2 fix · post-turn hooks. 两点修复:
+                # C1: lifecycle BEFORE reflect — 对齐 runtime.py:86-89 契约
+                #     (lifecycle 先推进 decay state, reflect 才能看到 fresh decayed
+                #     nodes 做正确 pick_decay_target / 决策).
+                # I1: 包 try/except — hook 抛异常不阻断 self.persist(),
+                #     防半状态持久化 (turn_count 已 bump 但 graph 没存).
                 try:
-                    self.storage.append_repl_history(self.sid, {
-                        "ts": datetime.now(UTC).astimezone().isoformat(),
-                        "type": "llm_turn",
-                        "user_input": text,
-                        "assistant_text": "".join(_assistant_chunks),
-                    })
+                    # 1. lifecycle — 推进 active → stale → decayed
+                    #    tick 用 chat_state.turn_count (Wave D.2 chat 把 turn 视为 lifecycle tick)
+                    lifecycle_post_turn(
+                        self.state, current_tick=self.chat_state.turn_count
+                    )
+                    # 2. reflect — 刷新 acceptance + 返人话 hint, 写 next_turn_hint
+                    #    (下一 turn assemble_system_prompt 会读, 用完清 None)
+                    self.next_turn_hint = reflect_post_turn(self.state)
                 except Exception as exc:
                     import logging
                     logging.getLogger(__name__).warning(
-                        f"append llm_turn history failed for {self.sid}: "
+                        f"post-turn hook failed for {self.sid}: "
                         f"{type(exc).__name__}: {exc}"
                     )
 
-            # Wave D.2 fix · post-turn hooks. 两点修复:
-            # C1: lifecycle BEFORE reflect — 对齐 runtime.py:86-89 契约
-            #     (lifecycle 先推进 decay state, reflect 才能看到 fresh decayed
-            #     nodes 做正确 pick_decay_target / 决策).
-            # I1: 包 try/except — hook 抛异常不阻断 self.persist(),
-            #     防半状态持久化 (turn_count 已 bump 但 graph 没存).
-            try:
-                # 1. lifecycle — 推进 active → stale → decayed
-                #    tick 用 chat_state.turn_count (Wave D.2 chat 把 turn 视为 lifecycle tick)
-                lifecycle_post_turn(
-                    self.state, current_tick=self.chat_state.turn_count
-                )
-                # 2. reflect — 刷新 acceptance + 返人话 hint, 写 next_turn_hint
-                #    (下一 turn assemble_system_prompt 会读, 用完清 None)
-                self.next_turn_hint = reflect_post_turn(self.state)
-            except Exception as exc:
-                import logging
-                logging.getLogger(__name__).warning(
-                    f"post-turn hook failed for {self.sid}: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-
-            # 3. session_memory — async fire-and-forget (每 5 turn 跑一次)
-            #    不 await, errors logged in writer 自己, 不阻塞 user.
-            #    RUF006: hold strong ref in self._background_tasks 防 GC.
-            #    errors 已 self-contained in session_memory_writer 内部 try/except,
-            #    所以不在外层 try/except 内 (also asyncio.create_task 不会抛同步异常).
-            if self.chat_state.turn_count % SESSION_MEMORY_TRIGGER_INTERVAL == 0:
-                task = asyncio.create_task(session_memory_writer(self, llm))
-                self._background_tasks.add(task)
-                task.add_done_callback(self._background_tasks.discard)
+                # 3. session_memory — async fire-and-forget (每 5 turn 跑一次)
+                #    不 await, errors logged in writer 自己, 不阻塞 user.
+                #    RUF006: hold strong ref in self._background_tasks 防 GC.
+                #    errors 已 self-contained in session_memory_writer 内部 try/except,
+                #    所以不在外层 try/except 内 (also asyncio.create_task 不会抛同步异常).
+                if self.chat_state.turn_count % SESSION_MEMORY_TRIGGER_INTERVAL == 0:
+                    task = asyncio.create_task(session_memory_writer(self, llm))
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
+            finally:
+                # Phase 19 Task 9: try/finally 保 spinner 一定关 — LLMError 经 finally
+                # 后冒到 REPL outer loop (跟现错误传播契约一致, 不改吞异常行为).
+                # async gen finally yield 行为: caller 仍能 async-for 拿到 status_end
+                # event, 再 re-raise 异常.
+                yield ChatEvent(type="status_end", content=None)
         # Persist after turn (chat_state + graph 全 flush). I1: 即使 hook 抛
         # 异常也保证执行, 避免 turn_count bump 但 graph 不存的半态.
         self.persist()
