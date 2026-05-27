@@ -239,3 +239,25 @@ class TestOpenAIChatReasoningContent:
         )
         r = await client.chat([Message(role="user", content="hi")])
         assert r.reasoning is None
+
+    async def test_chat_reasoning_content_non_str_falls_back_to_none(
+        self, mock_openai
+    ):
+        """Phase 19 Wave 1 review fix (I-4): vendor 返 reasoning_content 是 list/dict
+        (违反 contract) → defensive narrow (isinstance str check) → resp.reasoning is None.
+
+        防 vendor implementation drift 把意外类型直接灌入 Response.reasoning, 下游
+        消费 str 时炸. 显式断 None 防 silent regression.
+        """
+        mock_openai.chat.completions.create = AsyncMock(
+            return_value=_mock_choice_with_reasoning(
+                content="answer",
+                reasoning_content=[],  # type: ignore[arg-type]  # 非 str, 触发 isinstance 防御
+            )
+        )
+        client = OpenAIProtocolClient(
+            api_key="sk-test", default_model="deepseek-reasoner"
+        )
+        r = await client.chat([Message(role="user", content="hi")])
+        assert r.text == "answer"
+        assert r.reasoning is None  # 防御 narrow 工作

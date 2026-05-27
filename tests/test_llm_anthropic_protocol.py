@@ -250,6 +250,30 @@ class TestAnthropicChatThinkingBlocks:
         assert r.reasoning == "step1 step2"
         assert r.text == "answer"
 
+    async def test_chat_handles_redacted_thinking_block(self, mock_anthropic):
+        """Phase 19 Wave 1 review fix (C-1): vendor content policy 触发遮蔽 thinking
+        → Response.reasoning 含 marker '[redacted thinking]', 不静默丢.
+
+        chat_with_tools 之前已处理 (line 347-351 把 redacted_thinking dict 保
+        留到 raw_content_blocks). chat() 没对称处理 → 用户感知 reasoning 截断, debug
+        困难. 现 chat() 也 cover.
+        """
+        resp = MagicMock()
+        redacted_block = MagicMock()
+        redacted_block.type = "redacted_thinking"
+        redacted_block.data = "encrypted-blob-from-vendor"
+        text_block = MagicMock(type="text", text="final answer")
+        resp.content = [redacted_block, text_block]
+        resp.model = "claude-opus-4-7"
+        resp.usage = MagicMock(input_tokens=10, output_tokens=5)
+        _set_stream_returns(mock_anthropic, resp)
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="claude-opus-4-7"
+        )
+        r = await client.chat([Message(role="user", content="hi")])
+        assert r.reasoning == "[redacted thinking]"
+        assert r.text == "final answer"
+
 
 class TestAnthropicEnableThinkingParam:
     """Phase 19 Task 3: AnthropicProtocolClient 加 enable_thinking 构造参.

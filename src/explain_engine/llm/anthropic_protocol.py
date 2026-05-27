@@ -249,6 +249,11 @@ class AnthropicProtocolClient:
                 # ToolsResponse.raw_content_blocks (Phase 9 Wave F.4),
                 # 普通 chat() 走 structured output 也需暴露.
                 thinking_parts.append(getattr(block, "thinking", ""))
+            elif block.type == "redacted_thinking":
+                # Phase 19 Wave 1 review fix (C-1): chat_with_tools 已 cover, chat() 补对称.
+                # vendor content policy 触发遮蔽 thinking 时返此 block (内容不可见).
+                # 留 marker 字符串让 caller 知道"有但被遮", 不静默丢.
+                thinking_parts.append("[redacted thinking]")
 
         reasoning: str | None = "".join(thinking_parts) if thinking_parts else None
 
