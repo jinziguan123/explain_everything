@@ -1,0 +1,18 @@
+/* Phase 19 Wave 3 Task 13: ExplainChatApp 基础 CSS.
+ * 设计参考 docs/plans/2026-05-27-phase-19-tui-design.md §4.3.
+ * Wave 4 加 Collapsible.thinking 样式, Wave 6 加 splash-* 类.
+ */
+
+Screen {
+    background: $surface;
+}
+
+RichLog#output {
+    border: solid $primary;
+    padding: 1;
+}
+
+Input#prompt {
+    dock: bottom;
+    border: tall $primary;
+}
