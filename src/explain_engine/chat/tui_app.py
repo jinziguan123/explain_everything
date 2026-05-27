@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header, Input, RichLog
@@ -72,6 +73,48 @@ class ExplainChatApp(App):
             placeholder="问点什么... (/help, Ctrl+O 折叠 thinking, Ctrl+C 退出)",
         )
         yield Footer()
+
+    # ─── Input handler (Task 16) ───
+    @on(Input.Submitted, "#prompt")
+    async def _handle_input_submitted(self, event: Input.Submitted) -> None:
+        """User 按 Enter — 派发到 slash dispatch 或 chat.handle_user_input.
+
+        - 空 input (strip 后) → no-op (跟 prompt_toolkit REPL 同行为).
+        - text 以 / 开头 → dispatch_slash (返 list[ChatEvent]); 注意 dispatch_slash
+          内部已 catch chat handler 异常返 slash_error event, 但 dispatch_slash
+          自身底层异常 (e.g. _command_by_name 抛) 用 try 兜底.
+        - 否则 → chat.handle_user_input(text, self.llm) async generator → async for.
+          self.llm 为 None 时 ephemeral.handle_user_input 会抛 — 兜在 try.
+        """
+        text = (event.value or "").strip()
+        event.input.value = ""
+        if not text:
+            return
+
+        log = self.query_one("#output", RichLog)
+        # 回显用户 input — 文本前缀 [bold cyan]>[/bold cyan].
+        log.write(f"[bold cyan]>[/bold cyan] {text}")
+
+        if text.startswith("/"):
+            from explain_engine.chat.slash_commands import dispatch_slash
+
+            try:
+                events = await dispatch_slash(self.chat, text)
+            except Exception as exc:  # noqa: BLE001
+                log.write(
+                    f"[red]slash 失败: {type(exc).__name__}: {exc}[/red]"
+                )
+                return
+            for ev in events:
+                await self._render_event(ev)
+            return
+
+        # 自然语言 — async generator
+        try:
+            async for ev in self.chat.handle_user_input(text, self.llm):
+                await self._render_event(ev)
+        except Exception as exc:  # noqa: BLE001
+            log.write(f"[red]chat 失败: {type(exc).__name__}: {exc}[/red]")
 
     # ─── Event render ───
     async def _render_event(self, ev: "ChatEvent") -> None:

@@ -1,0 +1,151 @@
+"""Phase 19 Wave 3 Task 16: Input.Submitted handler.
+
+handle_input(event):
+- text 以 / 开头 → dispatch_slash(self.chat, text) (返 list[ChatEvent]) → 逐个 _render
+- 否则 → async for ev in self.chat.handle_user_input(text, self.llm): _render
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_input_submitted_slash_dispatch(tmp_path, monkeypatch) -> None:
+    """输 /help → dispatch_slash 调用 + 渲染 events."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_tui_input")
+
+    from textual.widgets import Input, RichLog
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+    app = ExplainChatApp(
+        llm=AsyncMock(),
+        light_llm=AsyncMock(),
+        ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.focus()
+        await pilot.pause()
+        prompt.value = "/help"
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+
+        # /help yield 一个 slash_help event (str content) → 写入 log
+        log = app.query_one("#output", RichLog)
+        assert len(log.lines) >= 1
+        # Input value 已清空
+        assert prompt.value == ""
+
+
+@pytest.mark.asyncio
+async def test_input_submitted_natural_language(tmp_path, monkeypatch) -> None:
+    """输自然语言 → 调用 chat.handle_user_input (async generator) + 渲染 events."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_tui_input_nl")
+
+    from textual.widgets import Input, RichLog
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2()
+    llm = AsyncMock()
+    llm.chat = AsyncMock(return_value=MagicMock(text="answer hi", reasoning=None))
+    ephemeral = EphemeralChatSession(storage=storage, llm=llm)
+    app = ExplainChatApp(
+        llm=llm,
+        light_llm=AsyncMock(),
+        ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.focus()
+        await pilot.pause()
+        prompt.value = "你好"
+        await pilot.press("enter")
+        await pilot.pause()
+        # 多 pause 几次确保 async for 走完
+        await pilot.pause()
+        await pilot.pause()
+
+        # LLM chat 调用过
+        llm.chat.assert_called()
+        # log 含 answer
+        log = app.query_one("#output", RichLog)
+        assert len(log.lines) >= 1
+        assert prompt.value == ""
+
+
+@pytest.mark.asyncio
+async def test_input_submitted_empty_string_no_op(tmp_path, monkeypatch) -> None:
+    """空 input (空格 / 仅 enter) → 不调 dispatch_slash 也不调 handle_user_input."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_tui_input_empty")
+
+    from textual.widgets import Input
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2()
+    llm = AsyncMock()
+    llm.chat = AsyncMock(return_value=MagicMock(text="x", reasoning=None))
+    ephemeral = EphemeralChatSession(storage=storage, llm=llm)
+    app = ExplainChatApp(
+        llm=llm,
+        light_llm=AsyncMock(),
+        ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.focus()
+        await pilot.pause()
+        prompt.value = "   "
+        await pilot.press("enter")
+        await pilot.pause()
+        # llm.chat 不该被调用
+        llm.chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_input_submitted_slash_quit_exits(tmp_path, monkeypatch) -> None:
+    """输 /quit → dispatch_slash 返 slash_quit event → render 调用 self.exit()."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_tui_input_quit")
+
+    from textual.widgets import Input
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+    app = ExplainChatApp(
+        llm=AsyncMock(),
+        light_llm=AsyncMock(),
+        ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.focus()
+        await pilot.pause()
+        prompt.value = "/quit"
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.pause()
+        assert app._exit is True
