@@ -161,3 +161,81 @@ class TestJsonObjectMode:
         first_msg = kwargs["messages"][0]
         assert "you are helpful" in first_msg["content"]
         assert "_DemoSchema" in first_msg["content"]
+
+
+def _mock_choice_with_reasoning(
+    content: str,
+    reasoning_content: str | None,
+    model: str = "deepseek-reasoner",
+):
+    """Phase 19 Task 4: mock OpenAI-compat message with reasoning_content field.
+
+    DeepSeek-R1 / OpenAI-compat vendor 返 reasoning_content alongside content.
+    """
+    msg = MagicMock(spec=["content", "reasoning_content"])
+    msg.content = content
+    msg.reasoning_content = reasoning_content
+    resp = MagicMock()
+    resp.choices = [MagicMock(message=msg)]
+    resp.model = model
+    resp.usage = MagicMock(prompt_tokens=10, completion_tokens=20)
+    return resp
+
+
+def _mock_choice_no_reasoning_attr(content: str, model: str = "gpt-4o"):
+    """gpt-4o etc. — message 对象不带 reasoning_content 字段 (spec 限定)."""
+    msg = MagicMock(spec=["content"])
+    msg.content = content
+    resp = MagicMock()
+    resp.choices = [MagicMock(message=msg)]
+    resp.model = model
+    resp.usage = MagicMock(prompt_tokens=10, completion_tokens=20)
+    return resp
+
+
+class TestOpenAIChatReasoningContent:
+    """Phase 19 Task 4: openai chat() 解析 vendor 返的 reasoning_content.
+
+    DeepSeek-R1 / openai-compat endpoint 返 message.reasoning_content alongside
+    message.content. gpt-4o 不返此字段 → Response.reasoning is None 自然.
+    用 getattr(msg, "reasoning_content", None) 兼容两种情况.
+    """
+
+    async def test_chat_extracts_reasoning_content(self, mock_openai):
+        mock_openai.chat.completions.create = AsyncMock(
+            return_value=_mock_choice_with_reasoning(
+                content="最终回答",
+                reasoning_content="让我先想一下用户的问题",
+            )
+        )
+        client = OpenAIProtocolClient(
+            api_key="sk-test", default_model="deepseek-reasoner"
+        )
+        r = await client.chat([Message(role="user", content="hi")])
+        assert r.text == "最终回答"
+        assert r.reasoning == "让我先想一下用户的问题"
+
+    async def test_chat_no_reasoning_content_field_is_none(self, mock_openai):
+        """gpt-4o 等不返 reasoning_content → resp.reasoning is None."""
+        mock_openai.chat.completions.create = AsyncMock(
+            return_value=_mock_choice_no_reasoning_attr("just answer"),
+        )
+        client = OpenAIProtocolClient(
+            api_key="sk-test", default_model="gpt-4o"
+        )
+        r = await client.chat([Message(role="user", content="hi")])
+        assert r.text == "just answer"
+        assert r.reasoning is None
+
+    async def test_chat_reasoning_content_explicit_none(self, mock_openai):
+        """vendor 返 reasoning_content=None 字段 → resp.reasoning is None."""
+        mock_openai.chat.completions.create = AsyncMock(
+            return_value=_mock_choice_with_reasoning(
+                content="answer", reasoning_content=None
+            )
+        )
+        client = OpenAIProtocolClient(
+            api_key="sk-test", default_model="deepseek-reasoner"
+        )
+        r = await client.chat([Message(role="user", content="hi")])
+        assert r.reasoning is None

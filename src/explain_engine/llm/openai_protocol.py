@@ -94,13 +94,26 @@ class OpenAIProtocolClient:
 
             api_resp = await self._client.chat.completions.create(**call_kwargs)
 
-            text = api_resp.choices[0].message.content or ""
+            msg = api_resp.choices[0].message
+            text = msg.content or ""
             parsed: dict[str, Any] | None = None
             if schema is not None and text:
                 parsed = json.loads(text)
 
+            # Phase 19 Task 4: DeepSeek-R1 / openai-compat vendor 返
+            # message.reasoning_content (extended thinking). gpt-4o 等不返此
+            # 字段 → getattr default None 自然. caller (Response.reasoning)
+            # 不感知 vendor 差异.
+            # 防御性 narrow 到 str — vendor 可能返非 str (e.g. 空 list/dict),
+            # 这种情况视作"无 reasoning" 以免 Pydantic Response 校验挂.
+            reasoning_raw = getattr(msg, "reasoning_content", None)
+            reasoning: str | None = (
+                reasoning_raw if isinstance(reasoning_raw, str) else None
+            )
+
             return Response(
                 text=text,
+                reasoning=reasoning,
                 parsed=parsed,
                 model=api_resp.model,
                 usage={
