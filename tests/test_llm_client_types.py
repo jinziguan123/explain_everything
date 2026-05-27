@@ -43,6 +43,22 @@ class TestResponse:
         r = Response(text="hello", parsed=None, model="x", usage={})
         assert r.parsed is None
 
+    def test_response_reasoning_field_default_none(self):
+        """Phase 19 Task 1: 老 caller 不传 reasoning → default None (backward compat)."""
+        r = Response(text="hi", parsed=None, model="m", usage={})
+        assert r.reasoning is None
+
+    def test_response_reasoning_field_explicit(self):
+        """Phase 19 Task 1: caller 传 reasoning → 保留."""
+        r = Response(
+            text="hi",
+            reasoning="思考过程",
+            parsed=None,
+            model="m",
+            usage={},
+        )
+        assert r.reasoning == "思考过程"
+
 
 class TestLLMClientIsProtocol:
     """LLMClient 必须可作为 Protocol 标注，不必实例化。"""

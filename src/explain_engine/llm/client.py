@@ -18,6 +18,7 @@ class Message(BaseModel):
 
 class Response(BaseModel):
     text: str
+    reasoning: str | None = None  # Phase 19: extended thinking / reasoning_content
     parsed: dict[str, Any] | None
     model: str
     usage: dict[str, int]
