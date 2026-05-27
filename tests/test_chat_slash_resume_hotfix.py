@@ -35,14 +35,21 @@ from tests.test_chat_session import _make_done_session
 
 
 class TestResumeNoArgsDoesNotHang:
-    """无 args 必须立即返 slash_error, 不能阻塞 (textual 模式无 stdin)."""
+    """无 args 必须立即返 (slash_open_session_picker 或 slash_error), 不阻塞.
+
+    Wave 7 hotfix (9838507) 原 spec: 无 args → slash_error 用法提示.
+    Wave 7 follow-up (本 commit) 新 spec: 无 args + 有 session → 弹 textual
+    modal picker (slash_open_session_picker), 不再要求 user /list 复制 sid.
+    无 args + 空 session list → slash_error (没什么可选).
+
+    本 test 核心断言: 不阻塞 + 不调 builtin input / input_provider. event type
+    可以是 slash_open_session_picker (有 session) 或 slash_error (空 list).
+    详细 picker 行为见 tests/test_chat_slash_resume_picker.py.
+    """
 
     @pytest.mark.asyncio
     async def test_no_args_returns_within_timeout(self):
-        """/resume 无 args + input_provider is None → 5s 内返 slash_error.
-
-        老 bug: 走 asyncio.to_thread(input, ...) 永远卡住. 现修后该立即返.
-        """
+        """/resume 无 args → 5s 内必返 (有 session 弹 picker / 空 slash_error)."""
         from explain_engine.chat.session import ChatSession
 
         _make_done_session("s_de4d10c4")
@@ -53,14 +60,14 @@ class TestResumeNoArgsDoesNotHang:
         events = await asyncio.wait_for(dispatch_slash(chat, "/resume"), timeout=5.0)
 
         assert len(events) == 1
-        assert events[0].type == "slash_error"
-        # 用法提示提到 sid + /list 引导
-        assert "/resume" in events[0].content
-        assert "sid" in events[0].content.lower()
+        # 当前 project 至少有 _make_done_session 建的那个 sid → picker event
+        assert events[0].type == "slash_open_session_picker", (
+            f"无 args + 有 session 应弹 picker, got {events[0].type}"
+        )
 
     @pytest.mark.asyncio
     async def test_no_args_does_not_call_input_or_provider(self, monkeypatch):
-        """无 args path 完全不该走 input() 或 input_provider — 直接 slash_error."""
+        """无 args path 完全不调 input() / input_provider — 走 modal event 路径."""
         from explain_engine.chat.session import ChatSession
 
         _make_done_session("s_de4d10c5")
@@ -76,7 +83,8 @@ class TestResumeNoArgsDoesNotHang:
         chat.input_provider = _provider_blacklist
 
         events = await dispatch_slash(chat, "/resume")
-        assert events[0].type == "slash_error"
+        # 不抛 = blacklist 路径没被调到. event type 视 session list 而定.
+        assert events[0].type in ("slash_open_session_picker", "slash_error")
 
 
 # ─── 2. /resume <sid> 正常切换 ───
@@ -149,14 +157,17 @@ class TestResumeInTextualApp:
     """端到端: textual ExplainChatApp 内输 /resume 不死锁.
 
     User 真报告 path: 启动 textual app → 输 /resume + Enter → app 卡死.
-    fix 后必须: 5s 内 app 仍 responsive + input cleared + slash_error 显示.
+    fix 后必须: 5s 内 app 仍 responsive + input cleared.
+
+    Wave 7 follow-up: 空 project → slash_error 渲染一行 Static.
+    有 session 的 picker push 路径见 tests/test_chat_slash_resume_picker.py.
     """
 
     @pytest.mark.asyncio
     async def test_resume_no_args_in_textual_does_not_hang(
         self, tmp_path, monkeypatch
     ) -> None:
-        """端到端 textual.pilot: /resume + Enter → 5s 内返, slash_error 渲染."""
+        """端到端 textual.pilot: /resume + Enter → 5s 内返, app 仍 responsive."""
         from unittest.mock import AsyncMock
 
         from textual.containers import VerticalScroll

@@ -95,3 +95,30 @@ Static.splash-step-failed {
     color: $error;
     height: 1;
 }
+
+/* Wave 7 follow-up Bug 1: SessionPickerScreen (textual ModalScreen) 居中样式.
+ * compose 时塞 Vertical#session-picker-container 容器 + OptionList. */
+Vertical#session-picker-container {
+    align: center middle;
+    width: 80%;
+    max-width: 100;
+    height: auto;
+    max-height: 80%;
+    background: $surface;
+    border: heavy $primary;
+    padding: 1 2;
+}
+
+Static.picker-title {
+    color: $accent;
+    text-style: bold;
+    content-align: center middle;
+    height: 1;
+    margin: 0 0 1 0;
+}
+
+OptionList#session-picker-list {
+    height: auto;
+    max-height: 20;
+    border: tall $surface-lighten-1;
+}

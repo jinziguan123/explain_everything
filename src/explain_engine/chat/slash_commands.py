@@ -869,33 +869,62 @@ async def _handle_new(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 
 
 async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
-    """/resume <sid> — 切换到指定 session (textual 模式安全, 无 stdin 阻塞).
+    """/resume [sid] — 切换到指定 session, 或弹 textual modal picker 交互式选.
 
-    Phase 19 Wave 7 hotfix (2026-05-27): 老版无参 picker 用
-    `asyncio.to_thread(input, ...)` 收选号, textual 已 hold stdin → 死锁
-    无法 Ctrl+C 退. 改设计为必须显式带 sid arg, 彻底删 input_provider
-    依赖. user 流: /list 看 sid → /resume <sid>.
+    Phase 19 Wave 7 hotfix (9838507): 老版无参 picker 用 `asyncio.to_thread(input)`
+    收选号, textual 已 hold stdin → 死锁无法 Ctrl+C 退. 简化为必须带 sid arg.
+
+    Phase 19 Wave 7 follow-up (本 commit): user 反馈期望真 picker. textual
+    ModalScreen + OptionList 是 native widget, 走 textual message pump,
+    跟 asyncio.to_thread(input) 完全不同路径 — 不抢 stdin, 不死锁. 故无 sid
+    时改为 yield `slash_open_session_picker` event, tui_app._render_event 接
+    到 push SessionPickerScreen.
 
     用法:
-        /resume <sid>         切到指定 session
-        /resume               → slash_error 用法提示 (引导 /list)
+        /resume <sid>     切到指定 session
+        /resume           弹 textual modal picker (有 session 时); 空时 slash_error
 
     Event 契约:
-    - slash_error: 用法错误 / sid 非法 / sid 不存在
+    - slash_error: 用法错误 / sid 非法 / sid 不存在 / 空 session list (无 args)
     - slash_resume: info content (str) — 切到当前 sid 或正常 switching msg
     - slash_switch_session: content={"sid": str} — REPL 据此切
-      (见 ChatEvent docstring 完整 contract).
+    - slash_open_session_picker: content="选择 session..." str,
+      metadata={"sessions": [{"sid", "question", "stage", "created_at"}, ...],
+                "current_sid": str} — REPL push SessionPickerScreen modal.
+      Producer: 本 handler 无 args 路径.
+      Consumer: tui_app._render_event push ModalScreen.
     """
     from explain_engine.chat.session import ChatEvent
     from explain_engine.persistence.session import SessionStore
 
-    # 无 args → 用法提示 + 引导 /list
+    # 无 args → 弹 textual modal picker (有 session 时) / slash_error (空时)
     if not args:
+        metas = SessionStore().list()
+        if not metas:
+            return [ChatEvent(
+                type="slash_error",
+                content=(
+                    "暂无可 resume 的 session — 当前 project 还没创过 session. "
+                    "可以先 /deepen 触发深度建模, 或退出用 `explain new <question>` 新建."
+                ),
+            )]
+        # picker 协议: 把 metas → list[dict], REPL 不引 SessionMeta 类型耦合
+        sessions_payload = [
+            {
+                "sid": m.session_id,
+                "question": m.question,
+                "stage": m.stage,
+                "created_at": m.created_at,
+            }
+            for m in metas
+        ]
         return [ChatEvent(
-            type="slash_error",
-            content=(
-                "用法: /resume <sid>  (先用 /list 看 session 列表, 复制 sid 再切)"
-            ),
+            type="slash_open_session_picker",
+            content="选择要切到的 session (↑↓ 选, Enter 确认, Esc 取消)",
+            metadata={
+                "sessions": sessions_payload,
+                "current_sid": chat.sid,
+            },
         )]
     if len(args) > 1:
         return [ChatEvent(

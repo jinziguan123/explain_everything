@@ -29,6 +29,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import VerticalScroll
 from textual.content import Content, Span
+from textual.screen import ModalScreen
 from textual.suggester import SuggestFromList
 from textual.widgets import (
     Collapsible,
@@ -36,13 +37,98 @@ from textual.widgets import (
     Header,
     Input,
     LoadingIndicator,
+    OptionList,
     Static,
 )
+from textual.widgets.option_list import Option
 
 if TYPE_CHECKING:
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.session import ChatEvent, ChatSession
     from explain_engine.llm.client import LLMClient
+
+
+# ─── Wave 7 follow-up Bug 1: textual ModalScreen 交互式 /resume picker ───
+
+
+class SessionPickerScreen(ModalScreen[str | None]):
+    """`/resume` 无 args 时弹的 textual modal picker.
+
+    Wave 7 (9838507): /resume 无 args 简化为 slash_error 用法提示 (避死锁).
+    Wave 7 follow-up (本 commit): user 反馈期望真 picker. textual ModalScreen
+    + OptionList 是 native widget, 走 textual message pump, 跟之前 asyncio
+    .to_thread(input) 完全不同路径 — 不抢 stdin, 不死锁.
+
+    Result type: str | None
+    - str: 用户选中的 sid (Enter / 鼠标点击 select 触发)
+    - None: 用户取消 (Esc binding) — caller 应当不切 chat
+
+    sessions payload (from `_handle_resume` slash_open_session_picker event):
+        [{"sid": str, "question": str, "stage": str, "created_at": float}, ...]
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "cancel", "取消"),
+    ]
+
+    def __init__(
+        self,
+        sessions: list[dict],
+        current_sid: str | None = None,
+    ) -> None:
+        super().__init__()
+        # sessions 是 dict list (kotlin-style payload), 不耦合 SessionMeta 类型
+        self._sessions: list[dict] = sessions
+        self._current_sid: str | None = current_sid
+
+    def compose(self) -> ComposeResult:
+        """渲染: 居中 Vertical 容器, 含 1 行 hint + OptionList 选项."""
+        from textual.containers import Vertical
+
+        # 每 entry 显: "{question[:40]}  ({sid} · {stage})" — 截 question 避超长
+        # markup=False 防 user-provided question 包含 [INST] 等被 textual Content
+        # markup parser 吞 (跟 Wave 4 thinking_content 同款防御).
+        options: list[Option] = []
+        for s in self._sessions:
+            sid = s["sid"]
+            q = s.get("question", "") or ""
+            stage = s.get("stage", "") or ""
+            q_truncated = q if len(q) <= 40 else q[:39] + "…"
+            marker = "  [当前]" if sid == self._current_sid else ""
+            label = f"{q_truncated}  ({sid} · {stage}){marker}"
+            options.append(Option(label, id=sid))
+
+        yield Vertical(
+            Static(
+                "选择 session (↑↓ 移动, Enter 确认, Esc 取消)",
+                classes="picker-title",
+            ),
+            OptionList(*options, id="session-picker-list", markup=False),
+            id="session-picker-container",
+        )
+
+    def on_mount(self) -> None:
+        """focus OptionList 让 ↑↓ Enter 立即可用 (默 focus 是 first focusable)."""
+        self.query_one("#session-picker-list", OptionList).focus()
+
+    @on(OptionList.OptionSelected, "#session-picker-list")
+    def _on_select(self, event: OptionList.OptionSelected) -> None:
+        """Enter / click → dismiss with sid. event.option.id 是我们 compose 时
+        塞的 sid (str).
+
+        约束: option.id 一定是 str (compose 时塞 sid str), 但 textual API
+        signature 允许 None — 保险断言 + dismiss(None) 失败 fallback.
+        """
+        sid = event.option.id
+        # 防御: id 不应是 None (compose 塞了 sid), 但 textual API 允许 None
+        if not isinstance(sid, str):
+            self.dismiss(None)
+            return
+        self.dismiss(sid)
+
+    def action_cancel(self) -> None:
+        """Esc → dismiss with None (caller 不切 chat)."""
+        self.dismiss(None)
 
 
 class ExplainChatApp(App):
@@ -323,6 +409,32 @@ class ExplainChatApp(App):
             await self._switch_to_chat_session(content)
             return
 
+        # Wave 7 follow-up Bug 1: /resume 无 args → push SessionPickerScreen modal.
+        # event metadata 含 sessions list + current_sid (handler 包好的, REPL
+        # 不用再 fetch).
+        if ev_type == "slash_open_session_picker":
+            meta = ev.metadata or {}
+            sessions = meta.get("sessions")
+            if not isinstance(sessions, list) or not sessions:
+                # 协议防御: handler 应不送空 list (空 → slash_error 路径),
+                # 但 future-proof.
+                await self._write(
+                    "[red]slash_open_session_picker event 缺 metadata.sessions; "
+                    "无 picker 可弹.[/red]"
+                )
+                return
+            current_sid = meta.get("current_sid")
+            if isinstance(content, str) and content:
+                # echo hint 到主 layer (modal 退出后仍可见, 提示 user 刚做了什么)
+                await self._write_styled("", content, suffix_style="dim")
+            picker = SessionPickerScreen(
+                sessions=sessions,
+                current_sid=current_sid if isinstance(current_sid, str) else None,
+            )
+            # 非阻塞 push: callback 在 dismiss 时由 textual 调
+            self.push_screen(picker, self._on_session_picked)
+            return
+
         # Wave 4 Task 19: thinking_text → Collapsible mount (默 expand).
         if ev_type == "thinking_text":
             await self._mount_thinking(content if isinstance(content, str) else "")
@@ -445,6 +557,46 @@ class ExplainChatApp(App):
             await wid.remove()
         for wid in list(self.query("#status-label")):
             await wid.remove()
+
+    # ─── Wave 7 follow-up Bug 1: SessionPickerScreen dismiss callback ───
+    def _on_session_picked(self, sid: str | None) -> None:
+        """SessionPickerScreen.dismiss callback — 异步 wrap _switch_to_chat_session.
+
+        textual push_screen(screen, callback) 的 callback 是 sync fn — 但
+        _switch_to_chat_session 是 async (要 mount widget). 用 self.run_worker
+        启 textual-managed async worker, callback 自身瞬返不阻 message pump.
+
+        sid is None → 用户 Esc 取消, mount 一行 dim "已取消".
+        sid 等当前 chat.sid → 不切, mount info "已在该 session".
+        sid 不等 → 走 _switch_to_chat_session 等价路径 (跟 slash_switch_session
+        event handler 一致, 同样从 metadata.sid 切).
+
+        用 run_worker 而非 asyncio.create_task 因为:
+        1. RUF006 — 裸 create_task 易被 GC, textual worker 由 App 持有
+        2. textual 自带 exception 处理 + 生命周期管理.
+        """
+        if sid is None:
+            # 取消 — 启 worker mount "已取消" 行 (worker async fn)
+            async def _cancel_msg() -> None:
+                await self._write_styled(
+                    "", "已取消 session 切换.", suffix_style="dim"
+                )
+            self.run_worker(_cancel_msg(), name="picker_cancel_msg")
+            return
+
+        # 选了 sid — 启 worker 切 chat
+        async def _switch() -> None:
+            # 跟当前 chat 同 sid → echo info, 不重建 ChatSession
+            from explain_engine.chat.session import ChatSession
+            if isinstance(self.chat, ChatSession) and self.chat.sid == sid:
+                await self._write_styled(
+                    "",
+                    f"已在 session {sid}, 无需切换.",
+                    suffix_style="dim",
+                )
+                return
+            await self._switch_to_chat_session({"sid": sid})
+        self.run_worker(_switch(), name="picker_switch_session")
 
     # ─── Chat var 切换 helper (Task 15) ───
     async def _switch_to_chat_session(self, metadata: dict) -> None:

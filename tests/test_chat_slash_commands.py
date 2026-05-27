@@ -197,15 +197,20 @@ class TestSlashResume:
     """
 
     @pytest.mark.asyncio
-    async def test_no_args_returns_error_with_usage(self):
-        """/resume 无参 → slash_error 用法提示 (引导 /list)."""
+    async def test_no_args_opens_session_picker(self):
+        """Wave 7 follow-up: /resume 无参 + 有 session → slash_open_session_picker.
+
+        (老 hotfix spec: slash_error 用法提示. 改 spec: textual ModalScreen
+        picker. 详 tests/test_chat_slash_resume_picker.py)
+        """
         from explain_engine.chat.session import ChatSession
         _make_done_session("s_5e500001")
         chat = ChatSession("s_5e500001")
         events = await dispatch_slash(chat, "/resume")
-        assert events[0].type == "slash_error"
-        assert "/resume" in events[0].content
-        assert "sid" in events[0].content.lower()
+        # 有 _make_done_session 的 session → picker event
+        assert events[0].type == "slash_open_session_picker"
+        assert events[0].metadata is not None
+        assert "sessions" in events[0].metadata
 
     @pytest.mark.asyncio
     async def test_too_many_args_rejected(self):
