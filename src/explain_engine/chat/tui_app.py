@@ -29,6 +29,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import VerticalScroll
 from textual.content import Content, Span
+from textual.suggester import SuggestFromList
 from textual.widgets import (
     Collapsible,
     Footer,
@@ -83,31 +84,52 @@ class ExplainChatApp(App):
         self.show_splash: bool = show_splash
 
     def compose(self) -> ComposeResult:
+        # Wave 7 Bug 3 fix: slash 自动补全 — SuggestFromList(slash names) 注入 Input.
+        # 用户输 "/h" 时, textual 灰字提示 "/help" / "/history" 等, 按 → 接受.
+        # 用 DEFAULT_COMMANDS.name 拼 "/{name}" — 跟 dispatch_slash 解析一致.
+        from explain_engine.chat.slash_commands import DEFAULT_COMMANDS
+
+        slash_names = [f"/{cmd.name}" for cmd in DEFAULT_COMMANDS]
+        suggester = SuggestFromList(slash_names, case_sensitive=False)
+
         yield Header(show_clock=False)
         yield VerticalScroll(id="output")
         yield Input(
             id="prompt",
             placeholder="问点什么... (/help, Ctrl+O 折叠 thinking, Ctrl+C 退出)",
+            suggester=suggester,
         )
         yield Footer()
 
-    # ─── Wave 6 Task 31: on_mount push SplashScreen ───
+    # ─── Wave 6 Task 31 + Wave 7 production smoke fix: on_mount push SplashScreen ───
     async def on_mount(self) -> None:
-        """启动时 push SplashScreen (若 show_splash), 等 4 step + 1s pause 后 pop.
+        """启动时 push SplashScreen (若 show_splash), 等 4 step + 2.5s pause 后 pop,
+        写 banner 到 #output, 最终 focus Input#prompt 让用户立刻能输.
 
-        show_splash=False (cli --no-splash) 直接 return — repl_entry 应已自跑
-        init_lexicon_backend (Task 32 搬家决策).
+        Wave 7 fix bundle:
+        - Bug 1: splash pop 后写 banner (之前没写, #output 空白; 抽 _write_banner
+          helper 跟 _reset_to_ephemeral 共用). sleep 1s → 2.5s 让 user 真看见
+          4 ✓ 点亮 (1s 太快, 点亮过程不可见).
+        - Bug 4: splash pop / no-splash 路径都 focus Input#prompt (之前默
+          focused 是 VerticalScroll, 用户按 Enter 无反应).
+
+        show_splash=False (cli --no-splash) 跳过 splash 直接 banner + focus.
 
         流程 (show_splash=True):
         1. push SplashScreen — 立刻覆盖主 layer.
         2. await splash._init_task — 等 4 step 串行跑完 (任一 step 失败标
            ✗ 不阻塞下一 step, 故 task 总能完成).
-        3. asyncio.sleep(1) — 让 user 看完最终态 (4 step 全 ✓ 或部分 ✗).
+        3. asyncio.sleep(2.5) — 让 user 看完 4 step 点亮 + 最终态.
         4. pop_screen — 回 default screen (主 chat layer 含 #prompt).
+        5. write banner + focus Input.
 
-        Test 决策 (Task 31): asyncio.sleep 在测试 patch 掉避免真等 1s.
+        Test 决策 (Task 31): asyncio.sleep 在测试 patch 掉避免真等 2.5s.
         """
         if not self.show_splash:
+            # Bug 1: 无 splash 路径也要 banner — 不然 #output 空白.
+            await self._write_banner()
+            # Bug 4: 无 splash 路径也要 focus, 不然默 focused 是 VerticalScroll.
+            self.query_one("#prompt", Input).focus()
             return
 
         from explain_engine.chat.splash_screen import SplashScreen
@@ -122,8 +144,13 @@ class ExplainChatApp(App):
                 # 防御: _init_task 自身 catch 了 step 异常, 这里再吞外层意外异常
                 # (e.g. screen detach race). splash 仍 pop.
                 pass
-        await asyncio.sleep(1)
+        # Wave 7 Bug 1: 1s → 2.5s, 让 user 真看见 4 ✓ 点亮 (1s 太快, 直接闪过).
+        await asyncio.sleep(2.5)
         self.pop_screen()
+        # Bug 1 fix: splash pop 后写 banner (之前没写, #output 空白).
+        await self._write_banner()
+        # Bug 4 fix: splash pop 后 focus Input — 用户立刻能输, 不需 Tab.
+        self.query_one("#prompt", Input).focus()
 
     # ─── Mount helper (Wave 4) ───
     async def _write(self, text: str) -> None:
@@ -474,6 +501,16 @@ class ExplainChatApp(App):
             storage=StorageV2(),
             llm=self.llm,
         )
+        await self._write_banner()
+
+    async def _write_banner(self) -> None:
+        """Wave 7 Bug 1 fix: 抽 banner write 出来, on_mount + _reset_to_ephemeral 共用.
+
+        production smoke 实证 splash pop 后 #output 容器空白 — 用户看不到任何
+        banner 引导. 原因: on_mount 只 push splash + pop, 从没写过 banner.
+        修: on_mount 末尾 + _reset_to_ephemeral 都调本 helper, 用户首次看到主
+        chat layer 时 banner 立即可见.
+        """
         await self._write(
             "[bold green]Explain REPL[/bold green] — ephemeral chat. "
             "输入问题让 LLM 直接答, /deepen 触发深度建模, "

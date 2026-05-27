@@ -98,7 +98,13 @@ class SplashScreen(Screen):
         self._init_task = asyncio.create_task(self._run_init_steps())
 
     async def _run_init_steps(self) -> None:
-        """串行 await 4 step fn, 每步先标 "运行中" 再标 "完成" / "失败"."""
+        """串行 await 4 step fn, 每步先标 "运行中" 再标 "完成" / "失败".
+
+        Wave 7 Bug 1 fix: 每 step 完成后加 0.3s sleep, 让 user 真看见 ⠋ → ✓
+        切换过程 (之前 fast-path step 太快, 4 step 总耗 < 100ms, user 来不及
+        看到点亮就被下一行覆盖). 0.3s × 4 = 1.2s 加在 splash 总时长上, 配合
+        on_mount sleep 2.5s 总 ~3.7s, 用户体验自然.
+        """
         for i, step in enumerate(self.INIT_STEPS):
             try:
                 widget = self.query_one(f"#step-{i}", Static)
@@ -126,6 +132,8 @@ class SplashScreen(Screen):
                     f"splash init step '{label}' 失败 (continuing): "
                     f"{type(exc).__name__}: {exc}"
                 )
+            # Wave 7 Bug 1: 0.3s 让 user 看到点亮 (4 step 太快否则闪过).
+            await asyncio.sleep(0.3)
 
     # ─── 4 init step 实现 (Step 0..3, 0-indexed 跟 INIT_STEPS list index 一致) ───
     async def _init_lexicon(self) -> None:

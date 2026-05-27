@@ -13,8 +13,12 @@ VerticalScroll#output {
     padding: 1;
 }
 
+/* Wave 7 Bug 2 fix: Input 不再 dock bottom — Footer 自动 dock bottom 占 y=底,
+ * Input 显式 height: 3 (1 内容行 + 2 border 行 tall), VerticalScroll fill 1fr.
+ * 这样 Input 自然落在 Footer 上方, 不重叠. 之前 Input + Footer 都 dock bottom →
+ * 二者 y 区段重叠, Footer 视觉盖 Input 底 border. */
 Input#prompt {
-    dock: bottom;
+    height: 3;
     border: tall $primary;
 }
 
