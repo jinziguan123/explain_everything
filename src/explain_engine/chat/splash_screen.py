@@ -9,11 +9,12 @@ Layout (设计 docs §3.5):
       ├─ Static#splash-version    (Engine 名称, dim)
       └─ Static#step-0..3         (4 init step widget, pending → 运行中 → 完成/失败)
 
-4 init step (固定串行, 有隐式依赖 — design 决策):
-    0. _init_lexicon       : await init_lexicon_backend() (PG 可达 → PG; 断 → JSON)
-    1. _ping_pg            : await verify_connection() — best-effort, 失败吞
-    2. _load_theory_cache  : get_active_theories() (sync, 短 IO 不到 asyncio.to_thread)
-    3. _ready_signal       : async noop sleep, 标记 ready
+4 init step (固定串行, 0-indexed 跟 INIT_STEPS list index 一致):
+    Step 0: _init_lexicon       — await init_lexicon_backend() (PG 可达 → PG; 断 → JSON)
+    Step 1: _ping_pg            — await verify_connection() (EXPLAIN_DB_URL 未设跳过;
+                                  设了但断 → propagate, _run_init_steps 标 ✗)
+    Step 2: _load_theory_cache  — get_active_theories() (sync, 短 IO 不到 asyncio.to_thread)
+    Step 3: _ready_signal       — async noop sleep, 标记 ready
 
 每 step 失败 (异常) → 标 "失败" 不阻塞下一 step (PG / theory cache 不可达, chat 仍能用
 本机 JSON / empty cache).
@@ -43,6 +44,9 @@ class SplashScreen(Screen):
     - init_lexicon_backend "搬家": 从 repl_entry.enter_repl_async 移到这里
       (决策 1, splash 真显示"加载 lexicon...")
     - 1s pause 后 pop (决策 4, 4 step + 1s = ~2-3s splash, 不烦人)
+
+    Note: INIT_STEPS 0-indexed (跟 Python list index 一致). user UI 看 4 行
+    label 无数字, 仅 reviewer/dev 视角. docstring 内 "Step N" 命名也用 0-indexed.
     """
 
     # design §3.5: 4 step 固定 — fn 是 method name, label 是 user-facing 中文.
@@ -123,7 +127,7 @@ class SplashScreen(Screen):
                     f"{type(exc).__name__}: {exc}"
                 )
 
-    # ─── 4 init step 实现 ───
+    # ─── 4 init step 实现 (Step 0..3, 0-indexed 跟 INIT_STEPS list index 一致) ───
     async def _init_lexicon(self) -> None:
         """Step 0: init_lexicon_backend (PG / JSON fallback).
 
@@ -136,24 +140,26 @@ class SplashScreen(Screen):
         await init_lexicon_backend()
 
     async def _ping_pg(self) -> None:
-        """Step 1: verify_connection — best-effort, 失败吞 (label 标"失败"足够).
+        """Step 1: ping PG (verify_connection) — 真实反映 PG 状态.
 
-        init_lexicon_backend 内部已 ping 过 PG, 此处显式分离一步是给 user 看
-        "PG 连接" 单独状态. _PG_BACKEND_ACTIVE = False 时 verify_connection 仍
-        可能 raise LexiconDBError — 我们 catch + 不抛, 外层 _run_init_steps 也不
-        会再 catch (因 _ping_pg 自己 swallow 了, 标 ✓; 真想标 ✗ 应让它 raise).
+        - EXPLAIN_DB_URL 未设 → return (跳, 默走 JSON fallback, 不算失败, 标 ✓).
+        - EXPLAIN_DB_URL 设了但连不上 → verify_connection raise 直接 propagate,
+          _run_init_steps 现有 try/except 会 catch + 标 ✗ + failed CSS class.
+          user 真看见 PG 不可达 (之前 swallow 永显 ✓ 是 dead UI feedback).
 
-        decision: 让它 raise → 失败 step 显式 ✗ (跟 init_lexicon 区分: init_lexicon
-        总是 ✓ 因 fallback path; PG 真断这步显 ✗).
+        Note: lexicon 仍能走 JSON fallback (init_lexicon_backend 已在 Step 0 跑过,
+        失败已设 _PG_BACKEND_ACTIVE = False). 此 step 显 ✗ 不阻塞 Step 2 (theory
+        cache) / Step 3 (ready) — _run_init_steps 单步 fail 不中断后续.
         """
+        import os
+
+        if not os.environ.get("EXPLAIN_DB_URL"):
+            # 没配 PG, skip 不算 fail (默走 JSON fallback)
+            return
         from explain_engine.persistence.lexicon_pg import verify_connection
 
-        try:
-            await verify_connection()
-        except Exception:
-            # 决策: swallow — splash 上一步 init_lexicon 已经决定 PG/JSON fallback,
-            # 这里不重复抛错 (避免 splash 红字闪现). 真想要错误可见可改回 raise.
-            pass
+        # 设了 PG 但连不上 → 直接 raise, _run_init_steps catch 标 ✗
+        await verify_connection()
 
     async def _load_theory_cache(self) -> None:
         """Step 2: get_active_theories (sync) — 短 IO 不到 asyncio.to_thread (决策 2).
