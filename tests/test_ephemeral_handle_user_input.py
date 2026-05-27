@@ -1,4 +1,4 @@
-"""EphemeralChatSession.handle_user_input — Phase 18 Task 2."""
+"""EphemeralChatSession.handle_user_input — Phase 18 Task 2 + Phase 19 Task 8."""
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -133,3 +133,116 @@ async def test_ephemeral_chat_does_not_persist_transcript(tmp_path, monkeypatch)
     sessions_root = storage.project_dir() / "sessions"
     if sessions_root.exists():
         assert list(sessions_root.iterdir()) == []  # 没 session dir
+
+
+# ---- Phase 19 Task 8: status_start/end + thinking_text yield ----
+
+
+@pytest.mark.asyncio
+async def test_handle_user_input_yields_status_start_at_head(tmp_path, monkeypatch):
+    """ephemeral handle_user_input 调 LLM 前 yield status_start("思考中...")."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+
+    llm = AsyncMock()
+    resp = MagicMock(text="answer", reasoning=None)
+    llm.chat.return_value = resp
+
+    events = [ev async for ev in ephemeral.handle_user_input("hi", llm)]
+
+    assert events[0].type == "status_start"
+    assert "思考中" in events[0].content
+
+
+@pytest.mark.asyncio
+async def test_handle_user_input_yields_status_end_after_llm(tmp_path, monkeypatch):
+    """LLM 成功后 yield status_end 清 spinner. status_end 在 status_start 之后,
+    在 assistant_text 之前 (LLM 完成 → 清 spinner → 出答)."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+
+    llm = AsyncMock()
+    llm.chat.return_value = MagicMock(text="answer", reasoning=None)
+
+    events = [ev async for ev in ephemeral.handle_user_input("hi", llm)]
+    types = [e.type for e in events]
+
+    assert "status_end" in types
+    start_idx = types.index("status_start")
+    end_idx = types.index("status_end")
+    asst_idx = types.index("assistant_text")
+    assert start_idx < end_idx < asst_idx
+
+
+@pytest.mark.asyncio
+async def test_handle_user_input_yields_status_end_on_llm_error(tmp_path, monkeypatch):
+    """LLM 抛 LLMError 也 yield status_end (try/except early return 路径清 spinner).
+    error path: status_start → status_end → slash_error."""
+    from explain_engine.llm.errors import LLMError
+
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+
+    llm = AsyncMock()
+    llm.chat.side_effect = LLMError("boom")
+
+    events = [ev async for ev in ephemeral.handle_user_input("hi", llm)]
+    types = [e.type for e in events]
+
+    assert "status_start" in types
+    assert "status_end" in types
+    assert "slash_error" in types
+    # 顺序: status_start → status_end → slash_error
+    assert types.index("status_start") < types.index("status_end") < types.index("slash_error")
+
+
+@pytest.mark.asyncio
+async def test_handle_user_input_yields_thinking_text_when_reasoning(tmp_path, monkeypatch):
+    """resp.reasoning 非 None (真 LLM 提取的 thinking content) → yield thinking_text
+    event 在 status_end 之后, assistant_text 之前."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+
+    llm = AsyncMock()
+    llm.chat.return_value = MagicMock(text="answer", reasoning="先想下:饱和蒸汽压 > 大气压")
+
+    events = [ev async for ev in ephemeral.handle_user_input("hi", llm)]
+    types = [e.type for e in events]
+
+    thinking_events = [e for e in events if e.type == "thinking_text"]
+    assert len(thinking_events) == 1
+    assert thinking_events[0].content == "先想下:饱和蒸汽压 > 大气压"
+    # 顺序: status_start → status_end → thinking_text → assistant_text
+    end_idx = types.index("status_end")
+    thinking_idx = types.index("thinking_text")
+    asst_idx = types.index("assistant_text")
+    assert end_idx < thinking_idx < asst_idx
+
+
+@pytest.mark.asyncio
+async def test_handle_user_input_no_thinking_text_when_reasoning_none(tmp_path, monkeypatch):
+    """resp.reasoning is None (gpt-4o / anthropic no-thinking) → 不 yield thinking_text."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+
+    llm = AsyncMock()
+    llm.chat.return_value = MagicMock(text="answer", reasoning=None)
+
+    events = [ev async for ev in ephemeral.handle_user_input("hi", llm)]
+    thinking_events = [e for e in events if e.type == "thinking_text"]
+    assert thinking_events == []

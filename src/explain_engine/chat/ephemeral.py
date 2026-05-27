@@ -86,16 +86,29 @@ class EphemeralChatSession:
         text: str,
         llm: LLMClient,
     ):
-        """Phase 18: Ephemeral 下 LLM system-1 chat.
+        """Phase 18: Ephemeral 下 LLM system-1 chat (Phase 19 加 spinner + thinking).
 
-        yield assistant_text + turn_complete events. transcript in-memory append
-        (不持久 — storage_v2 不写 transcript.jsonl).
+        yield 流 (success):
+            status_start("思考中...") → [LLM call] → status_end → [若 reasoning 非空]
+            thinking_text → assistant_text → turn_complete
+        yield 流 (LLMError):
+            status_start("思考中...") → [LLM raise] → status_end → slash_error → return
 
-        LLM 失败 (LLMError) → yield slash_error event,
-        transcript 不变 (retry 友好).
+        transcript in-memory append (不持久 — storage_v2 不写 transcript.jsonl).
+        LLM 失败 (LLMError) transcript 不变 (retry 友好).
+
+        Phase 19 设计要点:
+        - status_start/end 配对让 textual TUI 在 5-15s LLM 调用期间 visible mount
+          LoadingIndicator. 错误也 yield status_end (try/except early return path)
+          保证 spinner 一定清.
+        - resp.reasoning 非 None (extended thinking / reasoning_content) → yield
+          thinking_text event 在 assistant_text 之前. tui_app 走 Collapsible mount.
 
         命名: 跟 ChatSession.handle_user_input 对齐, Wave 2 caller 同名调用.
         """
+        # Phase 19 Task 8: 调 LLM 前 yield status_start (spinner mount signal)
+        yield ChatEvent(type="status_start", content="思考中...")
+
         prompt = load_prompt("ephemeral_chat")
         messages: list[Message] = [Message(role="system", content=prompt["system"])]
         # 拼现有 transcript (in-memory)
@@ -106,16 +119,26 @@ class EphemeralChatSession:
         try:
             resp = await llm.chat(messages)
         except LLMError as exc:
+            # Phase 19 Task 8: error path 也 yield status_end 保证清 spinner
+            yield ChatEvent(type="status_end", content=None)
             yield ChatEvent(
                 type="slash_error",
                 content=f"LLM 调用失败: {type(exc).__name__}: {exc}",
             )
             return
 
+        # Phase 19 Task 8: LLM 成功后 yield status_end 清 spinner
+        yield ChatEvent(type="status_end", content=None)
+
         assistant_text = resp.text
         # transcript append (in-memory, 不持久)
         self.transcript.append({"role": "user", "content": text})
         self.transcript.append({"role": "assistant", "content": assistant_text})
+
+        # Phase 19 Task 8: resp.reasoning 非空 → yield thinking_text (assistant_text 之前)
+        # truthy check (兼容空 str 也跳过), 跟 Response.reasoning: str | None 约定一致.
+        if resp.reasoning:
+            yield ChatEvent(type="thinking_text", content=resp.reasoning)
 
         yield ChatEvent(type="assistant_text", content=assistant_text)
         yield ChatEvent(type="turn_complete", content=None)
