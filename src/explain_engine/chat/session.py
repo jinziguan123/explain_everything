@@ -23,6 +23,7 @@ from datetime import UTC
 from typing import TYPE_CHECKING, Any
 
 from explain_engine.chat.budget import BudgetCounter
+from explain_engine.chat.chat_copy import STATUS_THINKING
 from explain_engine.chat.hooks import (
     SESSION_MEMORY_TRIGGER_INTERVAL,
     lifecycle_post_turn,
@@ -315,7 +316,7 @@ class ChatSession:
             # Phase 19 Task 9: 调 LLM 前 yield status_start (spinner mount signal).
             # 保守路线: 只 yield status_start/end, 不实装 thinking_text — 留 Phase 20
             # 待 ToolsResponse 加 reasoning field 后跟进 (ChatEvent docstring 已说明).
-            yield ChatEvent(type="status_start", content="思考中...")
+            yield ChatEvent(type="status_start", content=STATUS_THINKING)
             try:
                 # C.2: dispatch 到 query_loop (LLM ↔ tools while-loop).
                 # local import 避 circular: loop.py imports ChatEvent from this module.

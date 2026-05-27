@@ -39,6 +39,7 @@ from explain_engine.chat.chat_copy import (
     STATUS_COMPRESS_PROPOSE,
     STATUS_COMPRESS_SCORE,
     STATUS_COUNTERFACTUAL,
+    STATUS_DEEPEN_CLASSIFY,
     STATUS_LEXICON_FLUSH,
     STATUS_PREDICT,
     STATUS_RESCORE,
@@ -2143,7 +2144,7 @@ async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
     # event 让 textual TUI 在期间 visible 显示 LoadingIndicator.
     # 失败也 yield status_end 保 spinner 一定清.
     events: list[ChatEvent] = [
-        ChatEvent(type="status_start", content="启动深度建模 — classify 中..."),
+        ChatEvent(type="status_start", content=STATUS_DEEPEN_CLASSIFY),
     ]
     try:
         real_chat = await chat.promote_to_persistent(question, llm)

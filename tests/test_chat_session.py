@@ -2,6 +2,7 @@
 
 import pytest
 
+from explain_engine.chat.chat_copy import STATUS_THINKING
 from explain_engine.chat.session import ChatEvent, ChatSession, ChatStateDict
 from explain_engine.persistence.session import Session, SessionMeta, SessionStore
 from explain_engine.schema.edges import RelationEdge
@@ -421,7 +422,7 @@ class TestChatSessionStatusYield:
 
         # status_start 在 query_loop event 之前
         assert events[0].type == "status_start"
-        assert "思考中" in events[0].content
+        assert events[0].content == STATUS_THINKING
 
     @pytest.mark.asyncio
     async def test_handle_user_input_yields_status_end_after_query_loop(self, monkeypatch):

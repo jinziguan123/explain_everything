@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from explain_engine.chat.chat_copy import STATUS_DEEPEN_CLASSIFY
 from explain_engine.chat.ephemeral import EphemeralChatSession
 from explain_engine.chat.slash_commands import DEFAULT_COMMANDS
 from explain_engine.persistence.storage_v2 import StorageV2
@@ -284,7 +285,7 @@ async def test_deepen_yields_status_start_before_promote(tmp_path, monkeypatch):
     assert "status_start" in types
     # 找 status_start event 验内容
     status_start = next(e for e in events if e.type == "status_start")
-    assert "启动深度建模" in status_start.content or "classify" in status_start.content
+    assert status_start.content == STATUS_DEEPEN_CLASSIFY
 
 
 @pytest.mark.asyncio

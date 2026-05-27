@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from explain_engine.chat.chat_copy import STATUS_THINKING
 from explain_engine.chat.ephemeral import EphemeralChatSession
 from explain_engine.persistence.storage_v2 import StorageV2
 
@@ -154,7 +155,7 @@ async def test_handle_user_input_yields_status_start_at_head(tmp_path, monkeypat
     events = [ev async for ev in ephemeral.handle_user_input("hi", llm)]
 
     assert events[0].type == "status_start"
-    assert "思考中" in events[0].content
+    assert events[0].content == STATUS_THINKING
 
 
 @pytest.mark.asyncio

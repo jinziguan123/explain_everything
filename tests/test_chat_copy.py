@@ -376,3 +376,19 @@ class TestDeepenCopy:
         for _, cmds in HELP_GROUPS_ZH:
             all_cmds.update(cmds)
         assert "deepen" in all_cmds
+
+
+class TestPhase19StatusConstants:
+    """Phase 19 Wave 2 review fix I-1: status_start spinner label 常量."""
+
+    def test_status_thinking_content(self):
+        """STATUS_THINKING 是默认 spinner label (ephemeral + session 共用)."""
+        from explain_engine.chat.chat_copy import STATUS_THINKING
+        assert isinstance(STATUS_THINKING, str)
+        assert STATUS_THINKING == "思考中..."
+
+    def test_status_deepen_classify_content(self):
+        """STATUS_DEEPEN_CLASSIFY 给 /deepen 启动 classify 阶段 spinner 用."""
+        from explain_engine.chat.chat_copy import STATUS_DEEPEN_CLASSIFY
+        assert isinstance(STATUS_DEEPEN_CLASSIFY, str)
+        assert STATUS_DEEPEN_CLASSIFY == "启动深度建模 — classify 中..."

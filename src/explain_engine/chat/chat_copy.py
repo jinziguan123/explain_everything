@@ -214,6 +214,10 @@ STATUS_COUNTERFACTUAL   = "[bold green]正在做反事实分析...[/bold green]"
 STATUS_RESCORE          = "[bold green]正在重评因果关系...[/bold green]"
 STATUS_THEORIES_COMPUTE = "[bold green]正在分析跨 session 模式...[/bold green]"
 
+# Phase 19: spinner labels for status_start ChatEvent type.
+STATUS_THINKING         = "思考中..."
+STATUS_DEEPEN_CLASSIFY  = "启动深度建模 — classify 中..."
+
 INFO_INSIGHT_PENDING_RESUME = "[dim](检测到中途取消, 跳过 LLM 直接进入审查)[/dim]"
 INFO_MID_STAGE_SAVED        = "[dim](中间状态已保存, 取消审查可下次重入跳过 LLM)[/dim]"
 

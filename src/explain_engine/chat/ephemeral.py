@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from explain_engine.chat.chat_copy import STATUS_THINKING
 from explain_engine.chat.session import ChatEvent, ChatSession, ChatStateDict
 from explain_engine.config import make_light_llm_client
 from explain_engine.engines.bootstrap import bootstrap_phenomena
@@ -107,7 +108,7 @@ class EphemeralChatSession:
         命名: 跟 ChatSession.handle_user_input 对齐, Wave 2 caller 同名调用.
         """
         # Phase 19 Task 8: 调 LLM 前 yield status_start (spinner mount signal)
-        yield ChatEvent(type="status_start", content="思考中...")
+        yield ChatEvent(type="status_start", content=STATUS_THINKING)
 
         prompt = load_prompt("ephemeral_chat")
         messages: list[Message] = [Message(role="system", content=prompt["system"])]
