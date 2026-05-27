@@ -187,36 +187,39 @@ class TestSlashNew:
 
 
 class TestSlashResume:
-    @pytest.mark.asyncio
-    async def test_no_sessions_returns_info(self, monkeypatch):
-        from explain_engine.chat.session import ChatSession
-        from explain_engine.persistence.session import SessionStore
-        _make_done_session("s_5e500001")
-        chat = ChatSession("s_5e500001")
-        # Monkey patch SessionStore.list 返空 (handler 用 SessionStore.list()
-        # 自动 sort + log warning 跳过坏 session, 替代了之前手写 metas loading)
-        monkeypatch.setattr(SessionStore, "list", lambda self: [])
-        events = await dispatch_slash(chat, "/resume")
-        types = [e.type for e in events]
-        assert "slash_resume" in types
-        assert "slash_switch_session" not in types
-        info = next(e for e in events if e.type == "slash_resume")
-        assert "无" in info.content or "no session" in info.content.lower()
+    """Phase 19 Wave 7 hotfix (2026-05-27): /resume 重设为 /resume <sid> 显式 arg.
+
+    老版无参 picker (asyncio.to_thread(input, ...)) 在 textual app 内死锁
+    (textual hold stdin, builtin input 永远读不到). 修法: 删 picker, 改
+    显式 sid arg. 用户流: /list 看 sid → /resume <sid>.
+
+    所有 input_provider / builtins.input mock 已废除 — 新设计完全不依赖 stdin.
+    """
 
     @pytest.mark.asyncio
-    async def test_args_rejected(self):
+    async def test_no_args_returns_error_with_usage(self):
+        """/resume 无参 → slash_error 用法提示 (引导 /list)."""
+        from explain_engine.chat.session import ChatSession
+        _make_done_session("s_5e500001")
+        chat = ChatSession("s_5e500001")
+        events = await dispatch_slash(chat, "/resume")
+        assert events[0].type == "slash_error"
+        assert "/resume" in events[0].content
+        assert "sid" in events[0].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_too_many_args_rejected(self):
+        """/resume <sid> <extra> → slash_error (只接 1 个 sid)."""
         from explain_engine.chat.session import ChatSession
         _make_done_session("s_5e500002")
         chat = ChatSession("s_5e500002")
-        events = await dispatch_slash(chat, "/resume extra")
+        events = await dispatch_slash(chat, "/resume sidA sidB")
         assert events[0].type == "slash_error"
 
     @pytest.mark.asyncio
-    async def test_picks_session_yields_switch(self, monkeypatch):
-        """2 个 session: 当前 + 另一个. 输入 1 → switch 到 latest (按 created_at desc)."""
+    async def test_valid_sid_yields_switch(self):
+        """/resume <existing_sid> 非当前 → slash_resume + slash_switch_session."""
         from explain_engine.chat.session import ChatSession
-        _make_done_session("s_5e500003")
-        # 加第二个 session, 显式 newer created_at
         from explain_engine.persistence.session import (
             Session,
             SessionMeta,
@@ -224,9 +227,11 @@ class TestSlashResume:
         )
         from explain_engine.schema.graph import ExplanationGraph
         from explain_engine.schema.state import CognitiveState
+
+        _make_done_session("s_5e500003")
+        # 加第二 session, 当 switch 目标
         meta_b = SessionMeta.new(question="qb")
         meta_b.session_id = "s_5e500099"
-        meta_b.created_at = 9999999999.0  # newer than s_5e500003
         state_b = CognitiveState(
             graph=ExplanationGraph(root_question="qb"),
             budget_remaining=10, root_question="qb",
@@ -234,151 +239,49 @@ class TestSlashResume:
         SessionStore().save(Session(meta=meta_b, state=state_b))
 
         chat = ChatSession("s_5e500003")
-
-        # Mock input 返 "1" (选 latest = s_5e500099)
-        monkeypatch.setattr(
-            "builtins.input", lambda *a, **kw: "1"
-        )
-
-        events = await dispatch_slash(chat, "/resume")
+        events = await dispatch_slash(chat, "/resume s_5e500099")
         types = [e.type for e in events]
         assert "slash_switch_session" in types
         switch_ev = next(e for e in events if e.type == "slash_switch_session")
         assert switch_ev.content["sid"] == "s_5e500099"
 
     @pytest.mark.asyncio
-    async def test_invalid_number_cancels(self, monkeypatch):
+    async def test_nonexistent_sid_returns_error(self):
+        """/resume <nonexistent_sid> → slash_error, 不 yield switch."""
         from explain_engine.chat.session import ChatSession
         _make_done_session("s_5e500004")
         chat = ChatSession("s_5e500004")
-        monkeypatch.setattr(
-            "builtins.input", lambda *a, **kw: "abc"
-        )
-        events = await dispatch_slash(chat, "/resume")
+        events = await dispatch_slash(chat, "/resume s_nonexist")
         types = [e.type for e in events]
         assert "slash_error" in types
         assert "slash_switch_session" not in types
+        # 错误信息含 sid
+        err = next(e for e in events if e.type == "slash_error")
+        assert "s_nonexist" in err.content
 
     @pytest.mark.asyncio
-    async def test_out_of_range_cancels(self, monkeypatch):
-        from explain_engine.chat.session import ChatSession
-        _make_done_session("s_5e500005")
-        chat = ChatSession("s_5e500005")
-        monkeypatch.setattr(
-            "builtins.input", lambda *a, **kw: "99"
-        )
-        events = await dispatch_slash(chat, "/resume")
-        types = [e.type for e in events]
-        assert "slash_error" in types
-        assert "slash_switch_session" not in types
-
-    @pytest.mark.asyncio
-    async def test_q_cancels(self, monkeypatch):
-        from explain_engine.chat.session import ChatSession
-        _make_done_session("s_5e500006")
-        chat = ChatSession("s_5e500006")
-        monkeypatch.setattr(
-            "builtins.input", lambda *a, **kw: "q"
-        )
-        events = await dispatch_slash(chat, "/resume")
-        types = [e.type for e in events]
-        assert "slash_resume" in types
-        assert "slash_switch_session" not in types
-        info = next(e for e in events if e.type == "slash_resume")
-        assert "取消" in info.content or "cancel" in info.content.lower()
-
-    @pytest.mark.asyncio
-    async def test_picking_current_session_noop(self, monkeypatch):
-        """只 1 session (当前). 输 1 选自己 → 不 yield switch, 只 info."""
+    async def test_current_sid_noop(self):
+        """/resume <current_sid> → slash_resume info, 不 yield switch."""
         from explain_engine.chat.session import ChatSession
         _make_done_session("s_5e500007")
         chat = ChatSession("s_5e500007")
-        monkeypatch.setattr(
-            "builtins.input", lambda *a, **kw: "1"
-        )
-        events = await dispatch_slash(chat, "/resume")
+        events = await dispatch_slash(chat, "/resume s_5e500007")
         types = [e.type for e in events]
         assert "slash_switch_session" not in types
-        info = next(
-            e for e in events if e.type == "slash_resume"
-        )
+        info = next(e for e in events if e.type == "slash_resume")
         assert "已在" in info.content or "current" in info.content.lower()
 
-
-class TestSlashResumeProvider:
-    """F-1 (2026-05-18 review): /resume 通过 chat.input_provider 拿 input.
-
-    若 input_provider set (e.g. cli REPL 启动时挂上), handler 用它而非
-    bare input() 走 fallback. 保证 chat 模式内 picker 也走 prompt_toolkit.
-    """
-
     @pytest.mark.asyncio
-    async def test_picks_session_uses_input_provider(self, monkeypatch):
-        """Set chat.input_provider 后, handler 用 provider 不走 to_thread(input)."""
+    async def test_empty_sid_returns_error(self):
+        """/resume "" (空 sid, e.g. /resume +空白) → slash_error."""
         from explain_engine.chat.session import ChatSession
-        from explain_engine.persistence.session import (
-            Session,
-            SessionMeta,
-            SessionStore,
-        )
-        from explain_engine.schema.graph import ExplanationGraph
-        from explain_engine.schema.state import CognitiveState
-
-        _make_done_session("s_f1f10001")
-        # 加第二 session, created_at 更晚让它排第 1
-        meta_b = SessionMeta.new(question="qb")
-        meta_b.session_id = "s_f1f10099"
-        meta_b.created_at = 9999999999.0
-        state_b = CognitiveState(
-            graph=ExplanationGraph(root_question="qb"),
-            budget_remaining=10, root_question="qb",
-        )
-        SessionStore().save(Session(meta=meta_b, state=state_b))
-
-        chat = ChatSession("s_f1f10001")
-
-        provider_calls = []
-
-        async def fake_provider(prompt_text):
-            provider_calls.append(prompt_text)
-            return "1"
-
-        chat.input_provider = fake_provider
-
-        # 同时 monkeypatch builtins.input 抛 — 验证 handler 没 fallback
-        def _input_should_not_be_called(*a, **kw):
-            raise AssertionError(
-                "handler 应该用 input_provider, 不该走 input() fallback"
-            )
-
-        monkeypatch.setattr("builtins.input", _input_should_not_be_called)
-
-        events = await dispatch_slash(chat, "/resume")
-        types = [e.type for e in events]
-        assert "slash_switch_session" in types
-        # provider 被调一次
-        assert len(provider_calls) == 1
-        assert "选" in provider_calls[0]
-        # switch 到 latest session
-        switch_ev = next(e for e in events if e.type == "slash_switch_session")
-        assert switch_ev.content["sid"] == "s_f1f10099"
-
-    @pytest.mark.asyncio
-    async def test_no_provider_falls_back_to_input(self, monkeypatch):
-        """chat.input_provider is None (default), handler fallback to_thread(input)."""
-        from explain_engine.chat.session import ChatSession
-
-        _make_done_session("s_f1f20002")
-        chat = ChatSession("s_f1f20002")  # 不 set input_provider
-
-        assert chat.input_provider is None  # baseline
-
-        monkeypatch.setattr("builtins.input", lambda *a, **kw: "q")
-        events = await dispatch_slash(chat, "/resume")
-        # q 取消 → slash_resume info, 无 switch
-        types = [e.type for e in events]
-        assert "slash_resume" in types
-        assert "slash_switch_session" not in types
+        _make_done_session("s_5e500008")
+        chat = ChatSession("s_5e500008")
+        # dispatch_slash 拆 args 用 split, 多空格会被吃掉; 这里直接调底层
+        # 验空字符串 arg 被拒
+        from explain_engine.chat.slash_commands import _handle_resume
+        events = await _handle_resume(chat, [""])
+        assert events[0].type == "slash_error"
 
 
 class TestSlashBudgetConfig:

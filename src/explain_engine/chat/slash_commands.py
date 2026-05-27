@@ -869,89 +869,67 @@ async def _handle_new(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
 
 
 async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
-    """/resume — numbered picker 列当前 project 所有 session, 用户选号后切.
+    """/resume <sid> — 切换到指定 session (textual 模式安全, 无 stdin 阻塞).
 
-    无参数. 列 + 弹 input 收 # → yield slash_switch_session.
-    输无效 / out-of-range → slash_error 取消 (无 retry, 保持简单).
-    输 q / empty → slash_resume 取消.
-    选当前 sid → slash_resume info 'already there', 不 yield switch.
+    Phase 19 Wave 7 hotfix (2026-05-27): 老版无参 picker 用
+    `asyncio.to_thread(input, ...)` 收选号, textual 已 hold stdin → 死锁
+    无法 Ctrl+C 退. 改设计为必须显式带 sid arg, 彻底删 input_provider
+    依赖. user 流: /list 看 sid → /resume <sid>.
+
+    用法:
+        /resume <sid>         切到指定 session
+        /resume               → slash_error 用法提示 (引导 /list)
 
     Event 契约:
-    - slash_resume: info content (str)
+    - slash_error: 用法错误 / sid 非法 / sid 不存在
+    - slash_resume: info content (str) — 切到当前 sid 或正常 switching msg
     - slash_switch_session: content={"sid": str} — REPL 据此切
       (见 ChatEvent docstring 完整 contract).
     """
-    import asyncio
-    from datetime import datetime
-
-    from rich.console import Console
-    from rich.table import Table
-
     from explain_engine.chat.session import ChatEvent
     from explain_engine.persistence.session import SessionStore
 
-    if args:
+    # 无 args → 用法提示 + 引导 /list
+    if not args:
         return [ChatEvent(
             type="slash_error",
-            content="用法: /resume  (无参数, 弹列表后选号)",
+            content=(
+                "用法: /resume <sid>  (先用 /list 看 session 列表, 复制 sid 再切)"
+            ),
         )]
-
-    # SessionStore.list() 自动 sort by created_at desc + log warning 跳过坏 session;
-    # 只读 metadata.json, 不读 graph (避免 O(N) 大 graph IO).
-    # 替代了之前手写循环 + 静默 except (Wave 4 code review I-1).
-    metas = SessionStore().list()
-    if not metas:
-        return [ChatEvent(
-            type="slash_resume",
-            content="当前项目无任何 session.",
-        )]
-
-    # 渲染表 — 用临时 Console (跟 /new 同款, 避免 from cli import console 反向依赖)
-    console = Console()
-    table = Table(title=f"Session 列表 ({len(metas)})")
-    table.add_column("#", style="bold")
-    table.add_column("ID", style="cyan")
-    table.add_column("问题", style="bold")
-    table.add_column("阶段")
-    table.add_column("创建时间")
-    for i, m in enumerate(metas, start=1):
-        is_current = "* " if m.session_id == chat.sid else "  "
-        ts = datetime.fromtimestamp(m.created_at).strftime("%Y-%m-%d %H:%M")
-        table.add_row(f"{is_current}{i}", m.session_id, m.question, zh(m.stage), ts)
-    console.print(table)
-
-    # 收 user input. F-1 (2026-05-18): chat.input_provider set 时 (REPL 启动
-    # 时挂上 read_input wrapper), 走 prompt_toolkit 享 bottom toolbar / ctrl+o /
-    # 中文 backspace fix; 否则 fallback bare input (test / 非 chat REPL 路径).
-    prompt_msg = "选 # (q 取消): "
-    try:
-        if chat.input_provider is not None:
-            choice = await chat.input_provider(prompt_msg)
-        else:
-            choice = await asyncio.to_thread(input, prompt_msg)
-    except (EOFError, KeyboardInterrupt):
-        return [ChatEvent(type="slash_resume", content="已取消.")]
-
-    choice = choice.strip().lower()
-    if choice in ("", "q", "quit"):
-        return [ChatEvent(type="slash_resume", content="已取消.")]
-
-    if not choice.isdigit():
+    if len(args) > 1:
         return [ChatEvent(
             type="slash_error",
-            content=f"输入需为数字 1-{len(metas)}; 已取消.",
+            content=(
+                f"/resume 只接一个 sid 参数 (got {len(args)}: {args!r}). "
+                f"用法: /resume <sid>"
+            ),
         )]
 
-    idx = int(choice)
-    if not (1 <= idx <= len(metas)):
+    target_sid = args[0].strip()
+    if not target_sid:
         return [ChatEvent(
             type="slash_error",
-            content=f"# {idx} 超范围 (1-{len(metas)}); 已取消.",
+            content="用法: /resume <sid> (sid 不能为空)",
         )]
 
-    target_sid = metas[idx - 1].session_id
+    # 当前 sid → 已在该 session, 不 yield switch
     if target_sid == chat.sid:
-        return [ChatEvent(type="slash_resume", content=msg_resume_already(target_sid))]
+        return [ChatEvent(
+            type="slash_resume", content=msg_resume_already(target_sid)
+        )]
+
+    # 验 sid 存在 — 通过 SessionStore.list 拿现 metadata (跟 picker 老 path
+    # 一致, 用 metadata 不读 graph 避大 IO)
+    metas = SessionStore().list()
+    known_sids = {m.session_id for m in metas}
+    if target_sid not in known_sids:
+        return [ChatEvent(
+            type="slash_error",
+            content=(
+                f"session {target_sid!r} 不存在. 用 /list 看当前 project 所有 sid."
+            ),
+        )]
 
     return [
         ChatEvent(type="slash_resume", content=msg_resume_switching(target_sid)),

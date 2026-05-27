@@ -82,7 +82,7 @@ COMMAND_DESCRIPTIONS: dict[str, str] = {
     # 管理 session
     "deepen":   "触发深度建模 (/deepen [问题], 不带参取最近 user 输入)",
     "new":      "重置当前 chat, 回到刚启动的空白状态",
-    "resume":   "切换到历史 session",
+    "resume":   "切换到历史 session (/resume <sid>; 先 /list 看 sid)",
     "list":     "列出当前项目所有 session",
     "delete":   "删除某个 session (默认二次确认; --force 跳过)",
     "lexicon":  "查看跨 session 累积的概念库",
@@ -174,7 +174,7 @@ def err_no_llm(cmd: str) -> str:
 def err_ephemeral_reject(cmd: str) -> str:
     return (
         f"/{cmd} 需要先建 session — 输入一个问题让 chat 建 session, "
-        f"或 /resume 选历史 session."
+        f"或 /list 看历史 session 后 /resume <sid> 切."
     )
 
 
@@ -302,7 +302,10 @@ def err_delete_not_found(sid: str) -> str:
 
 def err_delete_active(sid: str) -> str:
     """slash 拒绝删当前活动 session, 给出可执行动作建议."""
-    return f"{sid} 是当前活动 session, 请先 /resume 切到别的 session 或 /new 重置后再删"
+    return (
+        f"{sid} 是当前活动 session, 请先 /resume <other_sid> 切到别的 session "
+        f"或 /new 重置后再删"
+    )
 
 
 # ── Phase 18: /deepen 中文文案 ──

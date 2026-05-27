@@ -1135,9 +1135,13 @@ async def _run_chat_repl_async(
         pt_session = make_session(log_handler)
 
         # F-1 (2026-05-18 Wave 5 review follow-up): 暴露 prompt_toolkit input
-        # 给 slash handler 用 (e.g. /resume picker 收选号). 让 sub-prompt 也走
-        # prompt_toolkit, 享 bottom toolbar + ctrl+o + 中文 backspace fix,
-        # 而非 bare input() 回 readline regression.
+        # 给 slash handler 用 (e.g. /predict /counterfactual /budget sub-prompt).
+        # 让 sub-prompt 也走 prompt_toolkit, 享 bottom toolbar + ctrl+o + 中文
+        # backspace fix, 而非 bare input() 回 readline regression.
+        #
+        # Phase 19 Wave 7 hotfix (2026-05-27): /resume 改 /resume <sid> 显式 arg,
+        # 不再 picker, input_provider 不再被 /resume 用. 其他 sub-prompt slash
+        # (e.g. /predict /counterfactual /budget) 仍依赖.
         chat_session.input_provider = lambda prompt: read_input(
             pt_session, prompt_text=prompt
         )
@@ -1209,7 +1213,8 @@ async def _run_chat_repl_async(
                 # 是 per-session 配置 (新 session 用自己 chat_state.json 的值,
                 # 或 /budget 重新调).
                 # F-1: 切 session 后新 ChatSession 实例的 input_provider 默认 None,
-                # 需重新挂 lambda 让下次 /resume picker 仍走 prompt_toolkit.
+                # 需重新挂 lambda 让 /predict /counterfactual 等 sub-prompt slash
+                # 仍走 prompt_toolkit. (Phase 19 Wave 7 hotfix: /resume 不再用)
                 chat_session.input_provider = lambda prompt: read_input(
                     pt_session, prompt_text=prompt
                 )
