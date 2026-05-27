@@ -20,11 +20,11 @@ Task 17 由 repl_entry.enter_repl_async 启 (await app.run_async()).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from textual import on
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.widgets import Footer, Header, Input, RichLog
 
 if TYPE_CHECKING:
@@ -44,7 +44,7 @@ class ExplainChatApp(App):
     make_light_llm_client).
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("ctrl+o", "toggle_thinking", "折叠 thinking"),
         Binding("ctrl+c", "quit_app", "退出"),
         Binding("ctrl+l", "clear_log", "清屏"),
@@ -53,15 +53,15 @@ class ExplainChatApp(App):
 
     def __init__(
         self,
-        llm: "LLMClient | None",
-        light_llm: "LLMClient | None",
-        ephemeral_chat: "EphemeralChatSession",
+        llm: LLMClient | None,
+        light_llm: LLMClient | None,
+        ephemeral_chat: EphemeralChatSession,
     ) -> None:
         super().__init__()
         self.llm = llm
         self.light_llm = light_llm
         # chat 类型可能在 runtime 切换 (ephemeral ↔ ChatSession). Task 15 用.
-        self.chat: "EphemeralChatSession | ChatSession" = ephemeral_chat
+        self.chat: EphemeralChatSession | ChatSession = ephemeral_chat
         # Task 13 scaffolding: thinking visibility 状态, Wave 4 Ctrl+O 切.
         self._thinking_visible: bool = True
 
@@ -100,7 +100,7 @@ class ExplainChatApp(App):
 
             try:
                 events = await dispatch_slash(self.chat, text)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log.write(
                     f"[red]slash 失败: {type(exc).__name__}: {exc}[/red]"
                 )
@@ -113,11 +113,11 @@ class ExplainChatApp(App):
         try:
             async for ev in self.chat.handle_user_input(text, self.llm):
                 await self._render_event(ev)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.write(f"[red]chat 失败: {type(exc).__name__}: {exc}[/red]")
 
     # ─── Event render ───
-    async def _render_event(self, ev: "ChatEvent") -> None:
+    async def _render_event(self, ev: ChatEvent) -> None:
         """单 ChatEvent → textual widget 操作 dispatch.
 
         Wave 3 主分支:
@@ -199,7 +199,7 @@ class ExplainChatApp(App):
         try:
             from explain_engine.chat.session import ChatSession
             new_chat = ChatSession(sid, llm=self.llm)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.write(
                 f"[red]切换至新 session 失败: {type(exc).__name__}: {exc}[/red]"
             )
@@ -219,7 +219,7 @@ class ExplainChatApp(App):
         if isinstance(self.chat, ChatSession):
             try:
                 await self.chat.aclose()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log.write(
                     f"[yellow]aclose 当前 session 失败 (继续 reset): {exc}[/yellow]"
                 )

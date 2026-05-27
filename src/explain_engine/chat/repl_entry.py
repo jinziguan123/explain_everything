@@ -57,7 +57,7 @@ async def enter_repl_async() -> None:
 
     try:
         await init_lexicon_backend()
-    except Exception:  # noqa: BLE001
+    except Exception:
         # backend init 失败 → textual app 仍启 (Phase 17.1 设计本意:
         # PG 不可达 → 本机 JSON; 完全失败仍可用 in-memory).
         pass
