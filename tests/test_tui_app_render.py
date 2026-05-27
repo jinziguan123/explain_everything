@@ -123,6 +123,130 @@ async def test_render_slash_help_renders_text(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_render_slash_deepen_promoted_switches_chat(tmp_path, monkeypatch) -> None:
+    """Task 15: slash_deepen_promoted event → self.chat 替换为 ChatSession (用 metadata.sid).
+
+    建 session 用 promote_to_persistent + fake bootstrap (跟 test_phase18_full_flow 同 pattern).
+    """
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_tui_render_deepen")
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.session import ChatEvent, ChatSession
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+    from explain_engine.schema.nodes import VariableNode
+
+    storage = StorageV2()
+    llm = AsyncMock()
+    llm.chat = AsyncMock(return_value=__import__(
+        "unittest.mock", fromlist=["MagicMock"]
+    ).MagicMock(text="ok", reasoning=None))
+
+    async def fake_bootstrap(question, llm, **kwargs):
+        return [
+            VariableNode(
+                id="p_001",
+                name="x",
+                description="d",
+                abstraction_level=0,
+                confidence=0.7,
+                epistemic="observation",
+            )
+        ]
+
+    async def fake_review(phenomena, input_provider, console=None):
+        return phenomena
+
+    monkeypatch.setattr(
+        "explain_engine.chat.ephemeral.bootstrap_phenomena", fake_bootstrap
+    )
+    monkeypatch.setattr(
+        "explain_engine.chat.ephemeral.review_phenomena_async", fake_review
+    )
+
+    ephemeral_pre = EphemeralChatSession(storage=storage, llm=llm)
+    real_chat = await ephemeral_pre.promote_to_persistent("test Q", llm)
+    sid = real_chat.sid
+    await real_chat.aclose()
+
+    # 现在 app 用 fresh ephemeral 启动, 模拟 slash_deepen_promoted event → 切到 sid
+    ephemeral = EphemeralChatSession(storage=storage, llm=llm)
+    app = ExplainChatApp(
+        llm=llm,
+        light_llm=AsyncMock(),
+        ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        ev = ChatEvent(
+            type="slash_deepen_promoted",
+            content="深度建模完成",
+            metadata={"sid": sid},
+        )
+        await app._render_event(ev)
+        await pilot.pause()
+        assert isinstance(app.chat, ChatSession)
+        assert app.chat.sid == sid
+
+
+@pytest.mark.asyncio
+async def test_render_slash_deepen_promoted_missing_metadata(tmp_path, monkeypatch) -> None:
+    """metadata 缺 sid → slash_error 红色 + 保留 ephemeral."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+    app = ExplainChatApp(
+        llm=AsyncMock(),
+        light_llm=AsyncMock(),
+        ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # metadata=None
+        ev = ChatEvent(type="slash_deepen_promoted", content="x", metadata=None)
+        await app._render_event(ev)
+        await pilot.pause()
+        # 仍是 ephemeral
+        assert app.chat is ephemeral
+
+
+@pytest.mark.asyncio
+async def test_render_slash_reset_to_ephemeral(tmp_path, monkeypatch) -> None:
+    """Task 15: slash_reset_to_ephemeral → 重建 EphemeralChatSession.
+
+    新建的 chat 实例跟原 ephemeral 不是同一个 (重建).
+    """
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+    app = ExplainChatApp(
+        llm=AsyncMock(),
+        light_llm=AsyncMock(),
+        ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app._render_event(ChatEvent(type="slash_reset_to_ephemeral", content=None))
+        await pilot.pause()
+        # 重建 → 新 EphemeralChatSession 实例 (不是同一对象)
+        assert isinstance(app.chat, EphemeralChatSession)
+        assert app.chat is not ephemeral
+
+
+@pytest.mark.asyncio
 async def test_render_slash_error_renders_text(tmp_path, monkeypatch) -> None:
     """slash_error → 红色 (markup) 写到 log."""
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))

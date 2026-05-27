@@ -106,7 +106,19 @@ class ExplainChatApp(App):
             log.write(f"[dim]{content}[/dim]")
             return
 
-        # Task 15 加 slash_deepen_promoted / slash_reset_to_ephemeral 提前 return.
+        # Task 15: /deepen 成功 promote → 切到新 ChatSession.
+        # event metadata={"sid": real_chat.sid}; content 是 info text.
+        if ev_type == "slash_deepen_promoted":
+            if content:
+                log.write(content)
+            await self._switch_to_chat_session(ev.metadata or {})
+            return
+
+        # Task 15: /new → 重建 ephemeral. 当前 chat 若是 ChatSession aclose.
+        if ev_type == "slash_reset_to_ephemeral":
+            await self._reset_to_ephemeral()
+            return
+
         # Wave 4/5 加 thinking_text / status_start / status_end. 现阶段视为 no-op,
         # 避免给用户 dim fallback dump (跟 Wave 4/5 真渲染冲突).
         if ev_type in (
@@ -128,6 +140,56 @@ class ExplainChatApp(App):
 
         # fallback: dim format
         log.write(f"[dim]{ev_type}: {content}[/dim]")
+
+    # ─── Chat var 切换 helper (Task 15) ───
+    async def _switch_to_chat_session(self, metadata: dict) -> None:
+        """Phase 18 /deepen 落地 + 切换 chat var to ChatSession.
+
+        slash_deepen_promoted event 携 metadata={"sid": real_chat.sid}.
+        失败 (sid 缺 / ChatSession 加载抛) → 红色 log + 保留 ephemeral.
+        """
+        log = self.query_one("#output", RichLog)
+        sid = metadata.get("sid")
+        if not sid:
+            log.write("[red]slash_deepen_promoted event 缺 metadata.sid; 保留 ephemeral.[/red]")
+            return
+        try:
+            from explain_engine.chat.session import ChatSession
+            new_chat = ChatSession(sid, llm=self.llm)
+        except Exception as exc:  # noqa: BLE001
+            log.write(
+                f"[red]切换至新 session 失败: {type(exc).__name__}: {exc}[/red]"
+            )
+            return
+        self.chat = new_chat
+        log.write(
+            f"[green]已进入持久 session {sid}, 可继续 /compress /run 等.[/green]"
+        )
+
+    async def _reset_to_ephemeral(self) -> None:
+        """Phase 18 /new — 清屏 + (若 ChatSession) aclose + 重建 ephemeral."""
+        from explain_engine.chat.ephemeral import EphemeralChatSession
+        from explain_engine.chat.session import ChatSession
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        log = self.query_one("#output", RichLog)
+        if isinstance(self.chat, ChatSession):
+            try:
+                await self.chat.aclose()
+            except Exception as exc:  # noqa: BLE001
+                log.write(
+                    f"[yellow]aclose 当前 session 失败 (继续 reset): {exc}[/yellow]"
+                )
+        log.clear()
+        self.chat = EphemeralChatSession(
+            storage=StorageV2(),
+            llm=self.llm,
+        )
+        log.write(
+            "[bold green]Explain REPL[/bold green] — ephemeral chat. "
+            "输入问题让 LLM 直接答, /deepen 触发深度建模, "
+            "/help 看 slash, /quit 退出."
+        )
 
     # ─── Actions ───
     def action_toggle_thinking(self) -> None:
