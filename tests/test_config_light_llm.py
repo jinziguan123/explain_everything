@@ -36,3 +36,39 @@ def test_make_light_llm_client_independent(monkeypatch):
     light = make_light_llm_client()
     assert isinstance(light, AnthropicProtocolClient)
     assert light._default_model == "claude-haiku-4-5"
+
+
+def test_make_light_llm_client_thinking_enabled_default(monkeypatch):
+    """Phase 19 Task 5: LLM_THINKING_DISABLED 未设 → light client 默 enable."""
+    monkeypatch.setenv("LLM_PROTOCOL", "anthropic")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.anthropic.com")
+    monkeypatch.setenv("LLM_API_KEY", "main-key")
+    monkeypatch.setenv("LLM_MODEL", "claude-opus-4-7")
+    monkeypatch.delenv("LLM_THINKING_DISABLED", raising=False)
+    monkeypatch.delenv("LLM_LIGHT_PROTOCOL", raising=False)
+    monkeypatch.delenv("LLM_LIGHT_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_LIGHT_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_LIGHT_MODEL", raising=False)
+    monkeypatch.delenv("LLM_LIGHT_MAX_TOKENS", raising=False)
+
+    light = make_light_llm_client()
+    assert isinstance(light, AnthropicProtocolClient)
+    assert light._enable_thinking is True
+
+
+def test_make_light_llm_client_thinking_disabled_via_env(monkeypatch):
+    """Phase 19 Task 5: LLM_THINKING_DISABLED=1 同时影响主 + light LLM."""
+    monkeypatch.setenv("LLM_PROTOCOL", "anthropic")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.anthropic.com")
+    monkeypatch.setenv("LLM_API_KEY", "main-key")
+    monkeypatch.setenv("LLM_MODEL", "claude-opus-4-7")
+    monkeypatch.setenv("LLM_THINKING_DISABLED", "1")
+    monkeypatch.delenv("LLM_LIGHT_PROTOCOL", raising=False)
+    monkeypatch.delenv("LLM_LIGHT_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_LIGHT_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_LIGHT_MODEL", raising=False)
+    monkeypatch.delenv("LLM_LIGHT_MAX_TOKENS", raising=False)
+
+    light = make_light_llm_client()
+    assert isinstance(light, AnthropicProtocolClient)
+    assert light._enable_thinking is False

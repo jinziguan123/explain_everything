@@ -171,3 +171,86 @@ def test_factory_invalid_max_tokens_zero(monkeypatch) -> None:
     )
     with pytest.raises(ValueError, match="LLM_MAX_TOKENS"):
         make_llm_client()
+
+
+def test_factory_anthropic_thinking_enabled_default(monkeypatch) -> None:
+    """Phase 19 Task 5: LLM_THINKING_DISABLED 未设 → enable_thinking=True (default)."""
+    from explain_engine.config import make_llm_client
+
+    monkeypatch.delenv("LLM_THINKING_DISABLED", raising=False)
+    _set_full_env(
+        monkeypatch,
+        protocol="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key="sk-ant-fake",
+        model="claude-opus-4-7",
+    )
+    client = make_llm_client()
+    assert client._enable_thinking is True
+
+
+def test_factory_anthropic_thinking_disabled_via_env(monkeypatch) -> None:
+    """Phase 19 Task 5: LLM_THINKING_DISABLED=1 → enable_thinking=False."""
+    from explain_engine.config import make_llm_client
+
+    monkeypatch.setenv("LLM_THINKING_DISABLED", "1")
+    _set_full_env(
+        monkeypatch,
+        protocol="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key="sk-ant-fake",
+        model="claude-opus-4-7",
+    )
+    client = make_llm_client()
+    assert client._enable_thinking is False
+
+
+def test_factory_anthropic_thinking_disabled_via_env_true(monkeypatch) -> None:
+    """Phase 19 Task 5: LLM_THINKING_DISABLED=true (case-insensitive) 同效."""
+    from explain_engine.config import make_llm_client
+
+    monkeypatch.setenv("LLM_THINKING_DISABLED", "True")
+    _set_full_env(
+        monkeypatch,
+        protocol="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key="sk-ant-fake",
+        model="claude-opus-4-7",
+    )
+    client = make_llm_client()
+    assert client._enable_thinking is False
+
+
+def test_factory_anthropic_thinking_empty_env_is_enabled(monkeypatch) -> None:
+    """Phase 19 Task 5: 空 string env / 其他值 → 仍 enable (默)."""
+    from explain_engine.config import make_llm_client
+
+    monkeypatch.setenv("LLM_THINKING_DISABLED", "")
+    _set_full_env(
+        monkeypatch,
+        protocol="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key="sk-ant-fake",
+        model="claude-opus-4-7",
+    )
+    client = make_llm_client()
+    assert client._enable_thinking is True
+
+
+def test_factory_openai_does_not_break_on_thinking_disabled(monkeypatch) -> None:
+    """Phase 19 Task 5: LLM_THINKING_DISABLED=1 + openai → 不挂 (openai 不接此参,
+    vendor reasoning_content 由 vendor 控). 仅作回归 sanity."""
+    from explain_engine.config import make_llm_client
+    from explain_engine.llm.openai_protocol import OpenAIProtocolClient
+
+    monkeypatch.setenv("LLM_THINKING_DISABLED", "1")
+    _set_full_env(
+        monkeypatch,
+        protocol="openai",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-fake",
+        model="gpt-4o",
+    )
+    monkeypatch.delenv("LLM_STRUCTURED_OUTPUT_MODE", raising=False)
+    client = make_llm_client()
+    assert isinstance(client, OpenAIProtocolClient)

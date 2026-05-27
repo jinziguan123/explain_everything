@@ -19,6 +19,19 @@ from explain_engine.llm.openai_protocol import Mode, OpenAIProtocolClient
 Protocol = Literal["anthropic", "openai"]
 
 
+def _read_thinking_enabled() -> bool:
+    """Phase 19 Task 5: LLM_THINKING_DISABLED env → 控 anthropic extended thinking.
+
+    默 enable. 接受 "1" / "true" / "yes" (大小写不敏感) 视作 disable.
+    其他值 (空 string / 任意) → enable.
+
+    openai 协议 reasoning_content 是 vendor 返字段, 客户端无 disable 控,
+    本 env 仅影响 anthropic provider 构造时是否传 thinking call_kwargs.
+    """
+    raw = os.environ.get("LLM_THINKING_DISABLED", "").strip().lower()
+    return raw not in ("1", "true", "yes")
+
+
 class Settings(BaseSettings):
     """Runtime 配置。LLM 配置直接读 env (避免 pydantic-settings 对未配
     LLM_PROTOCOL 等场景报 ValidationError)。
@@ -87,12 +100,15 @@ def make_llm_client() -> LLMClient:
                 f"LLM_MAX_TOKENS must be a positive integer, got {max_tokens_env!r}: {exc}"
             ) from exc
 
+    enable_thinking = _read_thinking_enabled()
+
     if proto == "anthropic":
         return AnthropicProtocolClient(
             api_key=api_key,
             default_model=model,
             base_url=base_url,
             max_tokens=max_tokens,
+            enable_thinking=enable_thinking,
         )
     if proto == "openai":
         mode_str = os.environ.get("LLM_STRUCTURED_OUTPUT_MODE", "json_schema")
@@ -102,6 +118,9 @@ def make_llm_client() -> LLMClient:
                 f"got {mode_str!r}"
             )
         mode: Mode = mode_str  # type: ignore[assignment]
+        # Phase 19 Task 5: openai 协议不接 enable_thinking 构造参 — vendor
+        # reasoning_content 由 vendor 控, 客户端无 disable. LLM_THINKING_DISABLED
+        # 仅影响 anthropic 是否传 thinking call_kwargs.
         return OpenAIProtocolClient(
             api_key=api_key,
             default_model=model,
@@ -161,12 +180,18 @@ def make_light_llm_client() -> LLMClient:
                 f"got {max_tokens_env!r}: {exc}"
             ) from exc
 
+    # Phase 19 Task 5: light client 跟主 LLM 共享 LLM_THINKING_DISABLED env
+    # (无 LLM_LIGHT_THINKING_DISABLED 独立 knob — light model 一般给 cheap task
+    # 用, thinking 配置统一即可).
+    enable_thinking = _read_thinking_enabled()
+
     if proto == "anthropic":
         return AnthropicProtocolClient(
             api_key=api_key,
             default_model=model,
             base_url=base_url,
             max_tokens=max_tokens,
+            enable_thinking=enable_thinking,
         )
     if proto == "openai":
         mode_str = os.environ.get("LLM_STRUCTURED_OUTPUT_MODE", "json_schema")
