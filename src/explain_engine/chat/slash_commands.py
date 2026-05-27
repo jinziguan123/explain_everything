@@ -1,4 +1,4 @@
-"""Phase 9 Wave F.1 + Phase 11 Wave 3/4: 24 default slash commands + 1 alias (/cf → counterfactual).
+"""Phase 9 Wave F.1 + Phase 11 Wave 3/4 + Phase 19 Wave 4: 25 default slash commands + 1 alias (/cf → counterfactual).
 
 设计参考 Claude Code 同款 slash 模式 — 本地 intercept 不走 LLM,
 廉价 inspection + exit + force compact 等管理命令; slash 不计入
@@ -2165,7 +2165,45 @@ async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
     return events
 
 
-# Registry — 24 default slash commands + 1 alias (/cf → counterfactual).
+# ─────────────────────────────────────────────────────────────────────────
+# Phase 19 Wave 4 Task 21: /thinking on|off — 切 thinking Collapsible 折叠
+# ─────────────────────────────────────────────────────────────────────────
+# slash 跟 chat session lifecycle 完全解耦, 仅 yield slash_thinking_toggle
+# event 带 metadata={"visible": bool}. textual tui_app._render_event 接 →
+# 同 action_toggle_thinking 等价 (切 _thinking_visible + 同步现 mount
+# Collapsible.collapsed). 同时给用户一个 zh msg 反馈.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def _handle_thinking(chat, args: list[str]) -> list[ChatEvent]:
+    """Phase 19 Task 21: /thinking on|off — 切 tui_app 的 thinking 折叠状态.
+
+    - /thinking on → slash_thinking_toggle metadata.visible=True + zh msg
+    - /thinking off → slash_thinking_toggle metadata.visible=False + zh msg
+    - 无参 / 错参 (非 on/off) → slash_error 用法提示
+    """
+    from explain_engine.chat.chat_copy import (
+        err_thinking_usage,
+        msg_thinking_off,
+        msg_thinking_on,
+    )
+    from explain_engine.chat.session import ChatEvent
+
+    if len(args) != 1 or args[0] not in ("on", "off"):
+        return [ChatEvent(type="slash_error", content=err_thinking_usage())]
+
+    visible = args[0] == "on"
+    msg = msg_thinking_on() if visible else msg_thinking_off()
+    return [
+        ChatEvent(
+            type="slash_thinking_toggle",
+            content=msg,
+            metadata={"visible": visible},
+        ),
+    ]
+
+
+# Registry — 25 default slash commands + 1 alias (/cf → counterfactual).
 # 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作 → engines → cross-session"分组.
 #
 # Phase 16.2 Wave 3: 所有 handler 经 _wrap_handler 包装 — 自动 snapshot graph
@@ -2203,6 +2241,8 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("migrate",        COMMAND_DESCRIPTIONS["migrate"],        _wrap_handler("migrate", _handle_migrate)),
     # Phase 18 Task 9: /deepen — ephemeral 显式触发 promote_to_persistent.
     SlashCommand("deepen",         COMMAND_DESCRIPTIONS["deepen"],         _wrap_handler("deepen", _handle_deepen)),
+    # Phase 19 Task 21: /thinking on|off — 切 tui_app thinking Collapsible 折叠.
+    SlashCommand("thinking",       COMMAND_DESCRIPTIONS["thinking"],       _wrap_handler("thinking", _handle_thinking)),
 )
 
 

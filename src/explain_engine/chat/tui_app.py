@@ -146,6 +146,8 @@ class ExplainChatApp(App):
         Wave 4:
         - thinking_text: mount Collapsible(Static(content)) 同 _thinking_visible
           标 collapsed (默 expand). title 含字符数.
+        - slash_thinking_toggle (Task 21): metadata.visible (bool) → 强制 set
+          _thinking_visible + 同步现 mount Collapsible.collapsed. echo zh msg.
         Wave 5/6:
         - status_start/end: spinner mount/unmount (现暂 no-op)
         - 其他: fallback dim mount
@@ -192,6 +194,25 @@ class ExplainChatApp(App):
         # Wave 4 Task 19: thinking_text → Collapsible mount (默 expand).
         if ev_type == "thinking_text":
             await self._mount_thinking(content if isinstance(content, str) else "")
+            return
+
+        # Wave 4 Task 21: /thinking on|off → slash_thinking_toggle event.
+        # 强制 set _thinking_visible 跟 metadata.visible 一致, 同步现 mount
+        # Collapsible.collapsed (跟 action_toggle_thinking 等价路径, 但
+        # set 而非 toggle — 保证 on/off 幂等). 再 echo 中文 msg.
+        if ev_type == "slash_thinking_toggle":
+            meta = ev.metadata or {}
+            if "visible" not in meta or not isinstance(meta["visible"], bool):
+                await self._write(
+                    "[red]slash_thinking_toggle event 缺 metadata.visible (bool); "
+                    "保留当前 thinking 状态.[/red]"
+                )
+                return
+            self._thinking_visible = meta["visible"]
+            for c in self.query(Collapsible):
+                c.collapsed = not self._thinking_visible
+            if isinstance(content, str) and content:
+                await self._write(f"[dim]{content}[/dim]")
             return
 
         # Wave 5/6 加 status_start / status_end. 现阶段视为 no-op.

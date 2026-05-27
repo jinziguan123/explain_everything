@@ -91,10 +91,11 @@ COMMAND_DESCRIPTIONS: dict[str, str] = {
     "history":  "查看本 session 操作历史 (默认最近 30 条)",
 
     # 其他
-    "budget":  "查看 / 设置 LLM 调用预算",
-    "compact": "强制压缩对话记忆",
-    "save":    "立即把当前所有状态存盘",
-    "migrate": "(一次性) 老 session 文件迁移到新存储格式",
+    "budget":   "查看 / 设置 LLM 调用预算",
+    "compact":  "强制压缩对话记忆",
+    "save":     "立即把当前所有状态存盘",
+    "migrate":  "(一次性) 老 session 文件迁移到新存储格式",
+    "thinking": "切 thinking 段折叠/展开 (/thinking on|off, 跟 Ctrl+O 等价)",
 
     # 帮助 / 退出
     "help": "看命令列表",
@@ -107,7 +108,7 @@ HELP_GROUPS_ZH: list[tuple[str, list[str]]] = [
     ("干预分析 (需先 /compress)", ["predict", "counterfactual"]),
     ("查看状态 (只读)",           ["show", "graph", "check"]),
     ("管理 session",              ["deepen", "new", "resume", "list", "delete", "lexicon", "theories", "theory", "history"]),
-    ("其他",                      ["budget", "compact", "save", "migrate"]),
+    ("其他",                      ["budget", "compact", "save", "migrate", "thinking"]),
     ("帮助 / 退出",               ["help", "quit"]),
 ]
 
@@ -323,3 +324,21 @@ def err_deepen_already_promoted(current_question: str) -> str:
 def msg_deepen_promote_start(question: str) -> str:
     """/deepen 触发 promote 时的状态消息."""
     return f"启动深度建模 (主题: {question})..."
+
+
+# ── Phase 19 Wave 4: /thinking on|off 文案 ──
+
+
+def msg_thinking_on() -> str:
+    """/thinking on 成功消息. 显 thinking Collapsible 展开."""
+    return "thinking 段已开启 (展开). Ctrl+O 也可切."
+
+
+def msg_thinking_off() -> str:
+    """/thinking off 成功消息. 折叠所有 thinking Collapsible."""
+    return "thinking 段已关闭 (折叠). Ctrl+O 也可切."
+
+
+def err_thinking_usage() -> str:
+    """/thinking 无参 / 错参用法提示."""
+    return "用法: /thinking on  或  /thinking off  (跟 Ctrl+O 等价)"
