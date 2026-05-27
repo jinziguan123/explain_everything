@@ -95,12 +95,17 @@ class AnthropicProtocolClient:
     可通过 LLM_MAX_TOKENS env / 构造 max_tokens kwarg 覆盖.
     """
 
+    THINKING_BUDGET_TOKENS = 4096
+    """Phase 19 Task 3: extended thinking budget (claude-opus / deepseek-reasoner
+    via anthropic-compat). default 4096 — 折中 cost / 推理深度."""
+
     def __init__(
         self,
         api_key: str,
         default_model: str,
         base_url: str | None = None,
         max_tokens: int | None = None,
+        enable_thinking: bool = True,
     ) -> None:
         kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
@@ -108,6 +113,12 @@ class AnthropicProtocolClient:
         self._client = AsyncAnthropic(**kwargs)
         self._default_model = default_model
         self._max_tokens = max_tokens if max_tokens is not None else self.DEFAULT_MAX_TOKENS
+        # Phase 19 Task 3: enable extended thinking by default.
+        # True → call_kwargs["thinking"] = {type:enabled, budget_tokens:4096}.
+        # False → omit (省 token, vendor 不出 thinking blocks).
+        # config.py make_llm_client / make_light_llm_client 读 LLM_THINKING_DISABLED
+        # env 决定传 False (默 True).
+        self._enable_thinking = enable_thinking
 
     async def chat(
         self,
@@ -183,6 +194,14 @@ class AnthropicProtocolClient:
         }
         if system_text:
             call_kwargs["system"] = system_text
+
+        # Phase 19 Task 3: extended thinking — vendor 返 thinking block 由
+        # _single_chat_call 解析填 Response.reasoning (见 Task 2 实装).
+        if self._enable_thinking:
+            call_kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self.THINKING_BUDGET_TOKENS,
+            }
 
         if schema is not None:
             tool_name = schema.__name__
@@ -287,6 +306,13 @@ class AnthropicProtocolClient:
             if tools:
                 call_kwargs["tools"] = tools
                 call_kwargs["tool_choice"] = {"type": "auto"}
+
+            # Phase 19 Task 3: extended thinking 统一 wire (chat / chat_with_tools).
+            if self._enable_thinking:
+                call_kwargs["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": self.THINKING_BUDGET_TOKENS,
+                }
 
             async with self._client.messages.stream(**call_kwargs) as stream:
                 api_resp = await stream.get_final_message()

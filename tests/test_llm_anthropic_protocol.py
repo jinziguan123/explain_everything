@@ -249,3 +249,89 @@ class TestAnthropicChatThinkingBlocks:
         r = await client.chat([Message(role="user", content="hi")])
         assert r.reasoning == "step1 step2"
         assert r.text == "answer"
+
+
+class TestAnthropicEnableThinkingParam:
+    """Phase 19 Task 3: AnthropicProtocolClient 加 enable_thinking 构造参.
+
+    True (默) → call_kwargs["thinking"] = {type:enabled, budget_tokens:4096}.
+    False → omit (省 token, 不出 thinking blocks).
+    chat() / chat_with_tools 同款 wire.
+    """
+
+    async def test_chat_passes_thinking_param_when_enabled(self, mock_anthropic):
+        _set_stream_returns(mock_anthropic, _mock_message_response("ok"))
+        client = AnthropicProtocolClient(
+            api_key="sk-test",
+            default_model="claude-opus-4-7",
+            enable_thinking=True,
+        )
+        await client.chat([Message(role="user", content="hi")])
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
+        assert kwargs["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+    async def test_chat_omits_thinking_param_when_disabled(self, mock_anthropic):
+        _set_stream_returns(mock_anthropic, _mock_message_response("ok"))
+        client = AnthropicProtocolClient(
+            api_key="sk-test",
+            default_model="claude-opus-4-7",
+            enable_thinking=False,
+        )
+        await client.chat([Message(role="user", content="hi")])
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
+        assert "thinking" not in kwargs
+
+    async def test_default_enable_thinking_is_true(self, mock_anthropic):
+        """default constructor → enable_thinking=True (省 token 由 caller / env 控)."""
+        _set_stream_returns(mock_anthropic, _mock_message_response("ok"))
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="claude-opus-4-7"
+        )
+        await client.chat([Message(role="user", content="hi")])
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
+        assert kwargs["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+    async def test_chat_with_tools_passes_thinking_param_when_enabled(
+        self, mock_anthropic
+    ):
+        """chat_with_tools 也走同款 thinking wire."""
+        resp = MagicMock()
+        resp.content = [MagicMock(type="text", text="ok")]
+        resp.model = "claude-opus-4-7"
+        resp.stop_reason = "end_turn"
+        resp.usage = MagicMock(input_tokens=10, output_tokens=20)
+        _set_stream_returns(mock_anthropic, resp)
+        client = AnthropicProtocolClient(
+            api_key="sk-test",
+            default_model="claude-opus-4-7",
+            enable_thinking=True,
+        )
+        await client.chat_with_tools(
+            system="sys",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+        )
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
+        assert kwargs["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+    async def test_chat_with_tools_omits_thinking_param_when_disabled(
+        self, mock_anthropic
+    ):
+        resp = MagicMock()
+        resp.content = [MagicMock(type="text", text="ok")]
+        resp.model = "claude-opus-4-7"
+        resp.stop_reason = "end_turn"
+        resp.usage = MagicMock(input_tokens=10, output_tokens=20)
+        _set_stream_returns(mock_anthropic, resp)
+        client = AnthropicProtocolClient(
+            api_key="sk-test",
+            default_model="claude-opus-4-7",
+            enable_thinking=False,
+        )
+        await client.chat_with_tools(
+            system="sys",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+        )
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
+        assert "thinking" not in kwargs
