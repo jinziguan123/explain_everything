@@ -28,7 +28,7 @@ from textual.widgets import Footer, Header, Input, RichLog
 
 if TYPE_CHECKING:
     from explain_engine.chat.ephemeral import EphemeralChatSession
-    from explain_engine.chat.session import ChatSession
+    from explain_engine.chat.session import ChatEvent, ChatSession
     from explain_engine.llm.client import LLMClient
 
 
@@ -72,6 +72,62 @@ class ExplainChatApp(App):
             placeholder="问点什么... (/help, Ctrl+O 折叠 thinking, Ctrl+C 退出)",
         )
         yield Footer()
+
+    # ─── Event render ───
+    async def _render_event(self, ev: "ChatEvent") -> None:
+        """单 ChatEvent → textual widget 操作 dispatch.
+
+        Wave 3 主分支:
+        - assistant_text / slash_help / slash_show / slash_save / slash_compact /
+          slash_resume / slash_lexicon / slash_theories 等 user-visible text: log.write
+        - slash_error / slash_unknown: 红色 markup log.write
+        - slash_next_step_hint: dim markup log.write
+        - slash_quit: self.exit() 触发优雅退出
+        - slash_deepen_promoted: Task 15 接 — 用 metadata.sid 建 ChatSession 切 self.chat
+        - slash_reset_to_ephemeral: Task 15 接 — 重建 EphemeralChatSession
+        - thinking_text / status_start / status_end: Wave 4/5 实装 (现 fallback 不 render)
+        - 其他: dim fallback "[ev.type]: ev.content" (Phase 19 接受 — 后续 wave 加分支)
+        """
+        log = self.query_one("#output", RichLog)
+        ev_type = ev.type
+        content = ev.content
+
+        if ev_type == "slash_quit":
+            if content:
+                log.write(f"[dim]{content}[/dim]")
+            self.exit()
+            return
+
+        if ev_type == "slash_error" or ev_type == "slash_unknown":
+            log.write(f"[red]{content}[/red]")
+            return
+
+        if ev_type == "slash_next_step_hint":
+            log.write(f"[dim]{content}[/dim]")
+            return
+
+        # Task 15 加 slash_deepen_promoted / slash_reset_to_ephemeral 提前 return.
+        # Wave 4/5 加 thinking_text / status_start / status_end. 现阶段视为 no-op,
+        # 避免给用户 dim fallback dump (跟 Wave 4/5 真渲染冲突).
+        if ev_type in (
+            "thinking_text",
+            "status_start",
+            "status_end",
+            "turn_complete",
+            "tool_use",
+            "tool_result",
+            "slash_switch_session",
+        ):
+            # Wave 4/5 实装. Task 14 暂 no-op.
+            return
+
+        # user-visible text events: 直接 write content
+        if isinstance(content, str):
+            log.write(content)
+            return
+
+        # fallback: dim format
+        log.write(f"[dim]{ev_type}: {content}[/dim]")
 
     # ─── Actions ───
     def action_toggle_thinking(self) -> None:
