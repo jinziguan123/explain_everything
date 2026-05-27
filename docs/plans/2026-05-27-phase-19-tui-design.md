@@ -345,7 +345,8 @@ RichLog#output { border: solid $primary; padding: 1; }
 Input#prompt { dock: bottom; }
 Collapsible.thinking { background: $surface-darken-2; }
 Collapsible.thinking > .collapsible--title { color: $text-muted; text-style: dim italic; }
-LoadingIndicator { color: $accent; }
+/* 注: height: 1 必要 — textual LoadingIndicator DEFAULT_CSS height 100% 会撑满 VerticalScroll, override 让 indicator 占 1 行高. */
+LoadingIndicator { color: $accent; height: 1; }
 .splash-logo { color: $accent; text-align: center; }
 .splash-step-done { color: $success; }
 .splash-step-pending { color: $text-muted; }

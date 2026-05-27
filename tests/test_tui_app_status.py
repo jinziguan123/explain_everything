@@ -232,3 +232,45 @@ async def test_status_start_replaces_previous_active(
             plain = r.plain if hasattr(r, "plain") else str(r)
             assert "第二个..." in plain
         _ = Static  # 占位用 import 防 ruff
+
+
+@pytest.mark.asyncio
+async def test_status_end_idempotent_after_unmount(tmp_path, monkeypatch):
+    """I-2 regression: mount → end → end → 仍 0 widget + no exception (锁 idempotent contract)."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    from textual.widgets import LoadingIndicator
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage, llm=AsyncMock())
+    app = ExplainChatApp(
+        llm=AsyncMock(),
+        light_llm=AsyncMock(),
+        ephemeral_chat=ephemeral,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # 1. mount
+        await app._render_event(
+            ChatEvent(type="status_start", content="思考中...")
+        )
+        await pilot.pause()
+        assert len(list(app.query(LoadingIndicator))) == 1
+
+        # 2. end (clean)
+        await app._render_event(ChatEvent(type="status_end"))
+        await pilot.pause()
+        assert len(list(app.query(LoadingIndicator))) == 0
+
+        # 3. end again (idempotent — should not raise)
+        await app._render_event(ChatEvent(type="status_end"))
+        await pilot.pause()
+        # still 0, no exception
+        assert len(list(app.query(LoadingIndicator))) == 0

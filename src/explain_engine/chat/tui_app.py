@@ -345,6 +345,11 @@ class ExplainChatApp(App):
         Wave 5 review C-1 preempt: label 走 markup=False — LLM-provided
         status text (e.g. `"处理 [INST] 段..."`) 不被 textual Content markup
         parser 吃, 跟 Wave 4 thinking_text 同款防御.
+
+        **约束**: caller 必须串行 await — 现 ephemeral / ChatSession /
+        _handle_deepen 都是顺序 yield 不会并发 mount. Phase 20+ 如加
+        concurrent status (e.g. nested pipeline) 需重新设计 (用 unique id
+        per pair, 或换 queue 协议).
         """
         # 防 leak: 先清前一对 (若有)
         await self._unmount_status()
@@ -365,6 +370,10 @@ class ExplainChatApp(App):
         Idempotent — 无 active pair 时静默 no-op (handle_user_input
         异常 path 可能 yield status_end 跳过 status_start, 或重复 yield).
         用 query("#xxx") 找所有同 id widget (理论 1 个), 全部 remove.
+
+        调用时若无 active status pair (e.g. 重复 status_end / 从未
+        status_start), query 返空 list, for-loop 零 iter, return without
+        error.
         """
         for wid in list(self.query("#status-indicator")):
             await wid.remove()
