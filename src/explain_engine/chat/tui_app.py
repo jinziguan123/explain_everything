@@ -21,6 +21,7 @@ Collapsible / spinner / splash) 共一个垂直容器 mount, 不再用 RichLog.w
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, ClassVar
 
 from textual import on
@@ -66,6 +67,7 @@ class ExplainChatApp(App):
         llm: LLMClient | None,
         light_llm: LLMClient | None,
         ephemeral_chat: EphemeralChatSession,
+        show_splash: bool = True,
     ) -> None:
         super().__init__()
         self.llm = llm
@@ -76,6 +78,9 @@ class ExplainChatApp(App):
         # Collapsible 默 expand (collapsed=False); False 时默 collapse.
         # Ctrl+O 切 + slash /thinking on|off 也切 (Task 21).
         self._thinking_visible: bool = True
+        # Wave 6 Task 31: 是否启动时显 splash. cli --no-splash 时 False (走干净
+        # 路径 — repl_entry 自己 init lexicon backend).
+        self.show_splash: bool = show_splash
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -85,6 +90,40 @@ class ExplainChatApp(App):
             placeholder="问点什么... (/help, Ctrl+O 折叠 thinking, Ctrl+C 退出)",
         )
         yield Footer()
+
+    # ─── Wave 6 Task 31: on_mount push SplashScreen ───
+    async def on_mount(self) -> None:
+        """启动时 push SplashScreen (若 show_splash), 等 4 step + 1s pause 后 pop.
+
+        show_splash=False (cli --no-splash) 直接 return — repl_entry 应已自跑
+        init_lexicon_backend (Task 32 搬家决策).
+
+        流程 (show_splash=True):
+        1. push SplashScreen — 立刻覆盖主 layer.
+        2. await splash._init_task — 等 4 step 串行跑完 (任一 step 失败标
+           ✗ 不阻塞下一 step, 故 task 总能完成).
+        3. asyncio.sleep(1) — 让 user 看完最终态 (4 step 全 ✓ 或部分 ✗).
+        4. pop_screen — 回 default screen (主 chat layer 含 #prompt).
+
+        Test 决策 (Task 31): asyncio.sleep 在测试 patch 掉避免真等 1s.
+        """
+        if not self.show_splash:
+            return
+
+        from explain_engine.chat.splash_screen import SplashScreen
+
+        splash = SplashScreen()
+        await self.push_screen(splash)
+        # _init_task 在 splash.on_mount 已 create_task 启 — 等它完成
+        if splash._init_task is not None:
+            try:
+                await splash._init_task
+            except Exception:
+                # 防御: _init_task 自身 catch 了 step 异常, 这里再吞外层意外异常
+                # (e.g. screen detach race). splash 仍 pop.
+                pass
+        await asyncio.sleep(1)
+        self.pop_screen()
 
     # ─── Mount helper (Wave 4) ───
     async def _write(self, text: str) -> None:
