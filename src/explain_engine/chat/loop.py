@@ -236,7 +236,16 @@ async def query_loop(
                     # add_observation + source=user_explicit 直接 True;
                     # add_observation + source=llm_inferred 弹 prompt 等 user.
                     # parse 失败走下方 except, gate 不调.
-                    approved = await hitl_gate(tool, parsed_input, ctx)
+                    #
+                    # P-1 hotfix: 显式传 chat.input_provider 给 hitl_gate.
+                    # cli 模式: prompt_toolkit-friendly fn → 正常 y/n.
+                    # textual 模式: None → hitl_gate safe deny + warning log
+                    # (不再 fallback 走 builtin input 导致 hold stdin 死锁,
+                    # 同 9838507 commit 修的 /resume 死锁机理).
+                    approved = await hitl_gate(
+                        tool, parsed_input, ctx,
+                        prompt_fn=chat.input_provider,
+                    )
                     if not approved:
                         result = "user denied via HITL gate"
                     else:
