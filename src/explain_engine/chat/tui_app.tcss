@@ -45,3 +45,49 @@ Static.status-label {
     padding: 0 1;
     height: 1;
 }
+
+/* Wave 6 Task 29/30: SplashScreen 启屏样式.
+ * Layout: Vertical#splash-container 居中, logo bold cyan, version dim,
+ * step-i 三态: pending (dim) / active (yellow) / done (green) / failed (red).
+ * markup=False — pyfiglet ASCII / 中文 label 文字直接渲染, 不靠 markup. */
+Vertical#splash-container {
+    align: center middle;
+    height: 100%;
+    width: 100%;
+    padding: 2;
+}
+
+Static.splash-logo {
+    color: $accent;
+    text-style: bold;
+    content-align: center middle;
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+Static.splash-version {
+    color: $text-muted;
+    content-align: center middle;
+    height: 1;
+    margin: 0 0 2 0;
+}
+
+Static.splash-step-pending {
+    color: $text-muted;
+    height: 1;
+}
+
+Static.splash-step-active {
+    color: $warning;
+    height: 1;
+}
+
+Static.splash-step-done {
+    color: $success;
+    height: 1;
+}
+
+Static.splash-step-failed {
+    color: $error;
+    height: 1;
+}
