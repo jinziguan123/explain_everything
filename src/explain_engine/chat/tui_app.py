@@ -22,6 +22,9 @@ Collapsible / spinner / splash) 共一个垂直容器 mount, 不再用 RichLog.w
 from __future__ import annotations
 
 import asyncio
+import os
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from textual import on
@@ -46,6 +49,42 @@ if TYPE_CHECKING:
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.session import ChatEvent, ChatSession
     from explain_engine.llm.client import LLMClient
+
+
+# ─── Wave 7 follow-up Bug 3: phase 19 debug log (splash lifecycle 诊断用) ───
+
+
+def _phase19_debug_log_path() -> Path:
+    """debug log 路径 — $EXPLAIN_HOME/phase19_debug.log.
+
+    EXPLAIN_HOME 未设时 fallback ~/.explain (跟其他 explain 文件一致).
+    实时取 env (不 cache 模块加载时值) — 让测试能 monkeypatch.
+    """
+    home = os.environ.get("EXPLAIN_HOME") or os.path.expanduser("~/.explain")
+    return Path(home) / "phase19_debug.log"
+
+
+def _log_phase19(event: str, detail: str = "") -> None:
+    """append 一行 debug log: [ISO ts] event detail.
+
+    用 user 反馈 "splash 真终端不显" 诊断: SVG snapshot smoke 显示 splash 正常,
+    但 macOS Terminal.app user 看不见. 写 log 让 user 跑后给我看真 path.
+
+    Best-effort: IO 失败完全静默 (写 log 失败不影响 chat 启动).
+    """
+    try:
+        log_path = _phase19_debug_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        elapsed_ms = int(time.monotonic() * 1000) % 1_000_000  # 短 monotonic 帮算相对时序
+        line = f"[{ts} +{elapsed_ms:06d}ms] {event}"
+        if detail:
+            line += f" :: {detail}"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        # 任何 IO 失败静默吞 — debug log 不影响主流程
+        pass
 
 
 # ─── Wave 7 follow-up Bug 1: textual ModalScreen 交互式 /resume picker ───
@@ -189,54 +228,83 @@ class ExplainChatApp(App):
 
     # ─── Wave 6 Task 31 + Wave 7 production smoke fix: on_mount push SplashScreen ───
     async def on_mount(self) -> None:
-        """启动时 push SplashScreen (若 show_splash), 等 4 step + 2.5s pause 后 pop,
-        写 banner 到 #output, 最终 focus Input#prompt 让用户立刻能输.
+        """启动时 push SplashScreen (若 show_splash), 等 4 step + 5s pause 后 pop,
+        写 banner + ready 行到 #output, 最终 focus Input#prompt 让用户立刻能输.
 
         Wave 7 fix bundle:
-        - Bug 1: splash pop 后写 banner (之前没写, #output 空白; 抽 _write_banner
-          helper 跟 _reset_to_ephemeral 共用). sleep 1s → 2.5s 让 user 真看见
-          4 ✓ 点亮 (1s 太快, 点亮过程不可见).
-        - Bug 4: splash pop / no-splash 路径都 focus Input#prompt (之前默
-          focused 是 VerticalScroll, 用户按 Enter 无反应).
+        - Bug 1 (4-bug bundle): splash pop 后写 banner (之前没写, #output 空白).
+        - Bug 4 (4-bug bundle): splash pop / no-splash 路径都 focus Input#prompt.
 
-        show_splash=False (cli --no-splash) 跳过 splash 直接 banner + focus.
+        Wave 7 follow-up bundle (本 commit):
+        - Bug 3: 真终端 user 看不见 splash (SVG snapshot 显示正常, 矛盾). 三层修:
+          1) ~/.explain/phase19_debug.log 记 lifecycle 让 user 跑后给我看 path
+          2) sleep 2.5s → 5s 让 user 真看见 (4 ✓ 点亮 + 5s 视觉停顿)
+          3) splash pop 后写一行 "✓ 已加载, 启动 chat" — user 即使没看到
+             splash logo 也知道它跑过 (logo 不可见 ≠ 没跑)
+
+        show_splash=False (cli --no-splash) 跳过 splash 直接 banner + focus +
+        log no_splash_path.
 
         流程 (show_splash=True):
-        1. push SplashScreen — 立刻覆盖主 layer.
-        2. await splash._init_task — 等 4 step 串行跑完 (任一 step 失败标
-           ✗ 不阻塞下一 step, 故 task 总能完成).
-        3. asyncio.sleep(2.5) — 让 user 看完 4 step 点亮 + 最终态.
-        4. pop_screen — 回 default screen (主 chat layer 含 #prompt).
-        5. write banner + focus Input.
+        1. _log_phase19("app_start") — entry marker
+        2. push SplashScreen — _log_phase19("splash_push")
+        3. await splash._init_task — _log_phase19("init_task_done")
+        4. asyncio.sleep(5.0) — _log_phase19("hold_sleep_done")
+        5. pop_screen — _log_phase19("splash_pop")
+        6. write banner + ready line — _log_phase19("banner_mounted")
+        7. focus Input — _log_phase19("input_focused")
 
-        Test 决策 (Task 31): asyncio.sleep 在测试 patch 掉避免真等 2.5s.
+        Test 决策 (Task 31): asyncio.sleep 在测试 patch 掉避免真等 5s.
         """
+        _log_phase19(
+            "app_start",
+            f"show_splash={self.show_splash}",
+        )
+
         if not self.show_splash:
             # Bug 1: 无 splash 路径也要 banner — 不然 #output 空白.
             await self._write_banner()
+            _log_phase19("banner_mounted", "no_splash_path")
             # Bug 4: 无 splash 路径也要 focus, 不然默 focused 是 VerticalScroll.
             self.query_one("#prompt", Input).focus()
+            _log_phase19("input_focused", "no_splash_path")
             return
 
         from explain_engine.chat.splash_screen import SplashScreen
 
         splash = SplashScreen()
         await self.push_screen(splash)
+        _log_phase19("splash_push", "screen pushed onto stack")
         # _init_task 在 splash.on_mount 已 create_task 启 — 等它完成
         if splash._init_task is not None:
             try:
                 await splash._init_task
-            except Exception:
+                _log_phase19("init_task_done", "4 steps complete")
+            except Exception as exc:
                 # 防御: _init_task 自身 catch 了 step 异常, 这里再吞外层意外异常
                 # (e.g. screen detach race). splash 仍 pop.
-                pass
-        # Wave 7 Bug 1: 1s → 2.5s, 让 user 真看见 4 ✓ 点亮 (1s 太快, 直接闪过).
-        await asyncio.sleep(2.5)
+                _log_phase19(
+                    "init_task_done",
+                    f"with outer exception: {type(exc).__name__}: {exc}",
+                )
+        # Wave 7 follow-up Bug 3: 2.5s → 5s 让 user 真看见 (production smoke 反馈
+        # 2.5s 太短). 4 ✓ 点亮过程 (4×0.3s = 1.2s) + 5s 视觉停顿 = ~6.2s 总, 给
+        # user 充裕时间看完.
+        await asyncio.sleep(5.0)
+        _log_phase19("hold_sleep_done", "5s elapsed")
         self.pop_screen()
+        _log_phase19("splash_pop", "screen popped, main layer visible")
         # Bug 1 fix: splash pop 后写 banner (之前没写, #output 空白).
         await self._write_banner()
+        # Wave 7 follow-up Bug 3: 再加一行 "已加载" 让 user 即使 splash 没看到
+        # 也知道它真跑过. 写在 banner 之后, dim/绿色 markup 视觉低调.
+        await self._write(
+            "[dim green]✓ 已加载 (lexicon / PG / theory cache), 进入 chat REPL.[/dim green]"
+        )
+        _log_phase19("banner_mounted", "banner + ready line written")
         # Bug 4 fix: splash pop 后 focus Input — 用户立刻能输, 不需 Tab.
         self.query_one("#prompt", Input).focus()
+        _log_phase19("input_focused", "splash_path")
 
     # ─── Mount helper (Wave 4) ───
     async def _write(self, text: str) -> None:
