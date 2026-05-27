@@ -128,6 +128,7 @@ class ExplainChatApp(App):
         - slash_quit: self.exit() 触发优雅退出
         - slash_deepen_promoted: Task 15 接 — 用 metadata.sid 建 ChatSession 切 self.chat
         - slash_reset_to_ephemeral: Task 15 接 — 重建 EphemeralChatSession
+        - slash_switch_session: Phase 19 Wave 3 review I-4 — /resume slash 切到 content.sid
         - thinking_text / status_start / status_end: Wave 4/5 实装 (现 fallback 不 render)
         - 其他: dim fallback "[ev.type]: ev.content" (Phase 19 接受 — 后续 wave 加分支)
         """
@@ -162,6 +163,18 @@ class ExplainChatApp(App):
             await self._reset_to_ephemeral()
             return
 
+        # Phase 19 Wave 3 review I-4: /resume slash 触发 slash_switch_session event
+        # (content={"sid": str}, 跟 slash_deepen_promoted 用 metadata.sid 不同 pattern).
+        # 复用 _switch_to_chat_session helper (它 .get("sid") 跟 content dict 兼容).
+        if ev_type == "slash_switch_session":
+            if not isinstance(content, dict) or "sid" not in content:
+                log.write(
+                    "[red]slash_switch_session event 缺 content.sid; 保留当前 chat.[/red]"
+                )
+                return
+            await self._switch_to_chat_session(content)
+            return
+
         # Wave 4/5 加 thinking_text / status_start / status_end. 现阶段视为 no-op,
         # 避免给用户 dim fallback dump (跟 Wave 4/5 真渲染冲突).
         if ev_type in (
@@ -171,7 +184,6 @@ class ExplainChatApp(App):
             "turn_complete",
             "tool_use",
             "tool_result",
-            "slash_switch_session",
         ):
             # Wave 4/5 实装. Task 14 暂 no-op.
             return

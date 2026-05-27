@@ -271,3 +271,116 @@ async def test_render_slash_error_renders_text(tmp_path, monkeypatch) -> None:
         await pilot.pause()
         log = app.query_one("#output", RichLog)
         assert len(log.lines) >= 1
+
+
+@pytest.mark.asyncio
+async def test_render_slash_switch_session_switches_chat(tmp_path, monkeypatch) -> None:
+    """Phase 19 Wave 3 review I-4: /resume slash 触发 slash_switch_session event
+    (content={"sid": str}) → self.chat 替换为 ChatSession.
+
+    注意: 跟 slash_deepen_promoted 不同, sid 在 content (非 metadata).
+    """
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_tui_render_switch")
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.session import ChatEvent, ChatSession
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+    from explain_engine.schema.nodes import VariableNode
+
+    storage = StorageV2()
+    llm = AsyncMock()
+    llm.chat = AsyncMock(return_value=__import__(
+        "unittest.mock", fromlist=["MagicMock"]
+    ).MagicMock(text="ok", reasoning=None))
+
+    async def fake_bootstrap(question, llm, **kwargs):
+        return [
+            VariableNode(
+                id="p_001",
+                name="x",
+                description="d",
+                abstraction_level=0,
+                confidence=0.7,
+                epistemic="observation",
+            )
+        ]
+
+    async def fake_review(phenomena, input_provider, console=None):
+        return phenomena
+
+    monkeypatch.setattr(
+        "explain_engine.chat.ephemeral.bootstrap_phenomena", fake_bootstrap
+    )
+    monkeypatch.setattr(
+        "explain_engine.chat.ephemeral.review_phenomena_async", fake_review
+    )
+
+    # 先 promote 出一个 sid 可切到
+    ephemeral_pre = EphemeralChatSession(storage=storage, llm=llm)
+    real_chat = await ephemeral_pre.promote_to_persistent("switch target Q", llm)
+    sid = real_chat.sid
+    await real_chat.aclose()
+
+    # app 用 fresh ephemeral 启动, 模拟 /resume 触发 slash_switch_session
+    ephemeral = EphemeralChatSession(storage=storage, llm=llm)
+    app = ExplainChatApp(
+        llm=llm,
+        light_llm=AsyncMock(),
+        ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        ev = ChatEvent(
+            type="slash_switch_session",
+            content={"sid": sid},
+        )
+        await app._render_event(ev)
+        await pilot.pause()
+        assert isinstance(app.chat, ChatSession)
+        assert app.chat.sid == sid
+
+
+@pytest.mark.asyncio
+async def test_render_slash_switch_session_missing_sid_keeps_chat(
+    tmp_path, monkeypatch
+) -> None:
+    """Phase 19 Wave 3 review I-4: slash_switch_session content 缺 sid (None / 非 dict /
+    没 sid key) → 保留当前 chat + 红字提示, 不切到坏对象.
+    """
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_tui_render_switch_missing")
+
+    from textual.widgets import RichLog
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+    app = ExplainChatApp(
+        llm=AsyncMock(),
+        light_llm=AsyncMock(),
+        ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # content=None: 防御应触发, chat 仍是 ephemeral
+        await app._render_event(
+            ChatEvent(type="slash_switch_session", content=None)
+        )
+        await pilot.pause()
+        assert app.chat is ephemeral
+
+        # content={} (无 sid key): 防御应触发
+        await app._render_event(
+            ChatEvent(type="slash_switch_session", content={})
+        )
+        await pilot.pause()
+        assert app.chat is ephemeral
+
+        # 验有红字提示写到 log (至少 1 行)
+        log = app.query_one("#output", RichLog)
+        assert len(log.lines) >= 1
