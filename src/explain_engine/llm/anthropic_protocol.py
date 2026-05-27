@@ -218,11 +218,20 @@ class AnthropicProtocolClient:
 
         text = ""
         parsed: dict[str, Any] | None = None
+        thinking_parts: list[str] = []
         for block in api_resp.content:
             if block.type == "tool_use":
                 parsed = dict(block.input)
             elif block.type == "text":
                 text += block.text
+            elif block.type == "thinking":
+                # Phase 19 Task 2: chat() path 对称收 thinking block →
+                # Response.reasoning. 现 chat_with_tools 已收到
+                # ToolsResponse.raw_content_blocks (Phase 9 Wave F.4),
+                # 普通 chat() 走 structured output 也需暴露.
+                thinking_parts.append(getattr(block, "thinking", ""))
+
+        reasoning: str | None = "".join(thinking_parts) if thinking_parts else None
 
         # Phase 13 hotfix #5: free-text JSON fallback. 仅当 schema 期望 structured
         # output (schema 非 None) 且 LLM 没用 tool_use (parsed=None) 但 text 非空时
@@ -240,6 +249,7 @@ class AnthropicProtocolClient:
 
         return Response(
             text=text,
+            reasoning=reasoning,
             parsed=parsed,
             model=api_resp.model,
             usage={

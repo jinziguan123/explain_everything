@@ -172,3 +172,80 @@ class TestAnthropicProtocolClient:
             api_key="sk-fake",
             base_url="https://api.deepseek.com/anthropic",
         )
+
+
+def _mock_thinking_then_text_response(
+    thinking_text: str,
+    answer_text: str,
+    model: str = "claude-opus-4-7",
+):
+    """Phase 19 Task 2: mock final message with thinking block + text block.
+
+    chat() path 遍历 api_resp.content 解析 block.type — thinking block 应被
+    收集到 reasoning 字段, text block 累积到 text 字段.
+    """
+    resp = MagicMock()
+    thinking_block = MagicMock()
+    thinking_block.type = "thinking"
+    thinking_block.thinking = thinking_text
+    text_block = MagicMock(type="text", text=answer_text)
+    resp.content = [thinking_block, text_block]
+    resp.model = model
+    resp.usage = MagicMock(input_tokens=10, output_tokens=20)
+    return resp
+
+
+class TestAnthropicChatThinkingBlocks:
+    """Phase 19 Task 2: chat() 路径暴露 thinking blocks → Response.reasoning.
+
+    现 chat_with_tools 已收 thinking 到 ToolsResponse.raw_content_blocks
+    (Phase 9 Wave F.4), 但普通 chat() 路径 (structured output) 之前没解析.
+    Wave 1 补对称.
+    """
+
+    async def test_chat_extracts_thinking_blocks_to_reasoning(self, mock_anthropic):
+        """final message 含 thinking + text block → resp.reasoning 拿 thinking, text 拿正文."""
+        _set_stream_returns(
+            mock_anthropic,
+            _mock_thinking_then_text_response(
+                thinking_text="让我先想一下用户的问题",
+                answer_text="最终回答",
+            ),
+        )
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="claude-opus-4-7"
+        )
+        r = await client.chat([Message(role="user", content="hi")])
+        assert r.text == "最终回答"
+        assert r.reasoning == "让我先想一下用户的问题"
+
+    async def test_chat_no_thinking_block_reasoning_is_none(self, mock_anthropic):
+        """final message 只有 text block (无 thinking) → resp.reasoning is None."""
+        _set_stream_returns(mock_anthropic, _mock_message_response("just text"))
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="claude-opus-4-7"
+        )
+        r = await client.chat([Message(role="user", content="hi")])
+        assert r.text == "just text"
+        assert r.reasoning is None
+
+    async def test_chat_multiple_thinking_blocks_concatenated(self, mock_anthropic):
+        """多个 thinking block (理论上少见) → concat 入 reasoning."""
+        resp = MagicMock()
+        block1 = MagicMock()
+        block1.type = "thinking"
+        block1.thinking = "step1 "
+        block2 = MagicMock()
+        block2.type = "thinking"
+        block2.thinking = "step2"
+        text = MagicMock(type="text", text="answer")
+        resp.content = [block1, block2, text]
+        resp.model = "claude-opus-4-7"
+        resp.usage = MagicMock(input_tokens=10, output_tokens=20)
+        _set_stream_returns(mock_anthropic, resp)
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="claude-opus-4-7"
+        )
+        r = await client.chat([Message(role="user", content="hi")])
+        assert r.reasoning == "step1 step2"
+        assert r.text == "answer"
