@@ -122,6 +122,22 @@ class ChatEvent:
       因为 slash_deepen_promoted 还要带人话 info 给用户看, content 留给字符串).
       Producer: _handle_deepen (Phase 18).
       Consumer: repl_entry.enter_repl_async (Phase 18 Task 17).
+    - thinking_text: str — LLM reasoning 段内容 (extended thinking / reasoning_content).
+      Phase 19 起约定: 在 assistant_text 之前 yield, 跟 Response.reasoning 字段对齐.
+      Producer: ephemeral.handle_user_input (resp.reasoning 非 None 时), ChatSession
+      query_loop 末尾 (Phase 20 实装 — ToolsResponse 加 reasoning field 后, 现 Phase 19
+      ChatSession 保守只 yield status_start/end, 不 yield thinking_text).
+      Consumer: tui_app._render_event 走 Collapsible mount (dim color, 默 expand,
+      Ctrl+O 折叠). textual 框架渲染.
+    - status_start: str — 描述当前 LLM / 长时操作 ("思考中..." / "启动深度建模 — classify 中...").
+      Phase 19 起约定: 跟 status_end 配对, 中间夹 long-running 操作. 单 turn 可有多对.
+      Producer: ephemeral / ChatSession handle_user_input 调 LLM 前 yield, _handle_deepen
+      调 promote 前 yield.
+      Consumer: tui_app._render_event mount LoadingIndicator widget + 灰 Static label.
+    - status_end: None — 清掉前一个 status_start 显示 (LLM 调用 / 长时操作完成 signal).
+      Phase 19 起约定: try/finally 包 LLM 调 — 错误也 yield (保证 spinner 一定清).
+      Producer: ephemeral / ChatSession / _handle_deepen, 跟 status_start 配对.
+      Consumer: tui_app._render_event unmount LoadingIndicator + Static label.
     """
 
     type: str
