@@ -32,6 +32,27 @@ def _read_thinking_enabled() -> bool:
     return raw not in ("1", "true", "yes")
 
 
+def _read_read_timeout_env() -> float:
+    """Phase 20.0 Task 1 follow-up: LLM_READ_TIMEOUT_S env validation.
+
+    Default 120.0s. Empty / unset → 120.0. Invalid (non-float) / non-positive
+    → ValueError with env name + offending value in msg (跟 LLM_MAX_TOKENS
+    现有 validation pattern 一致).
+    """
+    raw = os.environ.get("LLM_READ_TIMEOUT_S")
+    if raw is None or raw == "":
+        return 120.0
+    try:
+        val = float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"LLM_READ_TIMEOUT_S must be a positive number, got {raw!r}: {exc}"
+        ) from exc
+    if val <= 0:
+        raise ValueError(f"LLM_READ_TIMEOUT_S must be > 0, got {val}")
+    return val
+
+
 class Settings(BaseSettings):
     """Runtime 配置。LLM 配置直接读 env (避免 pydantic-settings 对未配
     LLM_PROTOCOL 等场景报 ValidationError)。
@@ -104,8 +125,9 @@ def make_llm_client() -> LLMClient:
 
     # Phase 20.0 Layer A: LLM_READ_TIMEOUT_S env knob (default 120.0s) 防
     # streaming chunk gap 永等. 透传给 protocol client → AsyncAnthropic/OpenAI
-    # httpx.Timeout(read=...).
-    read_timeout = float(os.environ.get("LLM_READ_TIMEOUT_S", "120.0"))
+    # httpx.Timeout(read=...). Task 1 follow-up: 抽 _read_read_timeout_env()
+    # 集中 validation (跟 LLM_MAX_TOKENS pattern 对齐).
+    read_timeout = _read_read_timeout_env()
 
     if proto == "anthropic":
         return AnthropicProtocolClient(
@@ -193,8 +215,10 @@ def make_light_llm_client() -> LLMClient:
     enable_thinking = _read_thinking_enabled()
 
     # Phase 20.0 Layer A: LLM_READ_TIMEOUT_S 共享主 LLM knob (无 LIGHT 独立
-    # knob — 防 streaming chunk gap 永等, light client 同款受益).
-    read_timeout = float(os.environ.get("LLM_READ_TIMEOUT_S", "120.0"))
+    # knob — 防 streaming chunk gap 永等, light client 同款受益). Task 1
+    # follow-up: 跟 make_llm_client 同一个 _read_read_timeout_env() helper
+    # (DRY, validation 单点维护).
+    read_timeout = _read_read_timeout_env()
 
     if proto == "anthropic":
         return AnthropicProtocolClient(

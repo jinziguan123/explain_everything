@@ -8,6 +8,7 @@ import os
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from explain_engine.config import make_light_llm_client, make_llm_client
 from explain_engine.llm.anthropic_protocol import AnthropicProtocolClient
@@ -125,3 +126,33 @@ def test_make_light_llm_client_reads_env_default_120(monkeypatch):
         if client is not None:
             call_kwargs = mock_opc.call_args.kwargs
             assert call_kwargs.get("read_timeout") == 120.0
+
+
+def test_make_llm_client_invalid_env_raises(monkeypatch):
+    """LLM_READ_TIMEOUT_S=abc → ValueError with env name + value in msg."""
+    for k in list(os.environ.keys()):
+        if k.startswith("LLM_"):
+            monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("LLM_PROTOCOL", "anthropic")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com")
+    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_MODEL", "claude-test")
+    monkeypatch.setenv("LLM_READ_TIMEOUT_S", "abc")
+
+    with pytest.raises(ValueError, match="LLM_READ_TIMEOUT_S"):
+        make_llm_client()
+
+
+def test_make_llm_client_negative_env_raises(monkeypatch):
+    """LLM_READ_TIMEOUT_S=-5 → ValueError ("must be > 0")."""
+    for k in list(os.environ.keys()):
+        if k.startswith("LLM_"):
+            monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("LLM_PROTOCOL", "anthropic")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com")
+    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_MODEL", "claude-test")
+    monkeypatch.setenv("LLM_READ_TIMEOUT_S", "-5")
+
+    with pytest.raises(ValueError, match="must be > 0"):
+        make_llm_client()
