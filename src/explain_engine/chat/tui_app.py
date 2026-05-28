@@ -200,6 +200,13 @@ class ExplainChatApp(App):
         self.light_llm = light_llm
         # chat 类型可能在 runtime 切换 (ephemeral ↔ ChatSession). Task 15 用.
         self.chat: EphemeralChatSession | ChatSession = ephemeral_chat
+        # Phase 19 真终端 Bug C: textual TUI app 反向引用. 让 slash handler 内 LLM
+        # call 前后调 `chat.tui_app._mount_status(label)` / `_unmount_status()`
+        # 替 Rich `Console().status(...)` (后者在 textual alt screen 不渲染).
+        # 双向引用 (self.chat <-> chat.tui_app): Python GC cycle collector 处理,
+        # 无内存泄漏. chat var 切换时 (_switch_to_chat_session / _reset_to_ephemeral)
+        # 必须同步 update — 否则新 chat.tui_app 仍 None, spinner 失灵.
+        self.chat.tui_app = self
         # Wave 4 Task 19/20: thinking visibility 状态. True 时新 mount
         # Collapsible 默 expand (collapsed=False); False 时默 collapse.
         # Ctrl+O 切 + slash /thinking on|off 也切 (Task 21).
@@ -687,6 +694,9 @@ class ExplainChatApp(App):
             )
             return
         self.chat = new_chat
+        # Phase 19 真终端 Bug C: 切 chat var 时同步 tui_app 反向引用. 否则
+        # 新 ChatSession.tui_app = None, slash handler spinner 失灵.
+        self.chat.tui_app = self
         # sid 是 chat_copy / persistence 返的 trusted id (e.g. "s_xxx"),
         # 但保险用 plain text append, 后缀文本走 markup.
         container = self.query_one("#output", VerticalScroll)
@@ -721,6 +731,8 @@ class ExplainChatApp(App):
             storage=StorageV2(),
             llm=self.llm,
         )
+        # Phase 19 真终端 Bug C: 重建 ephemeral 时同步 tui_app 反向引用.
+        self.chat.tui_app = self
         await self._write_banner()
 
     async def _write_banner(self) -> None:

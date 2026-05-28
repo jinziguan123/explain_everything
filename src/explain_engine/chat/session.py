@@ -254,6 +254,15 @@ class ChatSession:
         # value 必须被引用).
         self._background_tasks: set[asyncio.Task[None]] = set()
 
+        # Phase 19 真终端 Bug C: textual TUI app 反向引用. ExplainChatApp.__init__
+        # 或 _switch_to_chat_session 时 set self.chat.tui_app = self. slash handler
+        # 用 `chat.tui_app._mount_status(label)` / `_unmount_status()` 替老 Rich
+        # `Console().status(...)` — Rich spinner 在 textual alt screen 不渲染,
+        # 用户 5-15s LLM 调用期间看屏幕静止以为卡死. helper fallback 检测
+        # tui_app=None → 走 Rich path 保 backward compat (CLI batch / test).
+        # 类型 `object | None` 避 circular import (tui_app.py imports session.py).
+        self.tui_app: object | None = None
+
     @property
     def turn_count(self) -> int:
         return self.chat_state.turn_count

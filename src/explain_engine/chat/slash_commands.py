@@ -97,6 +97,72 @@ def _render_table_to_string(table) -> str:
     return buf.getvalue()
 
 
+# ── Phase 19 真终端 Bug C: long-task spinner helper (textual / Rich dispatch) ──
+
+
+class _SpinnerContext:
+    """async context manager — 长 LLM task spinner (textual TUI / Rich CLI 都支持).
+
+    用法:
+        async with _spinner(chat, STATUS_COMPRESS_PROPOSE):
+            await propose_candidates(...)
+
+    Dispatch 路径:
+    - chat.tui_app 非 None (textual TUI 模式) → 走 tui_app._mount_status(label) /
+      _unmount_status(), 在 textual VerticalScroll 内 mount LoadingIndicator + label
+      static, 用户真终端可见 spinner.
+    - chat.tui_app=None (batch / test / 老 CLI) → 走 Rich `Console().status(label)`
+      上下文管理器, stderr 写 spinner ANSI (老行为保留).
+
+    真因 (第一性原理):
+    - Rich Console.status 写 stderr 在 textual alt screen 模式下被 capture,
+      用户**看不到** spinner — 5-15s LLM 调用期间屏幕静止 = 假死.
+    - textual `_mount_status` mount LoadingIndicator widget 到主输出容器,
+      跟 thinking Collapsible / status_start/end event 协议同款机制.
+
+    try/finally: LLM call 抛异常时也保证 spinner 清掉 (跟 status_start/end
+    event 协议契约一致 — error path 也 yield status_end).
+    """
+
+    def __init__(self, chat: object, label: str) -> None:
+        self._chat = chat
+        self._label = label
+        # 选 dispatch: textual tui_app 优先, fallback Rich Console.status
+        self._tui_app = getattr(chat, "tui_app", None)
+        # Rich fallback path 用. _rich_ctx 是 Rich Console.status return value (cm).
+        self._rich_ctx: object | None = None
+
+    async def __aenter__(self) -> _SpinnerContext:
+        if self._tui_app is not None and hasattr(self._tui_app, "_mount_status"):
+            # textual path: await async mount
+            await self._tui_app._mount_status(self._label)
+        else:
+            # Rich fallback path: 进 Console.status sync context manager
+            from rich.console import Console as _Console
+            self._rich_ctx = _Console().status(self._label)
+            self._rich_ctx.__enter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        # try/finally semantics: 即使 LLM 抛异常也清 spinner
+        if self._tui_app is not None and hasattr(self._tui_app, "_unmount_status"):
+            try:
+                await self._tui_app._unmount_status()
+            except Exception:
+                # 防御: spinner cleanup 失败不该掩盖原 LLM 异常
+                pass
+        elif self._rich_ctx is not None:
+            try:
+                self._rich_ctx.__exit__(exc_type, exc, tb)
+            except Exception:
+                pass
+
+
+def _spinner(chat: object, label: str) -> _SpinnerContext:
+    """factory — 给 slash handler 用的简写, 等价 _SpinnerContext(chat, label)."""
+    return _SpinnerContext(chat, label)
+
+
 # ── Phase 16.2: REPL history snapshot/delta helpers (Wave 2) ──
 
 _history_logger = logging.getLogger(__name__)
@@ -1257,7 +1323,8 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
         try:
             from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
             top_k = get_lexicon_top_k_for_compress(chat.storage, k=20)
-            with _console.status(STATUS_COMPRESS_PROPOSE):
+            # Phase 19 真终端 Bug C: _spinner helper 走 textual tui_app 或 Rich fallback.
+            async with _spinner(chat, STATUS_COMPRESS_PROPOSE):
                 await propose_candidates(chat.state, chat.llm, existing_lexicon=top_k)
         except Exception as exc:
             return [ChatEvent(type="slash_error", content=err_failed("compress", exc))]
@@ -1286,7 +1353,8 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
         # (跟 cli `_run_compress` 一致). Phase 11 Wave 3 漏 score_all 导致 HITL
         # 看 gain 全 0.00 — review_insights_async 实际从 state.last_gains 读.
         try:
-            with _console.status(STATUS_COMPRESS_SCORE):
+            # Phase 19 真终端 Bug C: _spinner helper.
+            async with _spinner(chat, STATUS_COMPRESS_SCORE):
                 await score_all(chat.state, chat.llm)
         except Exception as exc:
             return [ChatEvent(type="slash_error", content=err_failed("compress", exc))]
@@ -1314,7 +1382,8 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
     except Exception:
         light_llm = None
     try:
-        with _console.status(STATUS_LEXICON_FLUSH):
+        # Phase 19 真终端 Bug C: _spinner helper.
+        async with _spinner(chat, STATUS_LEXICON_FLUSH):
             n = await flush_to_lexicon(
                 chat._session, chat.storage,
                 llm=chat.llm, light_llm=light_llm,
@@ -1360,8 +1429,6 @@ async def _handle_run(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     if chat.llm is None:
         return [ChatEvent(type="slash_error", content=err_no_llm("run"))]
 
-    from rich.console import Console
-
     from explain_engine.runtime.runtime import run as runtime_run
 
     # Phase 15.1 hotfix: 若 chat_state.budget_per_session_limit == 0 (用户 /budget
@@ -1373,9 +1440,10 @@ async def _handle_run(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     else:
         budget = max(chat.state.budget_remaining, 1)
     try:
-        # 2026-05-19 polish: Rich Status spinner — runtime.run 跑推理循环
-        # (多次 LLM 调用, 总耗时几十秒到几分钟取决于 budget)
-        with Console().status(STATUS_RUN):
+        # Phase 19 真终端 Bug C: _spinner helper — textual tui_app spinner 真显;
+        # batch/test 模式 fallback Rich Console.status (老行为). runtime.run 跑推理
+        # 循环 (多次 LLM 调用, 总耗时几十秒到几分钟取决于 budget).
+        async with _spinner(chat, STATUS_RUN):
             reason = await runtime_run(chat.state, chat.llm, budget=budget)
     except Exception as exc:
         return [ChatEvent(type="slash_error", content=err_failed("run", exc))]
@@ -1464,12 +1532,10 @@ async def _handle_predict(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     if not intervention or intervention.lower() in ("q", "quit"):
         return [ChatEvent(type="slash_predict", content="已取消.")]
 
-    from rich.console import Console
-
     from explain_engine.engines.prediction import predict as prediction_predict
     try:
-        # 2026-05-19 polish: Rich Status spinner — prediction LLM 调用 (~5-15s)
-        with Console().status(STATUS_PREDICT):
+        # Phase 19 真终端 Bug C: _spinner helper — prediction LLM 调用 (~5-15s).
+        async with _spinner(chat, STATUS_PREDICT):
             report = await prediction_predict(chat.state, intervention, chat.llm)
     except Exception as exc:
         return [ChatEvent(type="slash_error", content=err_failed("predict", exc))]
@@ -1543,12 +1609,10 @@ async def _handle_counterfactual(chat: ChatSession, args: list[str]) -> list[Cha
     if not intervention or intervention.lower() in ("q", "quit"):
         return [ChatEvent(type="slash_counterfactual", content="已取消.")]
 
-    from rich.console import Console
-
     from explain_engine.engines.counterfactual import substitute
     try:
-        # 2026-05-19 polish: Rich Status spinner — counterfactual LLM 调用 (~5-15s)
-        with Console().status(STATUS_COUNTERFACTUAL):
+        # Phase 19 真终端 Bug C: _spinner helper — counterfactual LLM 调用 (~5-15s).
+        async with _spinner(chat, STATUS_COUNTERFACTUAL):
             report = await substitute(chat.state, intervention, chat.llm)
     except Exception as exc:
         return [ChatEvent(type="slash_error", content=err_failed("counterfactual", exc))]
@@ -1603,13 +1667,11 @@ async def _handle_rescore(chat: ChatSession, args: list[str]) -> list[ChatEvent]
     if chat.llm is None:
         return [ChatEvent(type="slash_error", content=err_no_llm("rescore"))]
 
-    from rich.console import Console
-
     from explain_engine.engines.rescore import rescore_session
 
     try:
-        # 2026-05-19 polish: Rich Status spinner — rescore LLM 多调用 (~25 LLM call)
-        with Console().status(STATUS_RESCORE):
+        # Phase 19 真终端 Bug C: _spinner helper — rescore LLM 多调用 (~25 LLM call).
+        async with _spinner(chat, STATUS_RESCORE):
             new_confs = await rescore_session(chat.state, chat.llm)
     except Exception as exc:
         return [ChatEvent(type="slash_error", content=err_failed("rescore", exc))]
@@ -1809,7 +1871,6 @@ async def _handle_theories(chat: ChatSession, args: list[str]) -> list[ChatEvent
       --all      : 同时显 tentative (default 只 stable)
       --limit=N  : top-N (default 10)
     """
-    from rich.console import Console
     from rich.table import Table
 
     from explain_engine.chat.session import ChatEvent
@@ -1837,7 +1898,8 @@ async def _handle_theories(chat: ChatSession, args: list[str]) -> list[ChatEvent
         embedder = None
 
     try:
-        with Console().status(STATUS_THEORIES_COMPUTE):
+        # Phase 19 真终端 Bug C: _spinner helper.
+        async with _spinner(chat, STATUS_THEORIES_COMPUTE):
             cache = get_active_theories(storage, embedder=embedder)
     except Exception as exc:
         return [ChatEvent(type="slash_error", content=err_failed("theories", exc))]

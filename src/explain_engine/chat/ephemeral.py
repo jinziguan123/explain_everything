@@ -74,6 +74,15 @@ class EphemeralChatSession:
     # Wave 2 不动 repl_entry.py — production 路径需 Wave 3 Task 16 接.
     llm: LLMClient | None = None
 
+    # Phase 19 真终端 Bug C: textual TUI app 反向引用. ExplainChatApp.__init__
+    # set self.chat.tui_app = self, 之后切 chat var (promote / reset) 时同步.
+    # slash handler 用 `chat.tui_app._mount_status(label) / _unmount_status()`
+    # 替老 Rich `Console().status(...)` — Rich spinner 在 textual alt screen
+    # 不渲染, 用户 5-15s LLM 调用期间看屏幕静止以为卡死. helper 内部 fallback
+    # 检测 tui_app=None → 走 Rich path 保 backward compat (CLI batch / test).
+    # 类型 `Any` 避 circular import (tui_app.py imports session.py).
+    tui_app: object | None = None
+
     @property
     def sid(self) -> None:
         return None
@@ -192,13 +201,15 @@ class EphemeralChatSession:
             stable_theories = []  # 失败不阻塞 bootstrap
 
         # bootstrap (raise → caller 留 ephemeral; ephemeral.state 不动)
-        # 2026-05-19 polish: Rich Status spinner LLM 调用期间反馈 (5-15s)
         # Phase 17.2 Feature A: light_llm for classify (haiku 走 fallback 主 LLM
         # 若未配 LLM_LIGHT_*).
         light_llm = make_light_llm_client()
-        from rich.console import Console
-        _console = Console()
-        with _console.status("[bold green]调 LLM 生现象...[/bold green]"):
+        # Phase 19 真终端 Bug C: _spinner helper — textual tui_app spinner 真显;
+        # batch / test 模式 fallback Rich Console.status. 替老 `_console.status`
+        # 直接调 (Rich Spinner 在 textual alt screen 不渲染, 用户 5-15s LLM 期间
+        # 看屏幕静止以为卡死). chat.tui_app 由 ExplainChatApp.__init__ 注入.
+        from explain_engine.chat.slash_commands import _spinner
+        async with _spinner(self, "[bold green]调 LLM 生现象...[/bold green]"):
             phenomena = await bootstrap_phenomena(
                 question,
                 llm,
