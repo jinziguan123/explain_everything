@@ -64,10 +64,19 @@ class TestSplashLifecycleLogged:
         self, tmp_path, monkeypatch
     ) -> None:
         """splash 完整 lifecycle: app start / splash push / init done /
-        sleep done / splash pop / banner mount / focus 全 log."""
+        sleep done / splash pop / banner mount / focus 全 log.
+
+        Wave 7 follow-up Bug 3 P-0 hotfix: splash 流程现在跑在 worker 内
+        (避免 batch_update 阻 paint). test patch:
+        - 4 step fn → AsyncMock(return None) 避免真 PG 10s connect timeout
+        - asyncio.sleep → 0 让 worker 不真 sleep 5s
+        多 pilot.pause() 让 worker fully drain.
+        """
         from textual.widgets import Input
+        from unittest.mock import patch
 
         from explain_engine.chat.ephemeral import EphemeralChatSession
+        from explain_engine.chat.splash_screen import SplashScreen
         from explain_engine.chat.tui_app import (
             ExplainChatApp,
             _phase19_debug_log_path,
@@ -87,27 +96,39 @@ class TestSplashLifecycleLogged:
 
         monkeypatch.setattr("asyncio.sleep", fast_sleep)
 
-        ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
-        app = ExplainChatApp(
-            llm=AsyncMock(),
-            light_llm=AsyncMock(),
-            ephemeral_chat=ephemeral,
-            show_splash=True,
-        )
-
-        async with app.run_test() as pilot:
-            # 多 pause 让 on_mount async 跑完 (push splash + await init_task +
-            # sleep + pop + banner + focus)
-            await pilot.pause()
-            await pilot.pause()
-            await pilot.pause()
-            await pilot.pause()
-            # 最终验 input focused (lifecycle 末尾)
-            prompt = app.query_one("#prompt", Input)
-            assert prompt.has_focus, (
-                "splash lifecycle 末尾应 focus Input — 当前 focused: "
-                f"{app.focused!r}"
+        # P-0 hotfix: 现 splash 流程在 worker 内. patch 4 step fn 避免真跑
+        # init_lexicon (10s PG timeout) — 之前 module-level _PG_BACKEND_ACTIVE
+        # cache 让旧 test 隐性 fast-path, fix 后 worker 内重新 await init,
+        # 测试需显式 patch.
+        with patch.object(
+            SplashScreen, "_init_lexicon", new=AsyncMock(return_value=None)
+        ), patch.object(
+            SplashScreen, "_ping_pg", new=AsyncMock(return_value=None)
+        ), patch.object(
+            SplashScreen, "_load_theory_cache", new=AsyncMock(return_value=None)
+        ), patch.object(
+            SplashScreen, "_ready_signal", new=AsyncMock(return_value=None)
+        ):
+            ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+            app = ExplainChatApp(
+                llm=AsyncMock(),
+                light_llm=AsyncMock(),
+                ephemeral_chat=ephemeral,
+                show_splash=True,
             )
+
+            async with app.run_test() as pilot:
+                # P-0 fix: worker 内跑 splash 流程 — 多 pause 让 worker drain
+                # (init 4 step + 0 sleep + pop + banner + focus). 比旧 inline
+                # await 路径需更多 yield 让 textual message pump 跑 worker.
+                for _ in range(15):
+                    await pilot.pause()
+                # 最终验 input focused (lifecycle 末尾)
+                prompt = app.query_one("#prompt", Input)
+                assert prompt.has_focus, (
+                    "splash lifecycle 末尾应 focus Input — 当前 focused: "
+                    f"{app.focused!r}"
+                )
 
         # 验 log 文件存在
         log_path = _phase19_debug_log_path()
@@ -140,8 +161,16 @@ class TestSplashHoldDurationFiveSeconds:
     async def test_splash_sleep_is_5_seconds(
         self, tmp_path, monkeypatch
     ) -> None:
-        """on_mount 调 asyncio.sleep(5.0) 而非 sleep(2.5)."""
+        """worker 内 await asyncio.sleep(5.0) 让 user 真看见 splash.
+
+        Wave 7 follow-up Bug 3 P-0 hotfix: splash 流程现跑 worker 内, sleep(5.0)
+        从 on_mount 搬到 _run_splash_sequence (worker 协程). 检 sleep 调用
+        仍含 5.0 即可 (不依赖调用位置).
+        """
+        from unittest.mock import patch
+
         from explain_engine.chat.ephemeral import EphemeralChatSession
+        from explain_engine.chat.splash_screen import SplashScreen
         from explain_engine.chat.tui_app import ExplainChatApp
         from explain_engine.persistence.storage_v2 import StorageV2
 
@@ -159,24 +188,33 @@ class TestSplashHoldDurationFiveSeconds:
 
         monkeypatch.setattr("asyncio.sleep", capture_sleep)
 
-        ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
-        app = ExplainChatApp(
-            llm=AsyncMock(),
-            light_llm=AsyncMock(),
-            ephemeral_chat=ephemeral,
-            show_splash=True,
-        )
+        # P-0 hotfix: patch 4 step fn 避免真 PG 10s connect timeout
+        with patch.object(
+            SplashScreen, "_init_lexicon", new=AsyncMock(return_value=None)
+        ), patch.object(
+            SplashScreen, "_ping_pg", new=AsyncMock(return_value=None)
+        ), patch.object(
+            SplashScreen, "_load_theory_cache", new=AsyncMock(return_value=None)
+        ), patch.object(
+            SplashScreen, "_ready_signal", new=AsyncMock(return_value=None)
+        ):
+            ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+            app = ExplainChatApp(
+                llm=AsyncMock(),
+                light_llm=AsyncMock(),
+                ephemeral_chat=ephemeral,
+                show_splash=True,
+            )
 
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await pilot.pause()
-            await pilot.pause()
-            await pilot.pause()
+            async with app.run_test() as pilot:
+                # 多 pause 让 worker drain (含 sleep(5.0) 调用)
+                for _ in range(15):
+                    await pilot.pause()
 
-        # 验: 有一个 sleep(5.0) 调用 (on_mount 内 hold)
+        # 验: 有一个 sleep(5.0) 调用 (worker 内 hold)
         # 注: splash _run_init_steps 内也有 sleep(0.3) × 4. 我们只关心 hold 那次.
         assert 5.0 in captured_sleeps, (
-            f"on_mount 应 await asyncio.sleep(5.0) 让 user 真看见 splash, "
+            f"worker 应 await asyncio.sleep(5.0) 让 user 真看见 splash, "
             f"got captured: {captured_sleeps}"
         )
 
@@ -192,11 +230,17 @@ class TestSplashReadyBannerAfterPop:
     async def test_after_splash_pop_writes_ready_banner(
         self, tmp_path, monkeypatch
     ) -> None:
-        """on_mount → splash pop → banner with "已加载" or "ready" 字样."""
+        """splash pop → banner with "已加载" or "ready" 字样.
+
+        Wave 7 follow-up Bug 3 P-0 hotfix: worker 内 pop + 写 ready banner.
+        """
+        from unittest.mock import patch
+
         from textual.containers import VerticalScroll
         from textual.widgets import Static
 
         from explain_engine.chat.ephemeral import EphemeralChatSession
+        from explain_engine.chat.splash_screen import SplashScreen
         from explain_engine.chat.tui_app import ExplainChatApp
         from explain_engine.persistence.storage_v2 import StorageV2
 
@@ -210,26 +254,35 @@ class TestSplashReadyBannerAfterPop:
             return await original_sleep(0)
         monkeypatch.setattr("asyncio.sleep", fast_sleep)
 
-        ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
-        app = ExplainChatApp(
-            llm=AsyncMock(),
-            light_llm=AsyncMock(),
-            ephemeral_chat=ephemeral,
-            show_splash=True,
-        )
-
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await pilot.pause()
-            await pilot.pause()
-            await pilot.pause()
-
-            container = app.query_one("#output", VerticalScroll)
-            statics = list(container.query(Static))
-            # textual Static.render() 返 Content / RenderableType; str() 拿 plain
-            all_text = "\n".join(str(s.render()) for s in statics)
-            # 应含 "已加载" / "ready" 字样让 user 知道 splash 真跑过
-            assert "已加载" in all_text or "ready" in all_text.lower(), (
-                "splash pop 后应写一行 '✓ 已加载' / ready banner, "
-                f"got mount text:\n{all_text!r}"
+        # P-0 hotfix: patch 4 step fn 避免真 PG 10s connect timeout
+        with patch.object(
+            SplashScreen, "_init_lexicon", new=AsyncMock(return_value=None)
+        ), patch.object(
+            SplashScreen, "_ping_pg", new=AsyncMock(return_value=None)
+        ), patch.object(
+            SplashScreen, "_load_theory_cache", new=AsyncMock(return_value=None)
+        ), patch.object(
+            SplashScreen, "_ready_signal", new=AsyncMock(return_value=None)
+        ):
+            ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+            app = ExplainChatApp(
+                llm=AsyncMock(),
+                light_llm=AsyncMock(),
+                ephemeral_chat=ephemeral,
+                show_splash=True,
             )
+
+            async with app.run_test() as pilot:
+                # 多 pause 让 worker drain
+                for _ in range(15):
+                    await pilot.pause()
+
+                container = app.query_one("#output", VerticalScroll)
+                statics = list(container.query(Static))
+                # textual Static.render() 返 Content / RenderableType; str() 拿 plain
+                all_text = "\n".join(str(s.render()) for s in statics)
+                # 应含 "已加载" / "ready" 字样让 user 知道 splash 真跑过
+                assert "已加载" in all_text or "ready" in all_text.lower(), (
+                    "splash pop 后应写一行 '✓ 已加载' / ready banner, "
+                    f"got mount text:\n{all_text!r}"
+                )

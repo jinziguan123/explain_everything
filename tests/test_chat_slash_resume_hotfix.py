@@ -181,10 +181,14 @@ class TestResumeInTextualApp:
         monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_resume_textual_hotfix")
 
         ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+        # P-0 hotfix: show_splash=False 跳 splash worker (本测试只验 /resume 不 hang,
+        # splash 5s worker 跟 test 主流程无关 — 跳过加速 test, 避免 worker 占 stack
+        # 让 #prompt 不可 focus).
         app = ExplainChatApp(
             llm=AsyncMock(),
             light_llm=AsyncMock(),
             ephemeral_chat=ephemeral,
+            show_splash=False,
         )
 
         async def _scenario() -> None:
