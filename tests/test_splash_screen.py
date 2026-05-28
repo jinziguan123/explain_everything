@@ -48,6 +48,21 @@ def test_splash_screen_init_steps_shape() -> None:
         assert isinstance(s["fn"], str)
 
 
+def test_init_steps_label_check_theory_cache() -> None:
+    """Phase 20.1 #4: INIT_STEPS[2].label 应是 "检查 theory cache" (不是 "加载").
+
+    根因: _load_theory_cache 调 get_active_theories(storage, embedder=None),
+    embedder=None 时只走 stale-cache fallback (不能 recompute), 本质 no-op.
+    UI 标 "加载" 给 user false sense 真在加载; "检查" 更符实际语义.
+    """
+    from explain_engine.chat.splash_screen import SplashScreen
+
+    steps = SplashScreen.INIT_STEPS
+    assert steps[2]["label"] == "检查 theory cache"
+    # fn 不动, 仍是 _load_theory_cache
+    assert steps[2]["fn"] == "_load_theory_cache"
+
+
 @pytest.mark.asyncio
 async def test_splash_screen_compose_yields_logo_and_steps(
     tmp_path, monkeypatch

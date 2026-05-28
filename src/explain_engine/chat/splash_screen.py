@@ -53,7 +53,7 @@ class SplashScreen(Screen):
     INIT_STEPS: ClassVar[list[dict[str, str]]] = [
         {"label": "加载 lexicon backend", "fn": "_init_lexicon"},
         {"label": "连接 PG", "fn": "_ping_pg"},
-        {"label": "加载 theory cache", "fn": "_load_theory_cache"},
+        {"label": "检查 theory cache", "fn": "_load_theory_cache"},
         {"label": "启动 chat REPL", "fn": "_ready_signal"},
     ]
 
