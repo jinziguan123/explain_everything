@@ -37,6 +37,12 @@ Phase 19 Wave 7 hotfix follow-up: logging stderr 污染 textual alt screen 修.
 不动 cli.py module-level basicConfig — 其他 cli 子命令 (`explain list` / `new` 等)
 仍需 stderr 输出 progress logger. 仅 textual TUI 模式静音.
 
+Phase 19 真终端 Bug A: app.run_async(mouse=False) — 关 SGR mouse tracking.
+真因: textual 默 mouse=True → driver 写 `\x1b[?1000h \x1b[?1003h
+\x1b[?1006h` SGR mouse escape, 把 mouse click/drag 当 input 抢走, terminal
+text selection 失效. Phase 19 全键盘交互 (Ctrl+O/Ctrl+L/Ctrl+C + ↑↓ +
+Enter) 不依赖 mouse → 完全可关. 关后真终端能 click+drag 选文字复制.
+
 新 enter_repl_async 流程:
 1. **静音 root logger stderr handler** → 重定到 `chat.log` 文件 (防 textual
    渲染污染) — 必须在 textual 任何 import 之前.
@@ -45,7 +51,7 @@ Phase 19 Wave 7 hotfix follow-up: logging stderr 污染 textual alt screen 修.
    show_splash=True → 跳, splash 内会跑.
 4. 建 EphemeralChatSession (启始 chat var).
 5. 建 ExplainChatApp(llm, light_llm, ephemeral_chat, show_splash=...).
-6. await app.run_async() — textual outer loop, exit() / Ctrl+C 退出.
+6. await app.run_async(mouse=False) — textual outer loop, exit() / Ctrl+C 退出.
 
 outer loop / chat var 切换 (ephemeral ↔ ChatSession) / slash dispatch 移进
 tui_app.py: Input.Submitted handler 调 dispatch_slash, _render_event 接
@@ -201,6 +207,15 @@ async def enter_repl_async(show_splash: bool = True) -> None:
     ephemeral = EphemeralChatSession(storage=storage, llm=llm)
 
     # 4. textual App run_async — outer loop, 直到 app.exit().
+    # Phase 19 真终端 Bug A: mouse=False 关 SGR mouse tracking.
+    # 真因 (第一性原理): textual 默 mouse=True → driver 写 `\x1b[?1000h
+    # \x1b[?1003h \x1b[?1006h` SGR mouse escape, 让 terminal 把 mouse
+    # click/drag 当 input 报给 app, 抢走 terminal 自己的 text selection.
+    # 结果: user 真终端无法 click+drag 选文字复制 (macOS Cmd+C). Phase 19
+    # 全部 BINDINGS (Ctrl+O/Ctrl+L/Ctrl+C + ↑↓ + Enter) 都键盘, 不依赖
+    # mouse click → 完全可关. 关后牺牲: hover / 鼠标点 Collapsible 展开
+    # /鼠标点 Footer hint (但 Ctrl+O 已可切 thinking, Tab+Enter 可达 Input,
+    # SessionPicker 已用 ↑↓ Enter), Phase 19 用户体验保留, 换回 selection.
     from explain_engine.chat.tui_app import ExplainChatApp
 
     app = ExplainChatApp(
@@ -209,4 +224,4 @@ async def enter_repl_async(show_splash: bool = True) -> None:
         ephemeral_chat=ephemeral,
         show_splash=show_splash,
     )
-    await app.run_async()
+    await app.run_async(mouse=False)

@@ -49,11 +49,15 @@ async def test_enter_repl_async_runs_textual_app(tmp_path, monkeypatch) -> None:
     # mock ExplainChatApp.run_async 收集调用
     captured: dict = {}
 
-    async def fake_run_async(self):
+    async def fake_run_async(self, **kwargs):
+        # Phase 19 真终端 Bug A: enter_repl_async 现传 mouse=False 关 SGR mouse
+        # tracking — fake_run_async 用 **kwargs 接 (跟未来 textual run_async
+        # 其他 kwargs 都 forward 兼容).
         captured["chat"] = self.chat
         captured["llm"] = self.llm
         captured["light_llm"] = self.light_llm
         captured["show_splash"] = self.show_splash
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(
         "explain_engine.chat.tui_app.ExplainChatApp.run_async", fake_run_async
@@ -106,8 +110,9 @@ async def test_enter_repl_async_no_splash_runs_init_lexicon(
 
     captured: dict = {}
 
-    async def fake_run_async(self):
+    async def fake_run_async(self, **kwargs):
         captured["show_splash"] = self.show_splash
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(
         "explain_engine.chat.tui_app.ExplainChatApp.run_async", fake_run_async
@@ -150,7 +155,7 @@ async def test_enter_repl_async_llm_not_configured(tmp_path, monkeypatch) -> Non
 
     captured: dict = {}
 
-    async def fake_run_async(self):
+    async def fake_run_async(self, **kwargs):
         captured["llm"] = self.llm
 
     monkeypatch.setattr(
