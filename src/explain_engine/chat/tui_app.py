@@ -221,6 +221,14 @@ class ExplainChatApp(App):
         # add_done_callback 清 ref (task 正常完成 / 异常 / cancelled 都走). None
         # = 无 in-flight 请求.
         self._chat_task: asyncio.Task | None = None
+        # Phase 20.0 Task 2 follow-up (code-quality review I-1): track in-flight chat
+        # tasks in set + add_done_callback discard. 跟 session.py:255 + 395-397 同款
+        # RUF006 / GC safety pattern. self._chat_task 单 ref slot 保留作 action_cancel_chat
+        # 的 cancel handle; set 仅做额外 strong-ref keeper — user 快速连按 enter race
+        # 时, A task 在 _on_done fire 前 B 已覆盖 self._chat_task slot, A 仅靠 callback
+        # closure 维持 strong ref, 理论可被 GC. set 防 GC, 单 ref 是 "current cancellable"
+        # 句柄, 二者协同.
+        self._background_chat_tasks: set[asyncio.Task] = set()
 
     def compose(self) -> ComposeResult:
         # Wave 7 Bug 3 fix: slash 自动补全 — SuggestFromList(slash names) 注入 Input.
@@ -480,10 +488,19 @@ class ExplainChatApp(App):
         # - 用 add_done_callback 清 ref — task 正常完成 / 异常 / cancelled 都
         #   走 callback, 不重复路径.
         # - input handler 立刻返让 message pump free, escape 才有机会进 action.
+        #
+        # Phase 20.0 Task 2 follow-up (review I-1): task 同时 add 到
+        # self._background_chat_tasks set (RUF006 / GC safety, mirror session.py
+        # :395-397 pattern), self._chat_task 单 slot 保留作 cancel handle.
+        # _on_done 双重清: set.discard(t) 防 GC + (if self._chat_task is t:
+        # self._chat_task = None) 防误清 user 新开 task.
         task = asyncio.create_task(self._consume_chat_events(text))
         self._chat_task = task
+        self._background_chat_tasks.add(task)
 
         def _on_done(t: asyncio.Task) -> None:
+            # 双重清理: set discard (GC safety) + 单 ref nil (cancel handle).
+            self._background_chat_tasks.discard(t)
             # 仅清还指本 task 的 ref (防御: user 已开新 task 时不误清).
             if self._chat_task is t:
                 self._chat_task = None

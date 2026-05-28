@@ -51,6 +51,20 @@ async def test_escape_cancels_inflight_chat_task():
 
         assert app._chat_task is None or app._chat_task.done()
 
+        # I-2 fix: pin '请求已取消' mount (verify _consume_chat_events
+        # CancelledError 路径真 mount user-visible text). 未来 refactor 把
+        # mount call 去掉 → 此 assertion fail, 防假绿.
+        from textual.widgets import Static
+        rendered: list[str] = []
+        for s in app.query(Static):
+            try:
+                rendered.append(str(s.render()))
+            except Exception:
+                rendered.append("")  # HeaderTitle 等 render() 不同 signature 容忍
+        assert any("请求已取消" in r for r in rendered), (
+            f"Expected '请求已取消' mount after esc cancel, got: {rendered}"
+        )
+
 
 @pytest.mark.asyncio
 async def test_escape_no_inflight_task_shows_message():
