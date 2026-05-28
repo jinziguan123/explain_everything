@@ -158,7 +158,14 @@ class TestAnthropicProtocolClient:
         assert c._default_model == "claude-opus-4-7"
 
     async def test_construct_with_explicit_base_url(self, mocker) -> None:
-        """传 base_url 时透传给 anthropic SDK。"""
+        """传 base_url 时透传给 anthropic SDK。
+
+        Phase 20.0 Layer A: AsyncAnthropic 现额外收 timeout=httpx.Timeout(...)
+        kwarg (read=120s 默认). 本测专注 api_key/base_url 透传, timeout 子项
+        放宽校验 (类型 + 默认 read).
+        """
+        import httpx
+
         spy = mocker.patch(
             "explain_engine.llm.anthropic_protocol.AsyncAnthropic",
             return_value=AsyncMock(),
@@ -168,10 +175,12 @@ class TestAnthropicProtocolClient:
             default_model="deepseek-chat",
             base_url="https://api.deepseek.com/anthropic",
         )
-        spy.assert_called_once_with(
-            api_key="sk-fake",
-            base_url="https://api.deepseek.com/anthropic",
-        )
+        spy.assert_called_once()
+        call_kwargs = spy.call_args.kwargs
+        assert call_kwargs["api_key"] == "sk-fake"
+        assert call_kwargs["base_url"] == "https://api.deepseek.com/anthropic"
+        assert isinstance(call_kwargs["timeout"], httpx.Timeout)
+        assert call_kwargs["timeout"].read == 120.0
 
 
 def _mock_thinking_then_text_response(

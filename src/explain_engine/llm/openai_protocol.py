@@ -46,8 +46,15 @@ class OpenAIProtocolClient:
         base_url: str | None = None,
         mode: Mode = "json_schema",
         max_tokens: int | None = None,
+        read_timeout: float = 120.0,  # Phase 20.0 Layer A
     ) -> None:
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        import httpx  # Phase 20.0 Layer A: streaming chunk gap timeout
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "timeout": httpx.Timeout(
+                connect=10.0, read=read_timeout, write=60.0, pool=None
+            ),
+        }
         if base_url:
             kwargs["base_url"] = base_url
         self._client = AsyncOpenAI(**kwargs)

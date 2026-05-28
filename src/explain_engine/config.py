@@ -102,6 +102,11 @@ def make_llm_client() -> LLMClient:
 
     enable_thinking = _read_thinking_enabled()
 
+    # Phase 20.0 Layer A: LLM_READ_TIMEOUT_S env knob (default 120.0s) 防
+    # streaming chunk gap 永等. 透传给 protocol client → AsyncAnthropic/OpenAI
+    # httpx.Timeout(read=...).
+    read_timeout = float(os.environ.get("LLM_READ_TIMEOUT_S", "120.0"))
+
     if proto == "anthropic":
         return AnthropicProtocolClient(
             api_key=api_key,
@@ -109,6 +114,7 @@ def make_llm_client() -> LLMClient:
             base_url=base_url,
             max_tokens=max_tokens,
             enable_thinking=enable_thinking,
+            read_timeout=read_timeout,
         )
     if proto == "openai":
         mode_str = os.environ.get("LLM_STRUCTURED_OUTPUT_MODE", "json_schema")
@@ -127,6 +133,7 @@ def make_llm_client() -> LLMClient:
             base_url=base_url,
             mode=mode,
             max_tokens=max_tokens,
+            read_timeout=read_timeout,
         )
     raise ValueError(
         f"Unknown LLM_PROTOCOL: {proto!r}, must be 'anthropic' or 'openai'"
@@ -185,6 +192,10 @@ def make_light_llm_client() -> LLMClient:
     # 用, thinking 配置统一即可).
     enable_thinking = _read_thinking_enabled()
 
+    # Phase 20.0 Layer A: LLM_READ_TIMEOUT_S 共享主 LLM knob (无 LIGHT 独立
+    # knob — 防 streaming chunk gap 永等, light client 同款受益).
+    read_timeout = float(os.environ.get("LLM_READ_TIMEOUT_S", "120.0"))
+
     if proto == "anthropic":
         return AnthropicProtocolClient(
             api_key=api_key,
@@ -192,6 +203,7 @@ def make_light_llm_client() -> LLMClient:
             base_url=base_url,
             max_tokens=max_tokens,
             enable_thinking=enable_thinking,
+            read_timeout=read_timeout,
         )
     if proto == "openai":
         mode_str = os.environ.get("LLM_STRUCTURED_OUTPUT_MODE", "json_schema")
@@ -207,6 +219,7 @@ def make_light_llm_client() -> LLMClient:
             base_url=base_url,
             mode=mode,
             max_tokens=max_tokens,
+            read_timeout=read_timeout,
         )
     raise ValueError(
         f"Unknown LLM_LIGHT_PROTOCOL (or LLM_PROTOCOL): {proto!r}, "
