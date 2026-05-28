@@ -13,7 +13,7 @@ worker, on_mount 立刻返回, message pump 进入正常 paint 循环.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
