@@ -279,10 +279,66 @@ class ExplainChatApp(App):
 
         from explain_engine.chat.splash_screen import SplashScreen
 
+        # Phase 19 真终端 Bug D: 把 splash 整段 (init steps + 5s hold + pop +
+        # banner + focus) 拆到 background worker, 让 on_mount **立刻返回**,
+        # 不阻塞 textual app 启动 paint pipeline.
+        #
+        # 真因 (第一性原理):
+        # - 老路径在 on_mount 内 `await self.push_screen(splash)` + `await
+        #   splash._init_task` + `await asyncio.sleep(5.0)` + `pop_screen()`
+        #   + `await self._write_banner()`. 整个串行 ~6-7s.
+        # - textual `on_mount` 是 app lifecycle event — 它跑期间, screen
+        #   compositor 把 paint 操作放进 queue 但**等 on_mount 返回**才让
+        #   writer thread 刷出 ANSI 到 PTY (实测 PTY out.txt: 整个 splash
+        #   期间 **0 frame**, banner_mounted 后才 1 frame, splash 视觉缺失).
+        # - 即 user 真终端整 6-7s 看屏幕**完全静止** (老 alt screen 状态),
+        #   然后突然显示 banner. lifecycle log (~/.explain/phase19_debug.log)
+        #   跑全 7 行只证 splash 的 Python 代码跑了, **不证 PTY 真渲染**.
+        #
+        # 修法: `self.run_worker(...)` 让 splash 跑在 textual-managed async
+        # worker, on_mount 立刻返回 → textual 进入正常 message pump + paint
+        # 循环, splash widget paint 立刻 flush 到 PTY (实测: 7 frames 含
+        # figlet logo + 4 个 ✓ step 真渲染到 PTY).
+        #
+        # 设计约束:
+        # - thread=False — splash 内部 await async API (push_screen / pop_screen /
+        #   sleep), 必须在 textual event loop 跑.
+        # - exclusive=False — 不阻塞 future worker (e.g. /resume picker).
+        # - 保引用 self._splash_screen 避 splash widget GC (worker fn 持有
+        #   splash 引用, but 防御性双保险).
         splash = SplashScreen()
+        self._splash_screen = splash
+        self.run_worker(
+            self._splash_lifecycle(splash),
+            name="splash_lifecycle",
+            exclusive=False,
+            thread=False,
+        )
+        _log_phase19("app_start", "splash worker scheduled, on_mount returning")
+
+    async def _splash_lifecycle(self, splash) -> None:  # type: ignore[no-untyped-def]
+        """Phase 19 真终端 Bug D: splash 完整生命周期 — push / init / hold / pop / banner / focus.
+
+        从 on_mount 拆出来跑在 background worker (textual run_worker), 让
+        on_mount 立刻返回, textual paint pipeline 不被 6-7s splash sleep 阻塞.
+        user 真终端能在 splash hold 5s 期间真看见 figlet logo + 4 个 ✓ step.
+
+        参数:
+            splash: SplashScreen instance (从 on_mount 传, 保引用避 GC).
+
+        生命周期 (匹配 phase19_debug.log lifecycle 7 行):
+        1. push_screen(splash) — splash_push
+        2. await splash._init_task — init_task_done (4 step + 4×0.3s = 1.2s)
+        3. await asyncio.sleep(5.0) — hold_sleep_done (5s 视觉停顿)
+        4. pop_screen() — splash_pop
+        5. _write_banner() — banner_mounted
+        6. focus("#prompt") — input_focused
+        """
+        # push splash 到 screen stack 顶
         await self.push_screen(splash)
         _log_phase19("splash_push", "screen pushed onto stack")
-        # _init_task 在 splash.on_mount 已 create_task 启 — 等它完成
+
+        # 等 4 step 初始化跑完 (~1.2s 因 4×0.3s sleep)
         if splash._init_task is not None:
             try:
                 await splash._init_task
@@ -294,17 +350,20 @@ class ExplainChatApp(App):
                     "init_task_done",
                     f"with outer exception: {type(exc).__name__}: {exc}",
                 )
-        # Wave 7 follow-up Bug 3: 2.5s → 5s 让 user 真看见 (production smoke 反馈
-        # 2.5s 太短). 4 ✓ 点亮过程 (4×0.3s = 1.2s) + 5s 视觉停顿 = ~6.2s 总, 给
-        # user 充裕时间看完.
+
+        # Wave 7 follow-up Bug 3: 5s 视觉停顿让 user 看完 ✓ 点亮. on_mount 已返,
+        # textual message pump 在跑, paint pipeline 此时 free, splash 真渲染到 PTY.
         await asyncio.sleep(5.0)
         _log_phase19("hold_sleep_done", "5s elapsed")
+
+        # pop splash, main screen 回 stack 顶
         self.pop_screen()
         _log_phase19("splash_pop", "screen popped, main layer visible")
-        # Bug 1 fix: splash pop 后写 banner (之前没写, #output 空白).
+
+        # Bug 1 fix: splash pop 后写 banner + ready 行
         await self._write_banner()
-        # Wave 7 follow-up Bug 3: 再加一行 "已加载" 让 user 即使 splash 没看到
-        # 也知道它真跑过. 写在 banner 之后, dim/绿色 markup 视觉低调.
+        # Wave 7 follow-up Bug 3: 加 "已加载" 行让 user 即使 splash 没看到也知道
+        # 它真跑过. 写在 banner 之后, dim/绿色 markup 视觉低调.
         await self._write(
             "[dim green]✓ 已加载 (lexicon / PG / theory cache), 进入 chat REPL.[/dim green]"
         )
