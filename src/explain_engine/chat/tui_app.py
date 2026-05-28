@@ -187,6 +187,10 @@ class ExplainChatApp(App):
         Binding("ctrl+l", "clear_log", "清屏"),
         # Phase 20.0 Layer B: escape cancel in-flight chat task (LLM stream stall 逃生口)
         Binding("escape", "cancel_chat", "取消"),
+        # Phase 20.0 Layer C: PgUp/PgDn 给 VerticalScroll#output (mouse=False 副作用
+        # 下 wheel 失效 + Input focus 抢 PgUp/Dn, app-level binding 兜底).
+        Binding("pageup", "scroll_output_up", "上翻"),
+        Binding("pagedown", "scroll_output_down", "下翻"),
     ]
     CSS_PATH = "tui_app.tcss"
 
@@ -911,3 +915,11 @@ class ExplainChatApp(App):
         """Ctrl+L 清屏 — 移走 #output 容器所有 children."""
         container = self.query_one("#output", VerticalScroll)
         container.remove_children()
+
+    def action_scroll_output_up(self) -> None:
+        """Phase 20.0 Layer C: PgUp → VerticalScroll#output 上翻一页."""
+        self.query_one("#output", VerticalScroll).scroll_page_up()
+
+    def action_scroll_output_down(self) -> None:
+        """Phase 20.0 Layer C: PgDn → VerticalScroll#output 下翻一页."""
+        self.query_one("#output", VerticalScroll).scroll_page_down()
