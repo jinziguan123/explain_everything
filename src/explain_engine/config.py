@@ -53,6 +53,27 @@ def _read_read_timeout_env() -> float:
     return val
 
 
+def _read_splash_pause_env() -> float:
+    """Phase 20.1 #5: LLM_SPLASH_PAUSE_S env validation.
+
+    Default 5.0s (保 Wave 7 决策让 user 真看见 splash). 0 允许 (user 主动跳).
+    Negative / non-float → ValueError with env name + offending value
+    (跟 _read_read_timeout_env 同 validation pattern).
+    """
+    raw = os.environ.get("LLM_SPLASH_PAUSE_S")
+    if raw is None or raw == "":
+        return 5.0
+    try:
+        val = float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"LLM_SPLASH_PAUSE_S must be a non-negative number, got {raw!r}: {exc}"
+        ) from exc
+    if val < 0:
+        raise ValueError(f"LLM_SPLASH_PAUSE_S must be >= 0, got {val}")
+    return val
+
+
 class Settings(BaseSettings):
     """Runtime 配置。LLM 配置直接读 env (避免 pydantic-settings 对未配
     LLM_PROTOCOL 等场景报 ValidationError)。

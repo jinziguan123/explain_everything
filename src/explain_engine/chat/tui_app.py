@@ -45,6 +45,8 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
+from explain_engine.config import _read_splash_pause_env
+
 if TYPE_CHECKING:
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.session import ChatEvent, ChatSession
@@ -370,10 +372,13 @@ class ExplainChatApp(App):
                     f"with outer exception: {type(exc).__name__}: {exc}",
                 )
 
-        # Wave 7 follow-up Bug 3: 5s 视觉停顿让 user 看完 ✓ 点亮. on_mount 已返,
+        # Wave 7 follow-up Bug 3: 视觉停顿让 user 看完 ✓ 点亮. on_mount 已返,
         # textual message pump 在跑, paint pipeline 此时 free, splash 真渲染到 PTY.
-        await asyncio.sleep(5.0)
-        _log_phase19("hold_sleep_done", "5s elapsed")
+        # Phase 20.1 #5: 停顿时长来自 LLM_SPLASH_PAUSE_S env knob (default 5.0,
+        # 跟 Wave 7 决策一致). user 设 0 → 跳过 hold, user 设 1 → 1s.
+        pause_s = _read_splash_pause_env()
+        await asyncio.sleep(pause_s)
+        _log_phase19("hold_sleep_done", f"{pause_s}s elapsed")
 
         # pop splash, main screen 回 stack 顶
         self.pop_screen()
