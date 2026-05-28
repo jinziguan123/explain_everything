@@ -974,6 +974,11 @@ async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
                     "可以先 /deepen 触发深度建模, 或退出用 `explain new <question>` 新建."
                 ),
             )]
+        # Phase 20.1 #8: sort by created_at desc — 最近创的 session 在顶
+        # (跟 macOS Finder Recent / Chrome 最近标签同语义). SessionStore.list()
+        # 本身已 sort, 但 handler defensive 自己再 sort 一遍 — 解耦 handler 跟
+        # caller 的排序契约, picker 的 sessions[0] 永远是最新 session.
+        metas_sorted = sorted(metas, key=lambda m: m.created_at, reverse=True)
         # picker 协议: 把 metas → list[dict], REPL 不引 SessionMeta 类型耦合
         sessions_payload = [
             {
@@ -982,7 +987,7 @@ async def _handle_resume(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
                 "stage": m.stage,
                 "created_at": m.created_at,
             }
-            for m in metas
+            for m in metas_sorted
         ]
         return [ChatEvent(
             type="slash_open_session_picker",
