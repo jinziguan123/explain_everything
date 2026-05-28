@@ -185,6 +185,8 @@ class ExplainChatApp(App):
         Binding("ctrl+o", "toggle_thinking", "折叠 thinking"),
         Binding("ctrl+c", "quit_app", "退出"),
         Binding("ctrl+l", "clear_log", "清屏"),
+        # Phase 20.0 Layer B: escape cancel in-flight chat task (LLM stream stall 逃生口)
+        Binding("escape", "cancel_chat", "取消"),
     ]
     CSS_PATH = "tui_app.tcss"
 
@@ -214,6 +216,11 @@ class ExplainChatApp(App):
         # Wave 6 Task 31: 是否启动时显 splash. cli --no-splash 时 False (走干净
         # 路径 — repl_entry 自己 init lexicon backend).
         self.show_splash: bool = show_splash
+        # Phase 20.0 Layer B: in-flight chat handler async task ref. escape binding
+        # 触发 action_cancel_chat 时 cancel 它. _handle_input_submitted 包成 task 启,
+        # add_done_callback 清 ref (task 正常完成 / 异常 / cancelled 都走). None
+        # = 无 in-flight 请求.
+        self._chat_task: asyncio.Task | None = None
 
     def compose(self) -> ComposeResult:
         # Wave 7 Bug 3 fix: slash 自动补全 — SuggestFromList(slash names) 注入 Input.
@@ -432,6 +439,8 @@ class ExplainChatApp(App):
           自身底层异常 (e.g. _command_by_name 抛) 用 try 兜底.
         - 否则 → chat.handle_user_input(text, self.llm) async generator → async for.
           self.llm 为 None 时 ephemeral.handle_user_input 会抛 — 兜在 try.
+
+        Phase 20.0 Layer B: 非 slash 路径包成 self._chat_task 让 escape 可 cancel.
         """
         text = (event.value or "").strip()
         event.input.value = ""
@@ -461,10 +470,42 @@ class ExplainChatApp(App):
                 await self._render_event(ev)
             return
 
-        # 自然语言 — async generator
+        # 非 slash — 自然语言 → 包 task 让 escape 可 cancel.
+        #
+        # 设计决策: 用 fire-and-forget task (不 await self._chat_task) — 跟
+        # textual message pump 协作.
+        # - 若 await self._chat_task, message pump 卡 _handle_input_submitted
+        #   handler 内, escape key event 进 queue 但 dispatch 不到 (因前一个
+        #   handler 还没返). escape 永不 trigger action_cancel_chat.
+        # - 用 add_done_callback 清 ref — task 正常完成 / 异常 / cancelled 都
+        #   走 callback, 不重复路径.
+        # - input handler 立刻返让 message pump free, escape 才有机会进 action.
+        task = asyncio.create_task(self._consume_chat_events(text))
+        self._chat_task = task
+
+        def _on_done(t: asyncio.Task) -> None:
+            # 仅清还指本 task 的 ref (防御: user 已开新 task 时不误清).
+            if self._chat_task is t:
+                self._chat_task = None
+
+        task.add_done_callback(_on_done)
+
+    async def _consume_chat_events(self, text: str) -> None:
+        """Phase 20.0 Layer B: chat handler 包 fn — async-for 消费 events,
+        catch CancelledError 兜底清 spinner + mount '请求已取消'.
+
+        except 顺序: CancelledError 先 (Python 3.8+ 不是 Exception 子类, 但保险
+        显式先 catch 防未来 except 写宽吞掉), 通用 Exception 后.
+        """
         try:
             async for ev in self.chat.handle_user_input(text, self.llm):
                 await self._render_event(ev)
+        except asyncio.CancelledError:
+            await self._unmount_status()
+            await self._write_styled(
+                "", "请求已取消.", suffix_style="dim"
+            )
+            raise  # 让 task 真 cancelled state, _handle_input_submitted add_done_callback 清 ref
         except Exception as exc:
             # Wave 4 review C-1: 异常 str 当 plain text append.
             await self._write_styled(
@@ -820,6 +861,23 @@ class ExplainChatApp(App):
             c.collapsed = not self._thinking_visible
 
     # ─── Actions ───
+    async def action_cancel_chat(self) -> None:
+        """Phase 20.0 Layer B Task 2: escape binding → cancel in-flight chat task.
+
+        无 task / task 已 done → mount '(无 in-flight 请求可取消)' 行.
+        有 task → cancel; CancelledError 在 _consume_chat_events 内 catch 已 mount
+        '请求已取消'.
+
+        设计: escape vs ctrl+c 语义分离 — escape = cancel current op (跟
+        SessionPickerScreen 一致), ctrl+c = quit app (action_quit_app 行为不变).
+        """
+        if self._chat_task is None or self._chat_task.done():
+            await self._write_styled(
+                "", "(无 in-flight 请求可取消)", suffix_style="dim"
+            )
+            return
+        self._chat_task.cancel()
+
     def action_toggle_thinking(self) -> None:
         """Wave 4 Task 20: 切 _thinking_visible + 同步现 mount Collapsible.collapsed.
 
