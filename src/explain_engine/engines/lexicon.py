@@ -810,8 +810,18 @@ async def flush_to_lexicon(
 def get_lexicon_top_k_for_compress(
     storage: StorageV2,
     k: int = 20,
-) -> list[dict[str, Any]]:
-    """Wave 9 dispatcher: sync version."""
+) -> list[dict[str, Any]] | list[tuple[str, str, int]]:
+    """Wave 9 dispatcher: sync version.
+
+    Phase 19 真终端 Bug B 调研: dispatcher 实际返 shape 跟 backend 同步 ——
+    PG impl 返 `list[dict]` (psycopg dict_row), JSON impl 返
+    `list[tuple[str, str, int]]`. 老 type hint 只写 `list[dict[str, Any]]`,
+    误导 caller (e.g. compression._render_lexicon_topk_section 老写 for-unpack
+    3-tuple, JSON path 工作, PG path 抛 ValueError). 现 type 标双 shape.
+
+    consumer 必须用 `isinstance(entry, dict)` 分支处理 (见
+    compression._render_lexicon_topk_section / chat/tools._compress_call).
+    """
     if _PG_BACKEND_ACTIVE:
         from explain_engine.persistence.lexicon_pg import (
             get_lexicon_top_k_for_compress as pg_impl,

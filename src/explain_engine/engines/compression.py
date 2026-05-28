@@ -45,7 +45,7 @@ class CompressionOutput(BaseModel):
 
 
 def _render_lexicon_topk_section(
-    existing_lexicon: list[tuple[str, str, int]] | None,
+    existing_lexicon: list[tuple[str, str, int]] | list[dict] | None,
 ) -> str:
     """Phase 13 Wave 3 Task 1: 渲染 Top-K lexicon prior section。
 
@@ -55,9 +55,19 @@ def _render_lexicon_topk_section(
     现改为信息性提示, 引导 LLM 提**不同角度**的新候选, 实际 dedup 留 flush_to_lexicon
     时 cosine merge (Phase 13 W2.3) 自动做.
 
+    Phase 19 真终端 Bug B fix: 接受 dict 跟 tuple 两种 element shape.
+    真因: Phase 17.1 Wave 4 加 PG lexicon backend, `lexicon_pg.get_lexicon_top_k_for_compress`
+    返 `list[dict]` (psycopg dict_row factory, 14 列), 而老 JSON impl 返
+    `list[tuple[str, str, int]]`. `lexicon.py:810` 的 Wave 9 dispatcher 根据
+    `_PG_BACKEND_ACTIVE` 切, 但本函数没同步 — for-unpack 对 dict iterate 出
+    keys (str), 拆 3-tuple 失败抛 `ValueError: too many values to unpack`.
+    PG backend 启 (production) 才踩, JSON backend (dev/CI) 不踩 → 隐藏 bug.
+
     Args:
-        existing_lexicon: list of (global_id, canonical_mechanism, reuse_count).
-            None 或空 list → 返 ""（caller 视为无 section）。
+        existing_lexicon:
+            * list[tuple[str, str, int]] — JSON backend 返 (global_id, canonical_mechanism, reuse_count)
+            * list[dict] — PG backend 返 psycopg row dict (用 ["global_id"] / ["canonical_mechanism"] / ["reuse_count"] 取)
+            * None / 空 list → 返 ""（caller 视为无 section）。
 
     Returns:
         多行 block: header + 一行 bullet per entry，
@@ -70,7 +80,15 @@ def _render_lexicon_topk_section(
         "请提出**不同角度**的新候选, 避免与下列概念重复 "
         "(实际 dedup 由系统在 flush 时自动用 embedding cosine 处理)]"
     ]
-    for global_id, canonical, reuse_count in existing_lexicon:
+    for entry in existing_lexicon:
+        # Phase 19 Bug B: 兼容 PG dict (production) + JSON tuple (legacy).
+        if isinstance(entry, dict):
+            global_id = entry["global_id"]
+            canonical = entry["canonical_mechanism"]
+            reuse_count = entry["reuse_count"]
+        else:
+            # tuple / list — 顺序 (global_id, canonical_mechanism, reuse_count)
+            global_id, canonical, reuse_count = entry
         canonical_short = canonical[:80]
         if len(canonical) > 80:
             canonical_short += "..."
@@ -83,7 +101,7 @@ async def propose_candidates(
     llm: LLMClient,
     min_count: int = 3,
     max_count: int = 5,
-    existing_lexicon: list[tuple[str, str, int]] | None = None,
+    existing_lexicon: list[tuple[str, str, int]] | list[dict] | None = None,
 ) -> None:
     """LLM 出 3-5 个 abstract 候选，灌进 state.graph，落 state.insight_candidates。
 
@@ -96,9 +114,14 @@ async def propose_candidates(
         llm: LLMClient。
         min_count: 最少候选数。
         max_count: 最多候选数。
-        existing_lexicon: Phase 13 Wave 3 — 可选 Top-K lexicon 列表
-            (global_id, canonical_mechanism, reuse_count)。非空时
-            注入 prompt，提示 LLM 复用而非新生重复语义的 candidate。
+        existing_lexicon: Phase 13 Wave 3 — 可选 Top-K lexicon 列表。
+            Phase 19 Bug B: 接受两种 shape (跟 lexicon backend dispatcher 一致):
+              * list[tuple[str, str, int]] — JSON backend 返
+                (global_id, canonical_mechanism, reuse_count)
+              * list[dict] — PG backend 返 psycopg dict_row (取 ["global_id"] /
+                ["canonical_mechanism"] / ["reuse_count"])
+            非空时注入 prompt 引导 LLM 提不同角度的新候选, 实际 dedup 在
+            flush_to_lexicon 用 cosine merge.
 
     Raises:
         LLMError: 底层调用失败（provider 抛出，本函数不捕）
