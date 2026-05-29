@@ -50,8 +50,8 @@ async def test_enter_repl_async_runs_textual_app(tmp_path, monkeypatch) -> None:
     captured: dict = {}
 
     async def fake_run_async(self, **kwargs):
-        # Phase 19 真终端 Bug A: enter_repl_async 现传 mouse=False 关 SGR mouse
-        # tracking — fake_run_async 用 **kwargs 接 (跟未来 textual run_async
+        # Phase 20.2: enter_repl_async 现传 mouse=True 开 SGR mouse tracking
+        # (滚轮翻历史) — fake_run_async 用 **kwargs 接 (跟未来 textual run_async
         # 其他 kwargs 都 forward 兼容).
         captured["chat"] = self.chat
         captured["llm"] = self.llm

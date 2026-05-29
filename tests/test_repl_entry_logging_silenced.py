@@ -75,7 +75,7 @@ async def test_enter_repl_async_silences_stderr_logging(tmp_path, monkeypatch) -
 
     async def fake_run_async(self, **kwargs):
         # textual app run_async — 我们 mock 让它瞬返.
-        # **kwargs 兼容 Bug A fix (enter_repl_async 现传 mouse=False).
+        # **kwargs 兼容 (enter_repl_async 现传 mouse=True — Phase 20.2 滚轮翻历史).
         pass
 
     monkeypatch.setattr(
@@ -161,7 +161,7 @@ async def test_enter_repl_async_redirects_logging_to_chat_log_file(
     )
 
     async def fake_run_async(self, **kwargs):
-        # **kwargs 兼容 Bug A fix (mouse=False kwarg).
+        # **kwargs 兼容 (mouse=True kwarg — Phase 20.2 滚轮翻历史).
         pass
 
     monkeypatch.setattr(

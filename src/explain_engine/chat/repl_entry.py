@@ -37,11 +37,11 @@ Phase 19 Wave 7 hotfix follow-up: logging stderr 污染 textual alt screen 修.
 不动 cli.py module-level basicConfig — 其他 cli 子命令 (`explain list` / `new` 等)
 仍需 stderr 输出 progress logger. 仅 textual TUI 模式静音.
 
-Phase 19 真终端 Bug A: app.run_async(mouse=False) — 关 SGR mouse tracking.
-真因: textual 默 mouse=True → driver 写 `\x1b[?1000h \x1b[?1003h
-\x1b[?1006h` SGR mouse escape, 把 mouse click/drag 当 input 抢走, terminal
-text selection 失效. Phase 19 全键盘交互 (Ctrl+O/Ctrl+L/Ctrl+C + ↑↓ +
-Enter) 不依赖 mouse → 完全可关. 关后真终端能 click+drag 选文字复制.
+Phase 20.2 决策反转: app.run_async(mouse=True) — 重开 SGR mouse tracking 让鼠标
+滚轮翻历史. Phase 19 真终端 Bug A 当初设 mouse=False 换终端原生 click-drag 选字
+复制, 但用户实际要滚轮回看历史. 终端 mouse tracking all-or-nothing (滚轮 button
+64/65 须开 click tracking 才收) → 只能 mouse=True. 代价: click-drag 选字被 app
+抢走, 但 iTerm2 / Terminal.app 按 Shift / Option 拖拽仍可原生选字复制.
 
 新 enter_repl_async 流程:
 1. **静音 root logger stderr handler** → 重定到 `chat.log` 文件 (防 textual
@@ -51,7 +51,7 @@ Enter) 不依赖 mouse → 完全可关. 关后真终端能 click+drag 选文字
    show_splash=True → 跳, splash 内会跑.
 4. 建 EphemeralChatSession (启始 chat var).
 5. 建 ExplainChatApp(llm, light_llm, ephemeral_chat, show_splash=...).
-6. await app.run_async(mouse=False) — textual outer loop, exit() / Ctrl+C 退出.
+6. await app.run_async(mouse=True) — textual outer loop, exit() / Ctrl+C 退出.
 
 outer loop / chat var 切换 (ephemeral ↔ ChatSession) / slash dispatch 移进
 tui_app.py: Input.Submitted handler 调 dispatch_slash, _render_event 接
@@ -207,15 +207,15 @@ async def enter_repl_async(show_splash: bool = True) -> None:
     ephemeral = EphemeralChatSession(storage=storage, llm=llm)
 
     # 4. textual App run_async — outer loop, 直到 app.exit().
-    # Phase 19 真终端 Bug A: mouse=False 关 SGR mouse tracking.
-    # 真因 (第一性原理): textual 默 mouse=True → driver 写 `\x1b[?1000h
-    # \x1b[?1003h \x1b[?1006h` SGR mouse escape, 让 terminal 把 mouse
-    # click/drag 当 input 报给 app, 抢走 terminal 自己的 text selection.
-    # 结果: user 真终端无法 click+drag 选文字复制 (macOS Cmd+C). Phase 19
-    # 全部 BINDINGS (Ctrl+O/Ctrl+L/Ctrl+C + ↑↓ + Enter) 都键盘, 不依赖
-    # mouse click → 完全可关. 关后牺牲: hover / 鼠标点 Collapsible 展开
-    # /鼠标点 Footer hint (但 Ctrl+O 已可切 thinking, Tab+Enter 可达 Input,
-    # SessionPicker 已用 ↑↓ Enter), Phase 19 用户体验保留, 换回 selection.
+    # Phase 20.2 决策反转: mouse=True 重开 SGR mouse tracking, 让鼠标滚轮翻历史.
+    # Phase 19 真终端 Bug A 当初设 mouse=False, 为的是终端原生 click-drag 选字
+    # 复制 (mouse=True 时 textual 把 click/drag 当 input 抢走). 但 Phase 20.2
+    # auto-scroll 智能锚定修好"输出到一半"主症状后, 用户实际要鼠标滚轮回看历史.
+    # 终端 mouse tracking 是 all-or-nothing — 滚轮事件 (button 64/65) 必须开
+    # click tracking 才收得到, 没有"只收滚轮"模式 → 只能 mouse=True.
+    # 代价: click-drag 原生选字被 app 抢走, 但 iTerm2 / macOS Terminal.app 按住
+    # Shift / Option 拖拽仍可原生选字复制. 显式传 mouse=True (不靠 textual 默认)
+    # 让意图清晰 + 防 textual 未来改默认.
     from explain_engine.chat.tui_app import ExplainChatApp
 
     app = ExplainChatApp(
@@ -224,4 +224,4 @@ async def enter_repl_async(show_splash: bool = True) -> None:
         ephemeral_chat=ephemeral,
         show_splash=show_splash,
     )
-    await app.run_async(mouse=False)
+    await app.run_async(mouse=True)

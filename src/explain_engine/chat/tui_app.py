@@ -189,8 +189,8 @@ class ExplainChatApp(App):
         Binding("ctrl+l", "clear_log", "清屏"),
         # Phase 20.0 Layer B: escape cancel in-flight chat task (LLM stream stall 逃生口)
         Binding("escape", "cancel_chat", "取消"),
-        # Phase 20.0 Layer C: PgUp/PgDn 给 VerticalScroll#output (mouse=False 副作用
-        # 下 wheel 失效 + Input focus 抢 PgUp/Dn, app-level binding 兜底).
+        # Phase 20.0 Layer C: PgUp/PgDn 翻 VerticalScroll#output. (Phase 20.2 重开
+        # mouse=True 后滚轮也能翻; 保留键盘 PgUp/PgDn 作不用鼠标的替代.)
         Binding("pageup", "scroll_output_up", "上翻"),
         Binding("pagedown", "scroll_output_down", "下翻"),
     ]
@@ -288,6 +288,17 @@ class ExplainChatApp(App):
             "app_start",
             f"show_splash={self.show_splash}",
         )
+
+        # Phase 20.2 P0 真因修: #output 智能锚定 (textual 8.2.7 原生 anchor()).
+        # 前两次误诊都不是真因 — Phase 20.0 改 LLM read timeout (无 hang, chat.log
+        # 全 200 OK), Phase 20.x 怀疑 markup 注入 (textual 8.2.7 对未知 [tag] 宽容,
+        # 真 paint 路径不抛 MarkupError, headless 实测证伪). 真因: tui_app 从不
+        # scroll + VerticalScroll 默认不跟随新内容 → 长 LLM 回答 mount 后 scroll_y
+        # 钉在 0, 大半内容在 fold 下看不见, 叠加 mouse=False 滚轮死 → 用户感知
+        # "输出到一半卡死, 无法上下滚动, slash 还能输出但只能从滚动条看出".
+        # anchor(): 新内容跟随到底; 用户上翻 (PgUp/PgDn/scrollbar 走 _scroll_to
+        # release_anchor=True) 自动脱锚不被拽下; 翻回底部重新跟随. = 智能锚定.
+        self.query_one("#output", VerticalScroll).anchor()
 
         if not self.show_splash:
             # Bug 1: 无 splash 路径也要 banner — 不然 #output 空白.
