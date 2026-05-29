@@ -884,7 +884,7 @@ class ExplainChatApp(App):
             "[bold green]Explain REPL[/bold green] — ephemeral chat. "
             "输入问题让 LLM 直接答, /deepen 触发深度建模, "
             "/help 看 slash, /quit 退出. "
-            "[dim](滚轮翻历史; 复制按住 Option 拖选 + Cmd+C)[/dim]"
+            "[dim](滚轮翻历史; 鼠标拖选 + Ctrl+C 复制)[/dim]"
         )
 
     # ─── Wave 4 review I-1 (DRY): 抽 _sync_thinking_collapsibles helper ───

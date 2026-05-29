@@ -1,8 +1,9 @@
 """Phase 20.2: banner 含复制用法提示.
 
-mouse=True (滚轮翻历史) 后, 终端原生 click-drag 选字被 app 抢走 → 复制需按住
-Option 拖选 + Cmd+C. banner 补一行提示让用户可发现这个用法 (用户选了
-"Option+拖拽就够了" 而非加切换键).
+mouse=True (滚轮翻历史) 后, textual 自带"选区感知"复制: 鼠标拖选高亮文字,
+Ctrl+C (Screen.copy_text) 把选区复制到系统剪贴板 (OSC52); 无选区时 copy_text
+raise SkipAction 放行, 落到 app 的 ctrl+c → 退出. banner 提示这个用法
+(比 Option+拖拽更顺, 不需修饰键).
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ def _make_app() -> ExplainChatApp:
 
 @pytest.mark.asyncio
 async def test_banner_includes_copy_hint():
-    """banner 提示复制要 Option+拖拽 (mouse=True 后原生选字被 app 抢, 修饰键绕过)."""
+    """banner 提示复制用法: 鼠标拖选 + Ctrl+C (textual 自带选区复制)."""
     app = _make_app()
     async with app.run_test() as pilot:
         from textual.containers import VerticalScroll
@@ -33,6 +34,6 @@ async def test_banner_includes_copy_hint():
         await pilot.pause()
         container = app.query_one("#output", VerticalScroll)
         joined = "\n".join(str(s.render()) for s in container.query(Static))
-        assert "Option" in joined, (
-            f"期望 banner 含复制提示 (Option+拖拽), 实际 #output={joined!r}"
+        assert "复制" in joined and "Ctrl+C" in joined, (
+            f"期望 banner 含复制提示 (拖选 + Ctrl+C), 实际 #output={joined!r}"
         )
