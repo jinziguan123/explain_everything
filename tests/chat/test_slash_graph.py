@@ -148,6 +148,63 @@ class TestSlashGraph:
         assert "接受度评估" in content or "一致性" in content
 
     @pytest.mark.asyncio
+    async def test_textual_mode_skips_inline_renderer_uses_detached_opener(
+        self, monkeypatch
+    ):
+        """崩溃修: Textual 模式 (chat.tui_app 非 None) 不跑终端内联渲染器
+        (imgcat/kitty/chafa) — 它们会污染 stdin 致 BlockingIOError 崩溃.
+        改用脱离终端的 OS 看图器 (Popen start_new_session + std 流 DEVNULL).
+        """
+        chat = _make_session_with_graph("s_a5e0b007")
+        # 标记 Textual 模式 (真实运行下由 tui_app.py set self.chat.tui_app = self)
+        chat.tui_app = object()
+
+        # dot + chafa + open 都"在" — 验证即便 chafa 可用也不被内联调用
+        def fake_which(x):
+            return f"/usr/local/bin/{x}" if x in ("dot", "chafa", "open") else None
+
+        monkeypatch.setattr("shutil.which", fake_which)
+        monkeypatch.setattr("sys.platform", "darwin")
+        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+        monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+
+        def fake_render(self, filename, **kwargs):
+            png_path = str(filename) + ".png"
+            with open(png_path, "wb") as f:
+                f.write(b"\x89PNG")
+            return png_path
+
+        monkeypatch.setattr("graphviz.Digraph.render", fake_render)
+
+        # subprocess.run (内联渲染器) 绝不该被调用
+        run_calls: list[list[str]] = []
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda cmd, **kw: run_calls.append(cmd),
+        )
+        # subprocess.Popen (脱离终端的看图器) 应被调用, 且带隔离 stdin/start_new_session
+        popen_calls: list[tuple[list[str], dict]] = []
+
+        def fake_popen(cmd, **kw):
+            popen_calls.append((cmd, kw))
+            return object()
+
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+        events = await dispatch_slash(chat, "/graph")
+
+        assert events[0].type == "slash_graph"
+        # 内联渲染器子进程 (会崩 textual) 没被跑
+        assert run_calls == []
+        # 用了脱离终端的看图器
+        assert len(popen_calls) == 1
+        cmd, kw = popen_calls[0]
+        assert cmd[0] == "open"
+        import subprocess as _sp
+        assert kw.get("stdin") == _sp.DEVNULL
+        assert kw.get("start_new_session") is True
+
+    @pytest.mark.asyncio
     async def test_render_failure_returns_friendly_error(self, monkeypatch):
         """dg.render() 失败 (e.g. dot 跑挂 / permission / disk full) → 友好 error, 不 crash."""
         chat = _make_session_with_graph("s_a5e0b006")

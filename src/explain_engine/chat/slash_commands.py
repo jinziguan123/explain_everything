@@ -715,17 +715,27 @@ async def _handle_graph(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
     )
 
     # Inline display
-    cmd, renderer = _detect_inline_renderer(png_path)
-    if cmd is not None:
-        try:
-            # stderr=DEVNULL: chafa/imgcat 任何 warning 不污染用户 terminal.
-            # stdout=None: 让 chafa/imgcat 把 image bytes 写到 terminal (inline 显示必需).
-            subprocess.run(cmd, check=False, stderr=subprocess.DEVNULL)
-            inline_msg = f"(已通过 {renderer} 内联渲染)"
-        except Exception as exc:
-            inline_msg = f"(内联渲染失败 via {renderer}: {type(exc).__name__})"
+    #
+    # 崩溃修 (BlockingIOError EAGAIN): Textual TUI 模式 (chat.tui_app 非 None) 下
+    # 绝不能跑终端内联渲染器 (imgcat / kitty icat / chafa). 它们 (a) 直写 alt-screen,
+    # 被 textual 立刻覆盖成乱码; (b) 查询终端能力时把 stdin 设 O_NONBLOCK 且退出
+    # 不还原 → textual 输入线程的阻塞 read() 变非阻塞返 EAGAIN, 整个 app 崩溃.
+    # 改用完全脱离终端的 OS 看图器 (start_new_session + 三标准流 DEVNULL, 构造上
+    # 不碰 textual stdin). 非 Textual (CLI / test, tui_app=None) 保持原内联行为.
+    if getattr(chat, "tui_app", None) is not None:
+        inline_msg = _open_png_detached(png_path)
     else:
-        inline_msg = "(装 chafa 可内联预览: brew install chafa)"
+        cmd, renderer = _detect_inline_renderer(png_path)
+        if cmd is not None:
+            try:
+                # stderr=DEVNULL: chafa/imgcat 任何 warning 不污染用户 terminal.
+                # stdout=None: 让 chafa/imgcat 把 image bytes 写到 terminal (inline 显示必需).
+                subprocess.run(cmd, check=False, stderr=subprocess.DEVNULL)
+                inline_msg = f"(已通过 {renderer} 内联渲染)"
+            except Exception as exc:
+                inline_msg = f"(内联渲染失败 via {renderer}: {type(exc).__name__})"
+        else:
+            inline_msg = "(装 chafa 可内联预览: brew install chafa)"
 
     # Footer
     footer_lines = [
@@ -1266,6 +1276,43 @@ def _detect_inline_renderer(png_path: str) -> tuple[list[str] | None, str]:
     return None, "none"
 
 
+def _open_png_detached(png_path: str) -> str:
+    """Textual 模式打开 /graph PNG: 用 OS 默认看图器, 完全脱离终端.
+
+    start_new_session=True (脱离 controlling terminal / 进程组) + 三标准流全
+    DEVNULL → 子进程构造上不可能碰 textual 的 stdin (即不会复现 BlockingIOError
+    崩溃). Popen 不 wait, 立刻返回 (open/xdg-open 异步起看图器).
+
+    best-effort: 无 opener (非 mac/linux 或 PATH 缺) / spawn 失败 → 退化为仅
+    提示看下方 PNG 路径 (footer 已打印 `PNG: {path}`).
+
+    返 user-visible inline_msg 文案.
+    """
+    import shutil
+    import subprocess
+    import sys
+
+    opener: str | None = None
+    if sys.platform == "darwin":
+        opener = "open"
+    elif sys.platform.startswith("linux"):
+        opener = "xdg-open"
+
+    if opener is not None and shutil.which(opener) is not None:
+        try:
+            subprocess.Popen(
+                [opener, png_path],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return "(TUI 内无法内联预览, 已用系统看图器打开 PNG)"
+        except Exception:
+            pass
+    return "(TUI 内无法内联预览, 见下方 PNG 路径)"
+
+
 def _ephemeral_reject(name: str) -> list[ChatEvent]:
     """Phase 11 Wave 3: ephemeral 时统一 reject 模板.
 
@@ -1326,8 +1373,11 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
     else:
         # bp 入口 (default): propose + score + mid-stage persist
         try:
+            import asyncio
+
             from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
-            top_k = get_lexicon_top_k_for_compress(chat.storage, k=20)
+            # 同步 (PG 查询 / JSON 读) 卸到线程池 — 防 PG 网络 IO 阻塞 event loop.
+            top_k = await asyncio.to_thread(get_lexicon_top_k_for_compress, chat.storage, k=20)
             # Phase 19 真终端 Bug C: _spinner helper 走 textual tui_app 或 Rich fallback.
             async with _spinner(chat, STATUS_COMPRESS_PROPOSE):
                 await propose_candidates(chat.state, chat.llm, existing_lexicon=top_k)
@@ -1337,11 +1387,17 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
         # Phase 13 Wave 3 Task 4: compute dedup stats for UI display (observational,
         # doesn't mutate state). Display threshold 0.75 (lower than 0.85 merge
         # threshold) accounts for proxy-text format mismatch with lexicon canonical.
+        import asyncio
         import logging
 
         from explain_engine.engines.compress_dedup import compute_compress_dedup_stats
         try:
-            dedup_stats = compute_compress_dedup_stats(
+            # compute_compress_dedup_stats 同步跑 BGE-M3 torch embedding (秒级,
+            # 占 GIL). 在 chat REPL event loop 上直接调会冻结整个 TUI (这是
+            # /compress 卡死 + 无法滚动/输入的根因). 卸到线程池让 loop 空闲,
+            # 配合 slash 后台 task 让 escape 可中断.
+            dedup_stats = await asyncio.to_thread(
+                compute_compress_dedup_stats,
                 chat.state,
                 chat.storage,
                 list(chat.state.insight_candidates),

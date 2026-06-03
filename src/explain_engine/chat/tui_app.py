@@ -50,6 +50,9 @@ from textual.widgets.option_list import Option
 from explain_engine.config import _read_splash_pause_env
 
 if TYPE_CHECKING:
+    from collections.abc import Coroutine
+    from typing import Any
+
     from explain_engine.chat.ephemeral import EphemeralChatSession
     from explain_engine.chat.session import ChatEvent, ChatSession
     from explain_engine.llm.client import LLMClient
@@ -762,40 +765,36 @@ class ExplainChatApp(App):
         # 吃掉, rich.escape() 对它不转, 故用 prefix + plain append).
         await self._write_styled("[bold cyan]>[/bold cyan] ", text)
 
-        if text.startswith("/"):
-            from explain_engine.chat.slash_commands import dispatch_slash
-
-            try:
-                events = await dispatch_slash(self.chat, text)
-            except Exception as exc:
-                # Wave 4 review C-1: 异常 str 当 plain text append + dim 红.
-                await self._write_styled(
-                    "[red]slash 失败: [/red]",
-                    f"{type(exc).__name__}: {exc}",
-                    suffix_style="red",
-                )
-                return
-            for ev in events:
-                await self._render_event(ev)
-            return
-
-        # 非 slash — 自然语言 → 包 task 让 escape 可 cancel.
+        # slash 与自然语言都包成 self._chat_task 跑后台 (escape 可 cancel).
         #
         # 设计决策: 用 fire-and-forget task (不 await self._chat_task) — 跟
         # textual message pump 协作.
-        # - 若 await self._chat_task, message pump 卡 _handle_input_submitted
+        # - 若在 handler 内 await, message pump 卡 _handle_input_submitted
         #   handler 内, escape key event 进 queue 但 dispatch 不到 (因前一个
         #   handler 还没返). escape 永不 trigger action_cancel_chat.
-        # - 用 add_done_callback 清 ref — task 正常完成 / 异常 / cancelled 都
-        #   走 callback, 不重复路径.
         # - input handler 立刻返让 message pump free, escape 才有机会进 action.
         #
-        # Phase 20.0 Task 2 follow-up (review I-1): task 同时 add 到
-        # self._background_chat_tasks set (RUF006 / GC safety, mirror session.py
-        # :395-397 pattern), self._chat_task 单 slot 保留作 cancel handle.
-        # _on_done 双重清: set.discard(t) 防 GC + (if self._chat_task is t:
-        # self._chat_task = None) 防误清 user 新开 task.
-        task = asyncio.create_task(self._consume_chat_events(text))
+        # Phase 20.2 P0 (/compress 卡死修): slash 路径过去是在 handler 内
+        # `await dispatch_slash` (inline), 长任务 (/compress 等) 期间 escape 失灵.
+        # 现统一走 task. 注意 dispatch_slash 内同步 torch embedding 已卸 to_thread
+        # (compress_dedup / flush_to_lexicon), 否则即便在 task 里同步 embed 仍占
+        # 同一 event loop 线程, escape 照样 dispatch 不到.
+        if text.startswith("/"):
+            self._spawn_chat_task(self._consume_slash_events(text))
+            return
+
+        self._spawn_chat_task(self._consume_chat_events(text))
+
+    def _spawn_chat_task(self, coro: Coroutine[Any, Any, None]) -> None:
+        """把 chat/slash 消费 coro 包成 self._chat_task 跑后台 + 簿记.
+
+        Phase 20.0 Task 2 follow-up (review I-1): task 同时 add 到
+        self._background_chat_tasks set (RUF006 / GC safety, mirror session.py
+        :395-397 pattern), self._chat_task 单 slot 保留作 cancel handle.
+        _on_done 双重清: set.discard(t) 防 GC + (if self._chat_task is t:
+        self._chat_task = None) 防误清 user 新开 task.
+        """
+        task = asyncio.create_task(coro)
         self._chat_task = task
         self._background_chat_tasks.add(task)
 
@@ -807,6 +806,32 @@ class ExplainChatApp(App):
                 self._chat_task = None
 
         task.add_done_callback(_on_done)
+
+    async def _consume_slash_events(self, text: str) -> None:
+        """slash 派发 + 渲染, 跑在可 cancel 的 task 内.
+
+        dispatch_slash 内部已 catch chat handler 异常返 slash_error event; 这里
+        兜 dispatch_slash 自身底层异常 + CancelledError (escape 中断长 slash 如
+        /compress). app 控制类 event (quit / switch / modal push) 在 _render_event
+        里于 event loop 上执行 — task 内 await 同一 loop, 跟 inline 路径语义一致.
+        """
+        from explain_engine.chat.slash_commands import dispatch_slash
+
+        try:
+            events = await dispatch_slash(self.chat, text)
+            for ev in events:
+                await self._render_event(ev)
+        except asyncio.CancelledError:
+            await self._unmount_status()
+            await self._write_styled("", "请求已取消.", suffix_style="dim")
+            raise  # 让 task 真 cancelled, add_done_callback 清 ref
+        except Exception as exc:
+            # Wave 4 review C-1: 异常 str 当 plain text append + dim 红.
+            await self._write_styled(
+                "[red]slash 失败: [/red]",
+                f"{type(exc).__name__}: {exc}",
+                suffix_style="red",
+            )
 
     async def _consume_chat_events(self, text: str) -> None:
         """Phase 20.0 Layer B: chat handler 包 fn — async-for 消费 events,

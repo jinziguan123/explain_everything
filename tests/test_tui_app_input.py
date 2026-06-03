@@ -1,8 +1,12 @@
 """Phase 19 Wave 3 Task 16: Input.Submitted handler.
 
 handle_input(event):
-- text 以 / 开头 → dispatch_slash(self.chat, text) (返 list[ChatEvent]) → 逐个 _render
-- 否则 → async for ev in self.chat.handle_user_input(text, self.llm): _render
+- text 以 / 开头 → _spawn_chat_task(_consume_slash_events) → 后台 dispatch_slash + _render
+- 否则 → _spawn_chat_task(_consume_chat_events) → async for + _render
+
+Phase 20.2 P0 (/compress 卡死修): slash 与自然语言都跑在可 cancel 的后台 task
+(self._chat_task) 上 — handler 立刻返让 message pump free, escape 才能 cancel
+长 slash (如 /compress). 测试需 `await app._chat_task` 等后台渲染完再断言.
 """
 
 from __future__ import annotations
@@ -38,7 +42,9 @@ async def test_input_submitted_slash_dispatch(tmp_path, monkeypatch) -> None:
         await pilot.pause()
         prompt.value = "/help"
         await pilot.press("enter")
-        await pilot.pause()
+        # Phase 20.2: slash 现走后台 task — 等它完成再断言渲染.
+        if app._chat_task is not None:
+            await app._chat_task
         await pilot.pause()
 
         # /help yield 一个 slash_help event (str content) → mount Static
@@ -150,6 +156,8 @@ async def test_input_submitted_slash_quit_exits(tmp_path, monkeypatch) -> None:
         await pilot.pause()
         prompt.value = "/quit"
         await pilot.press("enter")
-        await pilot.pause()
+        # Phase 20.2: slash 现走后台 task — 等 _render_event 调 self.exit().
+        if app._chat_task is not None:
+            await app._chat_task
         await pilot.pause()
         assert app._exit is True

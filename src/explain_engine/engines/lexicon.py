@@ -390,9 +390,14 @@ async def flush_to_lexicon(
         and os.environ.get("EXPLAIN_EMBEDDING_DISABLED") != "1"
     ):
         try:
+            import asyncio
+
             from explain_engine.embedding.bge_m3 import get_embedder
             embedder = get_embedder()
-            vecs = embedder.embed(canonicals)
+            # BGE-M3 embed 是同步 torch 前向 (秒级, 占 GIL). flush 跑在 chat REPL
+            # 的 asyncio event loop 上 — 直接同步调会冻结整个 TUI (滚动/输入/escape
+            # 全失效). 卸到线程池让 event loop 继续渲染 + 响应 escape.
+            vecs = await asyncio.to_thread(embedder.embed, canonicals)
             embeddings = [vec.tolist() for vec in vecs]
         except Exception as exc:
             # Phase 13 hotfix #6 (2026-05-20): warning → error.

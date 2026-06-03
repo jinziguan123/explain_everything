@@ -406,10 +406,14 @@ async def _batch_embed(canonicals: list[str]) -> list[list[float] | None]:
     if os.environ.get("EXPLAIN_EMBEDDING_DISABLED") == "1":
         return [None] * len(canonicals)
     try:
+        import asyncio
+
         from explain_engine.embedding.bge_m3 import get_embedder
 
         embedder = get_embedder()
-        vecs = embedder.embed(canonicals)
+        # BGE-M3 embed 同步 torch 前向 (占 GIL). flush 跑在 chat REPL 的 asyncio
+        # event loop 上 — 同步调会冻结 TUI. 卸到线程池让 loop 继续响应.
+        vecs = await asyncio.to_thread(embedder.embed, canonicals)
         return [vec.tolist() for vec in vecs]
     except Exception as exc:
         import logging
