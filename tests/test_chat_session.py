@@ -426,7 +426,12 @@ class TestChatSessionStatusYield:
 
     @pytest.mark.asyncio
     async def test_handle_user_input_yields_status_end_after_query_loop(self, monkeypatch):
-        """query_loop 完整 yield 后, yield status_end. 顺序: start → assistant_text → end."""
+        """Phase 20.3: spinner 在首个内容到达即关 (early close), 之后才是正文.
+
+        顺序: status_start → status_end(early) → assistant_text → status_end(finally).
+        早关 status_end 让流式文字紧接 spinner 流出, 不再等整 turn 跑完; finally
+        仍会再 yield 一次 status_end (TUI _unmount_status 幂等, 重复安全).
+        """
         from explain_engine.chat.loop import AssistantTextEvent
 
         _make_done_session("s_19002001")
@@ -442,7 +447,12 @@ class TestChatSessionStatusYield:
             events.append(ev)
 
         types = [e.type for e in events]
-        assert types.index("status_start") < types.index("assistant_text") < types.index("status_end")
+        assert types[0] == "status_start"
+        # spinner 提前关: 首个 status_end 在 assistant_text 之前 (或同步出现)
+        assert types.index("status_end") < types.index("assistant_text")
+        # finally 仍补一个 status_end (幂等)
+        assert types[-1] == "status_end"
+        assert types.count("status_end") >= 1
 
     @pytest.mark.asyncio
     async def test_handle_user_input_yields_status_end_on_query_loop_error(self, monkeypatch):

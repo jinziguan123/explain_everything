@@ -37,9 +37,34 @@ if TYPE_CHECKING:
 
 @dataclass
 class AssistantTextEvent(ChatEvent):
-    """Streamed text chunk from LLM (Wave C.2 是 non-streaming, 整段返回)."""
+    """整段 assistant 正文 (Phase 20.3 后仅作 fallback: provider 不流式时发).
+
+    流式路径改发 AssistantTextDeltaEvent 逐 chunk; 本事件留给 openai_protocol
+    等非流式 provider / 空回复兜底, TUI 两种都认.
+    """
 
     type: str = "assistant_text"
+
+
+@dataclass
+class AssistantTextDeltaEvent(ChatEvent):
+    """Phase 20.3: assistant 正文增量 chunk (流式逐字). content=delta str.
+
+    TUI 累积到同一个 Static widget incremental update; turn_complete / tool_use
+    边界重置, 下一段正文 mount 新 widget.
+    """
+
+    type: str = "assistant_text_delta"
+
+
+@dataclass
+class ThinkingDeltaEvent(ChatEvent):
+    """Phase 20.3: extended thinking 推理段增量 chunk (流式). content=delta str.
+
+    TUI 累积到一个 Collapsible 内 Static; 跟 AssistantTextDeltaEvent 同款边界重置.
+    """
+
+    type: str = "thinking_delta"
 
 
 @dataclass
@@ -192,18 +217,41 @@ async def query_loop(
         #   4. Forward .stop_reason 原值
         # 注意: 不要把 raw SDK Message 对象直接当 response 传, query_loop 只认
         # 上面的 facade shape (decouple SDK 升级风险).
+        # Phase 20.3: 端到端流式 — chat_with_tools(..., on_delta=emit) 逐 chunk
+        # 回调, 经 stream_llm 桥成 (kind, payload) 事件流. text/thinking delta
+        # 实时 yield, done 拿完整 ToolsResponse (tool_uses / raw_blocks 解析不变).
+        from explain_engine.chat.streaming import stream_llm
+
+        response = None
+        any_text_delta = False
         try:
-            response = await llm.chat_with_tools(
-                system=sys_prompt,
-                messages=messages,
-                tools=tools_schema,
-            )
+            # 默认参数绑定当前 iter 的 sys_prompt/messages/tools_schema —
+            # lambda 由 stream_llm 同步立即调用 (await run(emit)), 无延迟绑定
+            # 问题, 但显式绑定满足 ruff B023 且更稳.
+            async for kind, payload in stream_llm(
+                lambda emit, _sp=sys_prompt, _msg=messages, _ts=tools_schema: (
+                    llm.chat_with_tools(
+                        system=_sp, messages=_msg, tools=_ts, on_delta=emit,
+                    )
+                )
+            ):
+                if kind == "done":
+                    response = payload
+                    break
+                if kind == "text":
+                    any_text_delta = True
+                    yield AssistantTextDeltaEvent(content=payload)
+                elif kind == "thinking":
+                    yield ThinkingDeltaEvent(content=payload)
         except AttributeError:
             yield TurnCompleteEvent(content="llm_client_lacks_tools_api")
             return
 
-        # ── Stream assistant text if any ──
-        if response.text:
+        assert response is not None  # stream_llm 必 yield ("done", result) 或抛
+
+        # Fallback: provider 没流式 (无 text delta) → 整段补 assistant_text
+        # (TUI 老分支). 已流式时不重复发整段.
+        if response.text and not any_text_delta:
             yield AssistantTextEvent(content=response.text)
 
         # ── No tool calls → end turn ──

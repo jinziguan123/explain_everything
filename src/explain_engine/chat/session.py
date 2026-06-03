@@ -341,9 +341,20 @@ class ChatSession:
                 # Phase 16.2 Wave 6: 累 assistant_text 各 chunk, 末尾拼写 llm_turn 入
                 # repl_history.jsonl. LLM 异常 / SIGINT 不到 append 点 (设计契约).
                 _assistant_chunks: list[str] = []
+                _spinner_closed = False
                 async for ev in query_loop(self, llm):
-                    if getattr(ev, "type", None) == "assistant_text":
+                    ev_type = getattr(ev, "type", None)
+                    # Phase 20.3: 正文 (整段 fallback) 或 delta 都累进 repl_history.
+                    if ev_type in ("assistant_text", "assistant_text_delta"):
                         _assistant_chunks.append(getattr(ev, "content", "") or "")
+                    # Phase 20.3: 首个流式 delta 到达 → 提前关 spinner, 让文字
+                    # 紧接 spinner 流出, 而非 spinner 悬到整 turn 跑完 (finally
+                    # 仍会再 yield 一次 status_end, TUI _unmount_status 幂等).
+                    if not _spinner_closed and ev_type in (
+                        "assistant_text_delta", "thinking_delta", "assistant_text",
+                    ):
+                        yield ChatEvent(type="status_end", content=None)
+                        _spinner_closed = True
                     yield ev
 
                 # Phase 16.2 Wave 6: append llm_turn entry to repl_history.jsonl.

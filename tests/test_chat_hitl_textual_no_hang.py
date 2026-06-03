@@ -193,8 +193,10 @@ class _FakeLLMClient:
         self.responses = list(responses)
         self.call_count = 0
 
-    async def chat_with_tools(self, system, messages, tools):
-        del system, messages, tools
+    async def chat_with_tools(self, system, messages, tools, on_delta=None):
+        # Phase 20.3: 接受 on_delta (query_loop 现以 stream_llm 桥式调用); 不 emit,
+        # query_loop 走整段 AssistantTextEvent fallback.
+        del system, messages, tools, on_delta
         self.call_count += 1
         if not self.responses:
             return _FakeLLMResponse()

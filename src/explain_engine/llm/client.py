@@ -3,12 +3,19 @@
 三个 provider (Claude / OpenAI / DeepSeek) 都实现这个 Protocol。
 """
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
 Role = Literal["system", "user", "assistant"]
+
+# Phase 20.3: 流式输出增量回调. provider 在 stream chunk 到达时调
+# `await on_delta(kind, text)`, kind ∈ {"text", "thinking"} 区分正文 / 推理段.
+# None (默认) → provider 走老路径 (get_final_message 完整收集, 无逐 chunk 开销).
+# 仅 anthropic_protocol 真逐 chunk; openai_protocol 接受参数但不流式 (兼容).
+StreamDelta = Callable[[str, str], Awaitable[None]]
 
 
 class Message(BaseModel):
@@ -64,6 +71,7 @@ class LLMClient(Protocol):
         messages: list[Message],
         schema: type[BaseModel] | None = None,
         model: str | None = None,
+        on_delta: StreamDelta | None = None,
     ) -> Response: ...
 
     async def chat_with_tools(
@@ -72,4 +80,5 @@ class LLMClient(Protocol):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str | None = None,
+        on_delta: StreamDelta | None = None,
     ) -> ToolsResponse: ...

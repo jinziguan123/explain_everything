@@ -20,7 +20,7 @@ from openai import (
 )
 from pydantic import BaseModel, ValidationError
 
-from explain_engine.llm.client import Message, Response, ToolsResponse
+from explain_engine.llm.client import Message, Response, StreamDelta, ToolsResponse
 from explain_engine.llm.errors import LLMError, SchemaValidationError
 
 Mode = Literal["json_schema", "json_object"]
@@ -67,7 +67,11 @@ class OpenAIProtocolClient:
         messages: list[Message],
         schema: type[BaseModel] | None = None,
         model: str | None = None,
+        on_delta: StreamDelta | None = None,
     ) -> Response:
+        # Phase 20.3: on_delta 接受但忽略 — openai_protocol 走非流式 (一次性
+        # collect). caller (ephemeral / query_loop) 检测到无 delta 涌出会
+        # fallback 整段 assistant_text event, 显示不受影响, 只是不逐字.
         try:
             api_messages: list[dict[str, str]] = [
                 {"role": m.role, "content": m.content} for m in messages
@@ -141,8 +145,11 @@ class OpenAIProtocolClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str | None = None,
+        on_delta: StreamDelta | None = None,
     ) -> ToolsResponse:
         """Phase 9 Wave F.3: OpenAI function-calling for chat agent loop.
+
+        Phase 20.3: on_delta 接受但忽略 (非流式, 同 chat()).
 
         Args:
             system: system prompt (OpenAI 走 messages[0] role=system, 无独立参数)

@@ -28,7 +28,7 @@ from anthropic import (
 )
 from pydantic import BaseModel, ValidationError
 
-from explain_engine.llm.client import Message, Response, ToolsResponse
+from explain_engine.llm.client import Message, Response, StreamDelta, ToolsResponse
 from explain_engine.llm.errors import LLMError, SchemaValidationError
 
 logger = logging.getLogger(__name__)
@@ -127,11 +127,34 @@ class AnthropicProtocolClient:
         # env 决定传 False (默 True).
         self._enable_thinking = enable_thinking
 
+    @staticmethod
+    async def _drain_stream(stream: Any, on_delta: StreamDelta | None) -> Any:
+        """Phase 20.3: 消费 messages.stream(), 返 final Message.
+
+        on_delta is None → 直接 get_final_message() (老路径, 0 逐 chunk 开销).
+        on_delta 非 None → 逐 raw event 迭代, text_delta / thinking_delta 实时
+        回调 (kind="text" / "thinking"), 末尾仍 get_final_message() 拿完整
+        Message (下游 block 解析逻辑完全不变 — stream API 在迭代后仍累积全量).
+        """
+        if on_delta is None:
+            return await stream.get_final_message()
+        async for event in stream:
+            if getattr(event, "type", "") != "content_block_delta":
+                continue
+            delta = getattr(event, "delta", None)
+            dtype = getattr(delta, "type", "")
+            if dtype == "text_delta":
+                await on_delta("text", delta.text)
+            elif dtype == "thinking_delta":
+                await on_delta("thinking", delta.thinking)
+        return await stream.get_final_message()
+
     async def chat(
         self,
         messages: list[Message],
         schema: type[BaseModel] | None = None,
         model: str | None = None,
+        on_delta: StreamDelta | None = None,
     ) -> Response:
         try:
             # Phase 11 Wave 0: retry loop on malformed structured output.
@@ -141,7 +164,8 @@ class AnthropicProtocolClient:
             last_response: Response | None = None
             for attempt in range(MAX_RETRIES_ON_MALFORMED + 1):
                 last_response = await self._single_chat_call(
-                    current_messages, schema=schema, model=model
+                    current_messages, schema=schema, model=model,
+                    on_delta=on_delta,
                 )
                 # Fix 5 (2026-05-19): cover empty dict / list 也算 malformed.
                 # `parsed is not None and parsed` 同时排 None + falsy (e.g. {}, [], "")
@@ -182,6 +206,7 @@ class AnthropicProtocolClient:
         messages: list[Message],
         schema: type[BaseModel] | None,
         model: str | None,
+        on_delta: StreamDelta | None = None,
     ) -> Response:
         # 拆 system message（Anthropic API 单独传 system）
         system_text: str | None = None
@@ -223,7 +248,7 @@ class AnthropicProtocolClient:
 
         try:
             async with self._client.messages.stream(**call_kwargs) as stream:
-                api_resp = await stream.get_final_message()
+                api_resp = await self._drain_stream(stream, on_delta)
         except APIError as exc:
             # Vendor-specific: some reasoning models (deepseek-reasoner, o1, etc.)
             # reject forced tool_choice. Retry with "auto" and let LLM decide.
@@ -238,7 +263,7 @@ class AnthropicProtocolClient:
                 )
                 call_kwargs["tool_choice"] = {"type": "auto"}
                 async with self._client.messages.stream(**call_kwargs) as stream:
-                    api_resp = await stream.get_final_message()
+                    api_resp = await self._drain_stream(stream, on_delta)
             else:
                 raise
 
@@ -295,6 +320,7 @@ class AnthropicProtocolClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model: str | None = None,
+        on_delta: StreamDelta | None = None,
     ) -> ToolsResponse:
         """Phase 9 Wave F.3: Anthropic native tool_use API for chat agent loop.
 
@@ -327,7 +353,7 @@ class AnthropicProtocolClient:
                 }
 
             async with self._client.messages.stream(**call_kwargs) as stream:
-                api_resp = await stream.get_final_message()
+                api_resp = await self._drain_stream(stream, on_delta)
 
             text = ""
             tool_uses: list[dict[str, Any]] = []

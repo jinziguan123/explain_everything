@@ -235,6 +235,17 @@ class ExplainChatApp(App):
         # closure 维持 strong ref, 理论可被 GC. set 防 GC, 单 ref 是 "current cancellable"
         # 句柄, 二者协同.
         self._background_chat_tasks: set[asyncio.Task] = set()
+        # Phase 20.3 端到端流式: 当前正在增量更新的 widget 引用 + 文本 buffer.
+        # assistant_text_delta → _stream_answer Static; thinking_delta →
+        # _stream_thinking Static (内嵌于 _stream_thinking_col Collapsible).
+        # 每段正文/推理 mount 一个 widget, 后续 delta 调 .update(buf) 增量刷.
+        # turn_complete / tool_use 边界 reset 成 None, 下一段 mount 新 widget
+        # (防多轮 tool loop 的多段正文挤进同一 widget).
+        self._stream_answer: Static | None = None
+        self._stream_answer_buf: str = ""
+        self._stream_thinking: Static | None = None
+        self._stream_thinking_col: Collapsible | None = None
+        self._stream_thinking_buf: str = ""
 
     def compose(self) -> ComposeResult:
         # Wave 7 Bug 3 fix: slash 自动补全 — SuggestFromList(slash names) 注入 Input.
@@ -551,6 +562,95 @@ class ExplainChatApp(App):
                 suffix_style="red",
             )
 
+    # ─── Phase 20.3 流式增量 mount helpers ───
+    async def _append_answer_delta(self, delta: str) -> None:
+        """assistant_text_delta → 累积到当前正文 Static, 增量 update.
+
+        首 delta mount 一个新 Static (markup=False — LLM 正文逐字流式期间不能
+        走 markup parser: 半截 `[bo` 这类未闭合 tag 会让 Content.from_markup 抛/
+        乱渲染, 且 LLM 正文里的 `[x]` 不该被当样式吃. 跟 thinking-content 同款
+        防御). 后续 delta append buffer 再 .update() 整体刷.
+        """
+        if self._stream_answer is None:
+            self._stream_answer_buf = ""
+            self._stream_answer = Static("", markup=False)
+            container = self.query_one("#output", VerticalScroll)
+            await container.mount(self._stream_answer)
+        self._stream_answer_buf += delta
+        self._stream_answer.update(self._stream_answer_buf)
+
+    async def _append_thinking_delta(self, delta: str) -> None:
+        """thinking_delta → 累积到当前 thinking Collapsible 内 Static, 增量 update.
+
+        首 delta mount Collapsible(Static(markup=False)), 默认按 _thinking_visible
+        展开/折叠 (跟非流式 _mount_thinking 一致). 后续 delta 刷 buffer + 更新
+        title 字数.
+        """
+        if self._stream_thinking is None:
+            self._stream_thinking_buf = ""
+            inner = Static("", markup=False, classes="thinking-content")
+            self._stream_thinking = inner
+            self._stream_thinking_col = Collapsible(
+                inner,
+                title="thinking (0 字)",
+                collapsed=not self._thinking_visible,
+            )
+            container = self.query_one("#output", VerticalScroll)
+            await container.mount(self._stream_thinking_col)
+        self._stream_thinking_buf += delta
+        self._stream_thinking.update(self._stream_thinking_buf)
+        if self._stream_thinking_col is not None:
+            self._stream_thinking_col.title = (
+                f"thinking ({len(self._stream_thinking_buf)} 字)"
+            )
+
+    def _reset_stream_widgets(self) -> None:
+        """正文/推理段边界 (turn_complete / tool_use) reset 流式 widget 引用.
+
+        引用清 None 即可 — 已 mount 的 widget 留在 #output (是已完成内容), 只是
+        下一段 delta 不再往它身上 append, 而是 mount 新 widget.
+        """
+        self._stream_answer = None
+        self._stream_answer_buf = ""
+        self._stream_thinking = None
+        self._stream_thinking_col = None
+        self._stream_thinking_buf = ""
+
+    # ─── Phase 20.3: agent 自主调工具的可见反馈 ───
+    @staticmethod
+    def _tool_input_preview(tool_input: object) -> str:
+        """ToolUseEvent.tool_input (dict) → 紧凑可读预览 (k=v, k=v), 截 80 字.
+
+        让用户看到 agent 调工具时具体在操作什么 (e.g. counterfactual 的 intervention
+        文本 / expand 的 l1_id). 空值字段跳过. 返空串 = 无可显示输入.
+        """
+        if not isinstance(tool_input, dict) or not tool_input:
+            return ""
+        parts = [f"{k}={v}" for k, v in tool_input.items() if v not in (None, "")]
+        s = ", ".join(parts)
+        return s[:80] + "…" if len(s) > 80 else s
+
+    async def _render_tool_use(self, ev: ChatEvent) -> None:
+        """tool_use 事件 → 持久 trace 行 (🔧 工具名 + input 预览) + 动画 spinner.
+
+        - trace 行用 markup (label 来自 chat_copy.TOOL_DISPLAY_LABELS, trusted),
+          留在 #output 作"agent 调过哪些工具"的可见记录.
+        - input 预览走 _write_styled plain (tool_input 含 LLM 生成文本, 防 markup
+          注入), dim 缩进一行.
+        - spinner 复用 _mount_status (LoadingIndicator + label) — 工具执行 (可能
+          数秒 LLM 调用) 期间动画转, 直接回答用户"是否卡死". tool_result 撤掉.
+        """
+        from explain_engine.chat.chat_copy import tool_display_label
+
+        tool_name = getattr(ev, "tool_name", "") or ""
+        tool_input = getattr(ev, "tool_input", None)
+        label = tool_display_label(tool_name)
+        await self._write(f"[cyan]🔧 调用工具：{label}[/cyan]")
+        preview = self._tool_input_preview(tool_input)
+        if preview:
+            await self._write_styled("   [dim]↳ [/dim]", preview, suffix_style="dim")
+        await self._mount_status(label)
+
     # ─── Event render ───
     async def _render_event(self, ev: ChatEvent) -> None:
         """单 ChatEvent → textual widget 操作 dispatch.
@@ -575,6 +675,16 @@ class ExplainChatApp(App):
         """
         ev_type = ev.type
         content = ev.content
+
+        # Phase 20.3 流式: 正文 / 推理段增量 chunk → 增量 update 当前 widget.
+        if ev_type == "assistant_text_delta":
+            await self._append_answer_delta(content if isinstance(content, str) else "")
+            return
+        if ev_type == "thinking_delta":
+            await self._append_thinking_delta(
+                content if isinstance(content, str) else ""
+            )
+            return
 
         if ev_type == "slash_quit":
             if content:
@@ -676,18 +786,33 @@ class ExplainChatApp(App):
 
         # Wave 5 Task 24: status_start/end → mount/unmount LoadingIndicator.
         if ev_type == "status_start":
+            # Phase 20.3: turn 起始 reset 流式 widget 引用 — 兜底上一 turn 被
+            # escape cancel 中断 (没走到 turn_complete) 残留的 stale ref, 防新
+            # turn 首 delta 误 append 到上一答案 widget.
+            self._reset_stream_widgets()
             await self._mount_status(content if isinstance(content, str) else "")
             return
         if ev_type == "status_end":
             await self._unmount_status()
             return
 
-        # Wave 6+ 用 — 现阶段 no-op (turn_complete / tool_use / tool_result).
-        if ev_type in (
-            "turn_complete",
-            "tool_use",
-            "tool_result",
-        ):
+        # Phase 20.3: turn_complete 是正文段边界 → reset 流式 widget 引用.
+        if ev_type == "turn_complete":
+            self._reset_stream_widgets()
+            return
+
+        # Phase 20.3: agent 自主调工具的可见反馈 — 之前 tool_use/tool_result 全
+        # no-op, 用户看不到 agent 在 compress / counterfactual / ... 干活, 长工具
+        # 执行期屏幕静止以为卡死. 现在 tool_use → 持久 trace 行 (留 log 记录调了
+        # 哪个工具) + 动画 spinner (表示"执行中, 没卡死"); tool_result → 撤 spinner.
+        # 工具段也是正文边界 → reset 流式 widget (下一段正文 mount 新 widget).
+        if ev_type == "tool_use":
+            self._reset_stream_widgets()
+            await self._render_tool_use(ev)
+            return
+        if ev_type == "tool_result":
+            # 工具执行完 → 撤 spinner (留 trace 行). _unmount_status 幂等.
+            await self._unmount_status()
             return
 
         # user-visible text events: mount Static

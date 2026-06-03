@@ -113,6 +113,94 @@ async def test_handle_user_input_second_turn_passes_history_to_llm(tmp_path, mon
     assert "新问题" in contents
 
 
+class _StreamingFakeLLM:
+    """Phase 20.3: 真流式 fake — chat() 逐 chunk 调 on_delta(kind, text).
+
+    模拟 anthropic_protocol 行为: 先 emit thinking deltas, 再 emit text deltas,
+    最后返回完整 Response. on_delta=None 时退化为整段 (不 emit).
+    """
+
+    def __init__(self, text_chunks, thinking_chunks=None):
+        self.text_chunks = text_chunks
+        self.thinking_chunks = thinking_chunks or []
+
+    async def chat(self, messages, schema=None, model=None, on_delta=None):
+        full_text = "".join(self.text_chunks)
+        full_think = "".join(self.thinking_chunks)
+        if on_delta is not None:
+            for t in self.thinking_chunks:
+                await on_delta("thinking", t)
+            for t in self.text_chunks:
+                await on_delta("text", t)
+        return MagicMock(
+            text=full_text,
+            reasoning=full_think or None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_handle_user_input_streams_text_deltas(tmp_path, monkeypatch):
+    """流式 provider → yield 多个 assistant_text_delta (逐 chunk), 不发整段 assistant_text."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+
+    llm = _StreamingFakeLLM(
+        text_chunks=["水", "沸腾", "是因为", "蒸汽压"],
+        thinking_chunks=["让我", "想想"],
+    )
+
+    events = []
+    async for ev in ephemeral.handle_user_input("为什么烧水能沸", llm):
+        events.append(ev)
+
+    types = [e.type for e in events]
+    text_deltas = [e for e in events if e.type == "assistant_text_delta"]
+    think_deltas = [e for e in events if e.type == "thinking_delta"]
+
+    # 逐 chunk 流式: 4 个 text delta + 2 个 thinking delta
+    assert [e.content for e in text_deltas] == ["水", "沸腾", "是因为", "蒸汽压"]
+    assert [e.content for e in think_deltas] == ["让我", "想想"]
+    # 流式时不再发整段 assistant_text (避免重复渲染)
+    assert "assistant_text" not in types
+    # spinner 在首 delta 前关 (status_end 早于第一个 delta)
+    assert types.index("status_end") < types.index("thinking_delta")
+    # turn_complete 收尾
+    assert types[-1] == "turn_complete"
+    # transcript 落完整文本 (delta 拼回)
+    assert ephemeral.transcript[-1] == {
+        "role": "assistant",
+        "content": "水沸腾是因为蒸汽压",
+    }
+
+
+@pytest.mark.asyncio
+async def test_handle_user_input_non_streaming_provider_fallback(tmp_path, monkeypatch):
+    """非流式 provider (on_delta 不被调) → fallback 整段 assistant_text, 无 delta."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage)
+
+    # AsyncMock.chat 不会调 on_delta → any_text_delta=False → 整段 fallback
+    llm = AsyncMock()
+    llm.chat.return_value = MagicMock(text="整段回答", reasoning=None)
+
+    events = []
+    async for ev in ephemeral.handle_user_input("hi", llm):
+        events.append(ev)
+
+    types = [e.type for e in events]
+    assert "assistant_text_delta" not in types
+    assistant = [e for e in events if e.type == "assistant_text"]
+    assert len(assistant) == 1
+    assert assistant[0].content == "整段回答"
+    assert types[-1] == "turn_complete"
+
+
 @pytest.mark.asyncio
 async def test_ephemeral_chat_does_not_persist_transcript(tmp_path, monkeypatch):
     """ephemeral 下 handle_user_input 后, storage_v2 不写 transcript.jsonl."""

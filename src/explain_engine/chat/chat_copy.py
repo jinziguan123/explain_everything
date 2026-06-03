@@ -219,6 +219,24 @@ STATUS_THEORIES_COMPUTE = "[bold green]正在分析跨 session 模式...[/bold g
 STATUS_THINKING         = "思考中..."
 STATUS_DEEPEN_CLASSIFY  = "启动深度建模 — classify 中..."
 
+# Phase 20.3: agent 自主调工具时 TUI 展示的中文友好标签 (ToolUseEvent.tool_name
+# → label). agent loop (query_loop) 里 LLM 自己决定调 expand/compress/... 时,
+# 让用户看到"在干什么 + 没卡死". 未列名的 tool fallback 用原始 tool_name.
+TOOL_DISPLAY_LABELS: dict[str, str] = {
+    "expand":          "扩展因果模型",
+    "compress":        "归纳模式 (compress)",
+    "check":           "检查模型一致性",
+    "predict":         "预测干预影响",
+    "counterfactual":  "做反事实分析",
+    "add_observation": "记录观察",
+    "read_node":       "读取节点",
+}
+
+
+def tool_display_label(tool_name: str) -> str:
+    """ToolUseEvent.tool_name → 中文友好标签 (未知名 fallback 原始名)."""
+    return TOOL_DISPLAY_LABELS.get(tool_name, tool_name or "工具")
+
 INFO_INSIGHT_PENDING_RESUME = "[dim](检测到中途取消, 跳过 LLM 直接进入审查)[/dim]"
 INFO_MID_STAGE_SAVED        = "[dim](中间状态已保存, 取消审查可下次重入跳过 LLM)[/dim]"
 

@@ -392,3 +392,107 @@ async def test_render_slash_switch_session_missing_sid_keeps_chat(
         container = app.query_one("#output", VerticalScroll)
         statics = list(container.query(Static))
         assert len(statics) >= 1
+
+
+# ─── Phase 20.3: 流式 delta 增量渲染 + agent 工具调用可见反馈 ───
+
+@pytest.mark.asyncio
+async def test_render_assistant_text_delta_accumulates(tmp_path, monkeypatch) -> None:
+    """多个 assistant_text_delta → 累积到同一个 Static (增量 update), 非每 delta 一个."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+    app = ExplainChatApp(
+        llm=AsyncMock(), light_llm=AsyncMock(), ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        for chunk in ["水", "沸腾", "是因为", "蒸汽压"]:
+            await app._render_event(
+                ChatEvent(type="assistant_text_delta", content=chunk)
+            )
+        await pilot.pause()
+        # 单一流式 widget 累积全文
+        assert app._stream_answer is not None
+        assert app._stream_answer_buf == "水沸腾是因为蒸汽压"
+        # turn_complete → reset 引用
+        await app._render_event(ChatEvent(type="turn_complete", content=None))
+        await pilot.pause()
+        assert app._stream_answer is None
+
+
+@pytest.mark.asyncio
+async def test_render_thinking_delta_accumulates_in_collapsible(tmp_path, monkeypatch) -> None:
+    """thinking_delta → 累积到 Collapsible 内 Static, title 显字数."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    from textual.widgets import Collapsible
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+    app = ExplainChatApp(
+        llm=AsyncMock(), light_llm=AsyncMock(), ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        for chunk in ["让我", "想想"]:
+            await app._render_event(ChatEvent(type="thinking_delta", content=chunk))
+        await pilot.pause()
+        assert app._stream_thinking_buf == "让我想想"
+        cols = list(app.query(Collapsible))
+        assert len(cols) == 1
+        assert "4 字" in cols[0].title
+
+
+@pytest.mark.asyncio
+async def test_render_tool_use_shows_trace_and_spinner(tmp_path, monkeypatch) -> None:
+    """tool_use → 持久 trace 行 (含中文 label) + 动画 spinner; tool_result → 撤 spinner."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    from textual.containers import VerticalScroll
+    from textual.widgets import LoadingIndicator, Static
+
+    from explain_engine.chat.ephemeral import EphemeralChatSession
+    from explain_engine.chat.loop import ToolResultEvent, ToolUseEvent
+    from explain_engine.chat.tui_app import ExplainChatApp
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    ephemeral = EphemeralChatSession(storage=StorageV2(), llm=AsyncMock())
+    app = ExplainChatApp(
+        llm=AsyncMock(), light_llm=AsyncMock(), ephemeral_chat=ephemeral,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app._render_event(
+            ToolUseEvent(
+                tool_name="counterfactual",
+                tool_input={"intervention": "如果温度升高"},
+            )
+        )
+        await pilot.pause()
+        container = app.query_one("#output", VerticalScroll)
+        texts = [s.renderable for s in container.query(Static)]
+        joined = " ".join(str(t) for t in texts)
+        # trace 行含中文 label + input 预览
+        assert "做反事实分析" in joined
+        assert "如果温度升高" in joined
+        # spinner mount 中
+        assert len(list(app.query(LoadingIndicator))) == 1
+        # tool_result → 撤 spinner
+        await app._render_event(
+            ToolResultEvent(tool_name="counterfactual", result="done")
+        )
+        await pilot.pause()
+        assert len(list(app.query(LoadingIndicator))) == 0

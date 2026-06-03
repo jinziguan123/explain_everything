@@ -96,26 +96,31 @@ class EphemeralChatSession:
         text: str,
         llm: LLMClient,
     ):
-        """Phase 18: Ephemeral 下 LLM system-1 chat (Phase 19 加 spinner + thinking).
+        """Phase 18: Ephemeral 下 LLM system-1 chat (Phase 20.3 端到端流式).
 
-        yield 流 (success):
-            status_start("思考中...") → [LLM call] → status_end → [若 reasoning 非空]
-            thinking_text → assistant_text → turn_complete
+        yield 流 (success, 流式):
+            status_start("思考中...") → [首 chunk 到达] status_end →
+            thinking_delta* → assistant_text_delta* → turn_complete
+        yield 流 (provider 不流式, e.g. openai): status_start → status_end →
+            [thinking_text] → assistant_text → turn_complete  (整段 fallback)
         yield 流 (LLMError):
-            status_start("思考中...") → [LLM raise] → status_end → slash_error → return
+            status_start → [LLM raise] → status_end → slash_error → return
 
         transcript in-memory append (不持久 — storage_v2 不写 transcript.jsonl).
         LLM 失败 (LLMError) transcript 不变 (retry 友好).
 
-        Phase 19 设计要点:
-        - status_start/end 配对让 textual TUI 在 5-15s LLM 调用期间 visible mount
-          LoadingIndicator. 错误也 yield status_end (try/except early return path)
-          保证 spinner 一定清.
-        - resp.reasoning 非 None (extended thinking / reasoning_content) → yield
-          thinking_text event 在 assistant_text 之前. tui_app 走 Collapsible mount.
-
-        命名: 跟 ChatSession.handle_user_input 对齐, Wave 2 caller 同名调用.
+        Phase 20.3 流式设计:
+        - llm.chat(..., on_delta=emit) 逐 chunk 回调, 经 stream_llm 桥成
+          (kind, payload) 事件流. kind=text → assistant_text_delta;
+          kind=thinking → thinking_delta; kind=done → 完整 Response.
+        - status_end 在首个 delta 到达时 yield (spinner 一关, 文字接着流);
+          无任何 delta (provider 非流式 / 空回复) 时在 done 后 yield, 再走整段
+          assistant_text fallback (TUI 同时认 delta 与整段两种事件).
+        - 错误路径也保证 status_end (TUI _unmount_status 幂等, 重复 yield 安全).
         """
+        # local import 避 module-load 期循环 (streaming 仅 chat 层用)
+        from explain_engine.chat.streaming import stream_llm
+
         # Phase 19 Task 8: 调 LLM 前 yield status_start (spinner mount signal)
         yield ChatEvent(type="status_start", content=STATUS_THINKING)
 
@@ -126,31 +131,51 @@ class EphemeralChatSession:
             messages.append(Message(role=msg["role"], content=msg["content"]))
         messages.append(Message(role="user", content=text))
 
+        resp = None
+        any_text_delta = False
+        spinner_closed = False
         try:
-            resp = await llm.chat(messages)
+            async for kind, payload in stream_llm(
+                lambda emit: llm.chat(messages, on_delta=emit)
+            ):
+                if kind == "done":
+                    resp = payload
+                    break
+                # 首个 delta (text / thinking) 到达 → 关 spinner
+                if not spinner_closed:
+                    yield ChatEvent(type="status_end", content=None)
+                    spinner_closed = True
+                if kind == "text":
+                    any_text_delta = True
+                    yield ChatEvent(type="assistant_text_delta", content=payload)
+                elif kind == "thinking":
+                    yield ChatEvent(type="thinking_delta", content=payload)
         except LLMError as exc:
-            # Phase 19 Task 8: error path 也 yield status_end 保证清 spinner
-            yield ChatEvent(type="status_end", content=None)
+            if not spinner_closed:
+                yield ChatEvent(type="status_end", content=None)
             yield ChatEvent(
                 type="slash_error",
                 content=f"LLM 调用失败: {type(exc).__name__}: {exc}",
             )
             return
 
-        # Phase 19 Task 8: LLM 成功后 yield status_end 清 spinner
-        yield ChatEvent(type="status_end", content=None)
+        # 无任何 delta 涌出 (provider 非流式 / 空回复) → 现在才关 spinner
+        if not spinner_closed:
+            yield ChatEvent(type="status_end", content=None)
 
+        assert resp is not None  # stream_llm 必 yield ("done", result) 或抛
         assistant_text = resp.text
         # transcript append (in-memory, 不持久)
         self.transcript.append({"role": "user", "content": text})
         self.transcript.append({"role": "assistant", "content": assistant_text})
 
-        # Phase 19 Task 8: resp.reasoning 非空 → yield thinking_text (assistant_text 之前)
-        # truthy check (兼容空 str 也跳过), 跟 Response.reasoning: str | None 约定一致.
-        if resp.reasoning:
-            yield ChatEvent(type="thinking_text", content=resp.reasoning)
+        # Fallback: provider 没流式 (无 text delta) → 整段补 thinking_text +
+        # assistant_text (TUI 老分支). 已流式 (any_text_delta) 时不重复发整段.
+        if not any_text_delta:
+            if resp.reasoning:
+                yield ChatEvent(type="thinking_text", content=resp.reasoning)
+            yield ChatEvent(type="assistant_text", content=assistant_text)
 
-        yield ChatEvent(type="assistant_text", content=assistant_text)
         yield ChatEvent(type="turn_complete", content=None)
 
     async def promote_to_persistent(

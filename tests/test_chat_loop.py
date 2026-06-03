@@ -72,7 +72,10 @@ class _FakeLLMClient:
         self.responses = list(responses)
         self.call_count = 0
 
-    async def chat_with_tools(self, system, messages, tools):
+    async def chat_with_tools(self, system, messages, tools, on_delta=None):
+        # Phase 20.3: 接受 on_delta 但不 emit — 模拟"非流式 provider", query_loop
+        # 走 fallback 发整段 AssistantTextEvent (现有断言据此). 流式逐 delta 路径
+        # 由 _StreamingFakeLLMClient 专门覆盖.
         self.call_count += 1
         if not self.responses:
             return _FakeLLMResponse()
