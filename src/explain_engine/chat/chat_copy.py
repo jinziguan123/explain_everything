@@ -96,6 +96,7 @@ COMMAND_DESCRIPTIONS: dict[str, str] = {
     "save":     "立即把当前所有状态存盘",
     "migrate":  "(一次性) 老 session 文件迁移到新存储格式",
     "thinking": "切 thinking 段折叠/展开 (/thinking on|off, 跟 Ctrl+O 等价)",
+    "llm":      "管理 LLM 配置 (base_url/api_key/model, 多套切换)",
 
     # 帮助 / 退出
     "help": "看命令列表",
@@ -108,7 +109,7 @@ HELP_GROUPS_ZH: list[tuple[str, list[str]]] = [
     ("干预分析 (需先 /compress)", ["predict", "counterfactual"]),
     ("查看状态 (只读)",           ["show", "graph", "check"]),
     ("管理 session",              ["deepen", "new", "resume", "list", "delete", "lexicon", "theories", "theory", "history"]),
-    ("其他",                      ["budget", "compact", "save", "migrate", "thinking"]),
+    ("其他",                      ["budget", "compact", "save", "migrate", "thinking", "llm"]),
     ("帮助 / 退出",               ["help", "quit"]),
 ]
 

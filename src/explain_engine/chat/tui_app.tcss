@@ -122,3 +122,60 @@ OptionList#session-picker-list {
     max-height: 20;
     border: tall $surface-lighten-1;
 }
+
+/* Phase 20.4: LLM provider 管理 modal (列表 + 按钮行) + 编辑表单. */
+Vertical#llm-config-container {
+    align: center middle;
+    width: 80%;
+    max-width: 100;
+    height: auto;
+    max-height: 80%;
+    background: $surface;
+    border: heavy $primary;
+    padding: 1 2;
+}
+
+OptionList#llm-profile-list {
+    height: auto;
+    max-height: 16;
+    border: tall $surface-lighten-1;
+}
+
+Horizontal#llm-btn-row {
+    height: auto;
+    align: center middle;
+    margin: 1 0 0 0;
+}
+
+Horizontal#llm-btn-row Button {
+    margin: 0 1;
+}
+
+Static#llm-config-status {
+    height: auto;
+    color: $text-muted;
+    margin: 1 0 0 0;
+}
+
+VerticalScroll#llm-form-container {
+    width: 80%;
+    max-width: 100;
+    height: auto;
+    max-height: 90%;
+    background: $surface;
+    border: heavy $primary;
+    padding: 1 2;
+}
+
+VerticalScroll#llm-form-container Input {
+    margin: 0 0 1 0;
+}
+
+VerticalScroll#llm-form-container Select {
+    margin: 0 0 1 0;
+}
+
+Static#f-error {
+    height: auto;
+    color: $error;
+}

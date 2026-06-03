@@ -2277,6 +2277,94 @@ async def _handle_thinking(chat, args: list[str]) -> list[ChatEvent]:
     ]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Phase 20.4: /llm — 管理 LLM provider (base_url / api_key / model, 多 profile)
+# ─────────────────────────────────────────────────────────────────────────
+# 适配 anthropic + openai 两协议. 跟 chat session lifecycle 解耦 (纯配置管理):
+# - /llm (无参) / /llm config → slash_open_llm_config event, tui_app 接到 push
+#   LLMConfigScreen modal (列表: 激活/新增/编辑/删除; 改完热重载当前 session 的
+#   app.llm / light_llm / chat.llm).
+# - /llm show → 文本列出当前 profiles + active (无 TUI 也能看, 测试友好).
+# - /llm use <name> → 直接切 active 不弹窗 (顺手快捷); 切完仍需 tui 热重载,
+#   故 yield slash_llm_reload event 让 tui rebuild client.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _mask_key(key: str) -> str:
+    """api_key 脱敏显示: 前 4 + … + 后 4 (短 key 全 ★)。"""
+    if len(key) <= 8:
+        return "★" * len(key)
+    return f"{key[:4]}…{key[-4:]}"
+
+
+async def _handle_llm(chat, args: list[str]) -> list[ChatEvent]:
+    """Phase 20.4: /llm — 管理 LLM provider 配置。
+
+    用法:
+        /llm | /llm config   弹 LLMConfigScreen 管理弹窗 (增删改切)
+        /llm show            文本列出 profiles + active (无 TUI 也可用)
+        /llm use <name>      切 active 到 <name> 并热重载 (不弹窗)
+
+    Event 契约:
+    - slash_open_llm_config: content=hint str, metadata=None — tui push modal.
+    - slash_llm: content=str — 纯文本信息 (show / use 结果), tui mount Static.
+    - slash_llm_reload: content=str — tui 据此 rebuild app.llm/light_llm/chat.llm
+      (active profile 改了, 需热重载当前 session)。
+    - slash_error: 用法 / name 不存在。
+    """
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.llm.llm_config import LLMConfigStore
+
+    sub = args[0].strip().lower() if args else ""
+
+    if sub == "show":
+        cfg = LLMConfigStore().load()
+        if not cfg.profiles:
+            return [ChatEvent(
+                type="slash_llm",
+                content=(
+                    "还没配置任何 LLM profile — 当前走 .env / 环境变量。\n"
+                    "输入 /llm 打开管理弹窗新增 provider。"
+                ),
+            )]
+        lines = ["[bold]LLM profiles[/bold] (active 标 ★):"]
+        for name, p in cfg.profiles.items():
+            mark = " [green]★active[/green]" if name == cfg.active else ""
+            lines.append(
+                f"  • [cyan]{name}[/cyan]{mark}\n"
+                f"      {p.protocol} | {p.base_url} | {p.model} | "
+                f"key={_mask_key(p.api_key)}"
+            )
+        return [ChatEvent(type="slash_llm", content="\n".join(lines))]
+
+    if sub == "use":
+        if len(args) < 2 or not args[1].strip():
+            return [ChatEvent(
+                type="slash_error",
+                content="用法: /llm use <profile 名> (先 /llm show 看可选名)",
+            )]
+        name = args[1].strip()
+        store = LLMConfigStore()
+        try:
+            store.set_active(name)
+        except KeyError:
+            return [ChatEvent(
+                type="slash_error",
+                content=f"profile {name!r} 不存在 — /llm show 看可选名。",
+            )]
+        return [ChatEvent(
+            type="slash_llm_reload",
+            content=f"已切换 active LLM profile → [cyan]{name}[/cyan], 已热重载。",
+        )]
+
+    # 默认 (无参 / config / 未知子命令) → 弹管理 modal
+    return [ChatEvent(
+        type="slash_open_llm_config",
+        content="管理 LLM provider (↑↓ 选, Enter 激活, a 新增, e 编辑, d 删除, Esc 关)",
+        metadata=None,
+    )]
+
+
 # Registry — 25 default slash commands + 1 alias (/cf → counterfactual).
 # 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作 → engines → cross-session"分组.
 #
@@ -2317,6 +2405,7 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("deepen",         COMMAND_DESCRIPTIONS["deepen"],         _wrap_handler("deepen", _handle_deepen)),
     # Phase 19 Task 21: /thinking on|off — 切 tui_app thinking Collapsible 折叠.
     SlashCommand("thinking",       COMMAND_DESCRIPTIONS["thinking"],       _wrap_handler("thinking", _handle_thinking)),
+    SlashCommand("llm",            COMMAND_DESCRIPTIONS["llm"],            _wrap_handler("llm", _handle_llm)),
 )
 
 

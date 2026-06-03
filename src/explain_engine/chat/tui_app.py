@@ -35,12 +35,14 @@ from textual.content import Content, Span
 from textual.screen import ModalScreen
 from textual.suggester import SuggestFromList
 from textual.widgets import (
+    Button,
     Collapsible,
     Footer,
     Header,
     Input,
     LoadingIndicator,
     OptionList,
+    Select,
     Static,
 )
 from textual.widgets.option_list import Option
@@ -170,6 +172,274 @@ class SessionPickerScreen(ModalScreen[str | None]):
     def action_cancel(self) -> None:
         """Esc → dismiss with None (caller 不切 chat)."""
         self.dismiss(None)
+
+
+# ─── Phase 20.4: LLM provider 管理 modal (列表 + 表单) ───
+
+
+class LLMProfileFormScreen(ModalScreen["object | None"]):
+    """新增 / 编辑单个 LLM profile 的表单 modal.
+
+    Result: LLMProfile (保存) | None (取消). 适配 anthropic + openai 两协议
+    (protocol Select). light_* 留空 = fallback 主配置。
+
+    编辑模式 (传 profile) 时 name 锁定 (name 是 store key, 改名 = 删旧建新,
+    交互上避免歧义)。
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "cancel", "取消"),
+        Binding("ctrl+s", "save", "保存"),
+    ]
+
+    def __init__(self, profile: object | None = None) -> None:
+        super().__init__()
+        # profile: LLMProfile | None — None=新增, 非 None=编辑预填
+        self._initial = profile
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import VerticalScroll
+
+        p = self._initial
+
+        def _g(attr: str) -> str:
+            v = getattr(p, attr, None) if p else None
+            return "" if v is None else str(v)
+
+        yield VerticalScroll(
+            Static(
+                "新增 / 编辑 LLM Profile  (Ctrl+S 保存, Esc 取消)",
+                classes="picker-title",
+            ),
+            Static("name (唯一标识, 编辑时锁定)"),
+            Input(value=_g("name"), id="f-name", disabled=p is not None),
+            Static("protocol"),
+            Select(
+                [("anthropic", "anthropic"), ("openai", "openai")],
+                value=(getattr(p, "protocol", None) or "anthropic"),
+                id="f-protocol",
+                allow_blank=False,
+            ),
+            Static("base_url"),
+            Input(
+                value=_g("base_url"),
+                id="f-base_url",
+                placeholder="https://api.deepseek.com/anthropic",
+            ),
+            Static("api_key"),
+            Input(value=_g("api_key"), id="f-api_key", password=True),
+            Static("model"),
+            Input(
+                value=_g("model"), id="f-model", placeholder="deepseek-v4-pro",
+            ),
+            Static("max_tokens (可空, 正整数)"),
+            Input(value=_g("max_tokens"), id="f-max_tokens"),
+            Static("structured_output_mode (仅 openai: json_schema / json_object)"),
+            Select(
+                [("json_schema", "json_schema"), ("json_object", "json_object")],
+                value=(getattr(p, "structured_output_mode", None) or "json_schema"),
+                id="f-mode",
+                allow_blank=False,
+            ),
+            Static("— light LLM 覆盖 (留空 = 用上面主配置) —", classes="picker-title"),
+            Static("light_model (可空)"),
+            Input(value=_g("light_model"), id="f-light_model"),
+            Static("light_base_url (可空)"),
+            Input(value=_g("light_base_url"), id="f-light_base_url"),
+            Static("light_api_key (可空)"),
+            Input(value=_g("light_api_key"), id="f-light_api_key", password=True),
+            Static("", id="f-error"),
+            id="llm-form-container",
+        )
+
+    def on_mount(self) -> None:
+        # 新增时 focus name; 编辑时 (name 锁) focus base_url
+        target = "#f-base_url" if self._initial is not None else "#f-name"
+        self.query_one(target, Input).focus()
+
+    def _val(self, wid: str) -> str:
+        return self.query_one(f"#{wid}", Input).value.strip()
+
+    def action_save(self) -> None:
+        from pydantic import ValidationError
+
+        from explain_engine.llm.llm_config import LLMProfile
+
+        err = self.query_one("#f-error", Static)
+        name = self._val("f-name")
+        base_url = self._val("f-base_url")
+        api_key = self._val("f-api_key")
+        model = self._val("f-model")
+        missing = [
+            label
+            for label, v in [
+                ("name", name), ("base_url", base_url),
+                ("api_key", api_key), ("model", model),
+            ]
+            if not v
+        ]
+        if missing:
+            err.update(f"[red]缺必填字段: {', '.join(missing)}[/red]")
+            return
+
+        max_tokens: int | None = None
+        mt_raw = self._val("f-max_tokens")
+        if mt_raw:
+            try:
+                max_tokens = int(mt_raw)
+                if max_tokens < 1:
+                    raise ValueError
+            except ValueError:
+                err.update("[red]max_tokens 必须是正整数或留空[/red]")
+                return
+
+        light_max: int | None = None  # 表单暂不暴露 light_max_tokens (用主)
+        try:
+            profile = LLMProfile(
+                name=name,
+                protocol=self.query_one("#f-protocol", Select).value,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                max_tokens=max_tokens,
+                structured_output_mode=self.query_one("#f-mode", Select).value,
+                light_model=self._val("f-light_model") or None,
+                light_base_url=self._val("f-light_base_url") or None,
+                light_api_key=self._val("f-light_api_key") or None,
+                light_max_tokens=light_max,
+            )
+        except ValidationError as exc:
+            err.update(f"[red]校验失败: {exc}[/red]")
+            return
+        self.dismiss(profile)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class LLMConfigScreen(ModalScreen[bool]):
+    """LLM provider 管理 modal — profile 列表 + 激活/新增/编辑/删除按钮.
+
+    直接读写 LLMConfigStore (持久化到 EXPLAIN_HOME/llm_config.json)。dismiss
+    返 bool: 配置是否变过 (变了 → ExplainChatApp 热重载 app.llm/light_llm/chat.llm)。
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "close", "关闭"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._changed = False
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Horizontal, Vertical
+
+        yield Vertical(
+            Static("管理 LLM Provider", classes="picker-title"),
+            OptionList(id="llm-profile-list", markup=False),
+            Horizontal(
+                Button("激活", id="btn-activate", variant="primary"),
+                Button("新增", id="btn-add", variant="success"),
+                Button("编辑", id="btn-edit"),
+                Button("删除", id="btn-delete", variant="error"),
+                Button("关闭", id="btn-close"),
+                id="llm-btn-row",
+            ),
+            Static("", id="llm-config-status"),
+            id="llm-config-container",
+        )
+
+    def on_mount(self) -> None:
+        self._refresh()
+
+    def _refresh(self) -> None:
+        """从 store 重读 profiles 重建 OptionList (active 标 ★)。"""
+        from explain_engine.llm.llm_config import LLMConfigStore
+
+        cfg = LLMConfigStore().load()
+        ol = self.query_one("#llm-profile-list", OptionList)
+        ol.clear_options()
+        if not cfg.profiles:
+            ol.add_option(Option("(还没有 profile — 点「新增」)", id=None, disabled=True))
+            return
+        for name, p in cfg.profiles.items():
+            mark = "  ★active" if name == cfg.active else ""
+            ol.add_option(
+                Option(f"{name}{mark}   ·   {p.protocol} · {p.model}", id=name)
+            )
+
+    def _selected_name(self) -> str | None:
+        ol = self.query_one("#llm-profile-list", OptionList)
+        if ol.highlighted is None:
+            return None
+        opt = ol.get_option_at_index(ol.highlighted)
+        return opt.id if isinstance(opt.id, str) else None
+
+    def _status(self, markup: str) -> None:
+        self.query_one("#llm-config-status", Static).update(markup)
+
+    @on(Button.Pressed)
+    def _on_button(self, event: Button.Pressed) -> None:
+        from explain_engine.llm.llm_config import LLMConfigStore
+
+        bid = event.button.id
+        store = LLMConfigStore()
+
+        if bid == "btn-close":
+            self.dismiss(self._changed)
+            return
+
+        if bid == "btn-add":
+            self.app.push_screen(LLMProfileFormScreen(), self._on_form_done)
+            return
+
+        if bid == "btn-edit":
+            name = self._selected_name()
+            if name is None:
+                self._status("[yellow]请先选一个 profile[/yellow]")
+                return
+            profile = store.load().profiles.get(name)
+            self.app.push_screen(
+                LLMProfileFormScreen(profile), self._on_form_done
+            )
+            return
+
+        if bid == "btn-activate":
+            name = self._selected_name()
+            if name is None:
+                self._status("[yellow]请先选一个 profile[/yellow]")
+                return
+            store.set_active(name)
+            self._changed = True
+            self._refresh()
+            self._status(f"[green]已激活 {name}[/green]")
+            return
+
+        if bid == "btn-delete":
+            name = self._selected_name()
+            if name is None:
+                self._status("[yellow]请先选一个 profile[/yellow]")
+                return
+            store.delete(name)
+            self._changed = True
+            self._refresh()
+            self._status(f"[green]已删除 {name}[/green]")
+            return
+
+    def _on_form_done(self, profile: object | None) -> None:
+        """表单返回 LLMProfile → upsert 到 store (新增首个自动激活)。"""
+        if profile is None:
+            return
+        from explain_engine.llm.llm_config import LLMConfigStore
+
+        LLMConfigStore().upsert(profile)  # type: ignore[arg-type]
+        self._changed = True
+        self._refresh()
+        self._status(f"[green]已保存 {getattr(profile, 'name', '')}[/green]")
+
+    def action_close(self) -> None:
+        self.dismiss(self._changed)
 
 
 class ExplainChatApp(App):
@@ -757,6 +1027,23 @@ class ExplainChatApp(App):
             self.push_screen(picker, self._on_session_picked)
             return
 
+        # Phase 20.4: /llm 管理 LLM provider.
+        if ev_type == "slash_open_llm_config":
+            # push 管理 modal; 关闭后若改过配置 → 热重载 (callback).
+            self.push_screen(LLMConfigScreen(), self._on_llm_config_closed)
+            return
+        if ev_type == "slash_llm":
+            # /llm show 文本结果 (trusted markup 串)
+            if isinstance(content, str):
+                await self._write(content)
+            return
+        if ev_type == "slash_llm_reload":
+            # /llm use <name> 已切 active → 热重载当前 session 的 client
+            await self._reload_llm_clients()
+            if isinstance(content, str):
+                await self._write(content)
+            return
+
         # Wave 4 Task 19: thinking_text → Collapsible mount (默 expand).
         if ev_type == "thinking_text":
             await self._mount_thinking(content if isinstance(content, str) else "")
@@ -934,6 +1221,61 @@ class ExplainChatApp(App):
                 return
             await self._switch_to_chat_session({"sid": sid})
         self.run_worker(_switch(), name="picker_switch_session")
+
+    # ─── Phase 20.4: LLM provider 热重载 ───
+    def _on_llm_config_closed(self, changed: bool | None) -> None:
+        """LLMConfigScreen dismiss callback — 改过配置则热重载 (sync callback)。
+
+        改 LLM 配置后 active profile 变了, 需用新配置重建 client。run_worker
+        启 async worker (跟 _on_session_picked 同 pattern, callback 瞬返不阻
+        message pump)。
+        """
+        if not changed:
+            return
+        self.run_worker(self._reload_and_notify(), name="llm_hot_reload")
+
+    async def _reload_and_notify(self) -> None:
+        await self._reload_llm_clients()
+        from explain_engine.llm.llm_config import LLMConfigStore
+
+        active = LLMConfigStore().load().active
+        if active:
+            await self._write(
+                f"[green]✓ 已切换 LLM provider → [/green][cyan]{active}[/cyan]"
+                f"[green], 当前 session 立即生效。[/green]"
+            )
+        else:
+            await self._write(
+                "[green]✓ LLM 配置已更新 (无 active profile, 回退 .env)。[/green]"
+            )
+
+    async def _reload_llm_clients(self) -> None:
+        """用最新配置 (active profile / env) 重建 app.llm + light_llm + chat.llm。
+
+        in-flight chat task 仍持旧 client 引用跑完 (无需中断); 新 turn 由
+        _consume_chat_events 传 self.llm → 自动用新 client。chat.llm 同步更新
+        让 slash handler (e.g. /deepen promote) 也用新 client。
+        """
+        from explain_engine.config import make_light_llm_client, make_llm_client
+
+        try:
+            new_main = make_llm_client()
+        except Exception as exc:
+            await self._write_styled(
+                "[red]LLM 重建失败 (配置无效?): [/red]",
+                f"{type(exc).__name__}: {exc}",
+                suffix_style="red",
+            )
+            return
+        try:
+            new_light = make_light_llm_client()
+        except Exception:
+            # light 构造失败不致命 — 退回用主 client (跟 with_light_fallback 语义)
+            new_light = new_main
+        self.llm = new_main
+        self.light_llm = new_light
+        # chat var (ephemeral / ChatSession) 的 llm 引用同步
+        self.chat.llm = new_main
 
     # ─── Chat var 切换 helper (Task 15) ───
     async def _switch_to_chat_session(self, metadata: dict) -> None:

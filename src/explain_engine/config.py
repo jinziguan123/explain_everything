@@ -92,12 +92,61 @@ class Settings(BaseSettings):
     default_budget: int = Field(default=20, ge=1)
 
 
+def _build_client(
+    *,
+    protocol: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    max_tokens: int | None,
+    structured_output_mode: str,
+    enable_thinking: bool,
+    read_timeout: float,
+) -> LLMClient:
+    """从已解析的配置 dict 构造 client (anthropic / openai 路由)。
+
+    Phase 20.4: 抽出来给 env 路径 + llm_config profile 路径共用 (DRY)。
+    enable_thinking / read_timeout 仍是 env 级 knob (LLM_THINKING_DISABLED /
+    LLM_READ_TIMEOUT_S), 不进 profile — 跟 provider 凭据正交。
+    """
+    if protocol == "anthropic":
+        return AnthropicProtocolClient(
+            api_key=api_key,
+            default_model=model,
+            base_url=base_url,
+            max_tokens=max_tokens,
+            enable_thinking=enable_thinking,
+            read_timeout=read_timeout,
+        )
+    if protocol == "openai":
+        if structured_output_mode not in ("json_schema", "json_object"):
+            raise ValueError(
+                f"structured_output_mode must be 'json_schema' or 'json_object', "
+                f"got {structured_output_mode!r}"
+            )
+        mode: Mode = structured_output_mode  # type: ignore[assignment]
+        return OpenAIProtocolClient(
+            api_key=api_key,
+            default_model=model,
+            base_url=base_url,
+            mode=mode,
+            max_tokens=max_tokens,
+            read_timeout=read_timeout,
+        )
+    raise ValueError(
+        f"Unknown protocol: {protocol!r}, must be 'anthropic' or 'openai'"
+    )
+
+
 def make_llm_client() -> LLMClient:
-    """按 LLM_PROTOCOL 路由到对应 client。
+    """构造主 LLM client。
+
+    Phase 20.4: 优先用 EXPLAIN_HOME/llm_config.json 的 active profile;
+    无 (文件缺 / active=None) → fallback 现有 .env / env 路径 (向后兼容)。
 
     自动加载 .env (override=False, 已设的 env var 优先 — 让 test monkeypatch 生效)。
 
-    必填 env:
+    必填 env (无 active profile 时):
       - LLM_PROTOCOL: 'anthropic' 或 'openai'
       - LLM_BASE_URL: API 入口 (e.g. https://api.anthropic.com)
       - LLM_API_KEY:  API key
@@ -117,6 +166,24 @@ def make_llm_client() -> LLMClient:
       - LLM_STRUCTURED_OUTPUT_MODE: 仅 openai 协议. 'json_schema' (默认)
         或 'json_object' (DeepSeek 等不支持 json_schema strict 的 vendor 用).
     """
+    enable_thinking = _read_thinking_enabled()
+    # Phase 20.0 Layer A: LLM_READ_TIMEOUT_S env knob (default 120.0s) 防
+    # streaming chunk gap 永等. 透传给 protocol client → AsyncAnthropic/OpenAI
+    # httpx.Timeout(read=...).
+    read_timeout = _read_read_timeout_env()
+
+    # Phase 20.4: active profile 优先 (用户在 app 内管理的配置)。
+    from explain_engine.llm.llm_config import LLMConfigStore
+
+    profile = LLMConfigStore().active_profile()
+    if profile is not None:
+        return _build_client(
+            **profile.main_config(),
+            enable_thinking=enable_thinking,
+            read_timeout=read_timeout,
+        )
+
+    # 无 active profile → 现有 env 路径 (向后兼容)。
     load_dotenv(override=False)
     try:
         proto = os.environ["LLM_PROTOCOL"]
@@ -142,44 +209,16 @@ def make_llm_client() -> LLMClient:
                 f"LLM_MAX_TOKENS must be a positive integer, got {max_tokens_env!r}: {exc}"
             ) from exc
 
-    enable_thinking = _read_thinking_enabled()
-
-    # Phase 20.0 Layer A: LLM_READ_TIMEOUT_S env knob (default 120.0s) 防
-    # streaming chunk gap 永等. 透传给 protocol client → AsyncAnthropic/OpenAI
-    # httpx.Timeout(read=...). Task 1 follow-up: 抽 _read_read_timeout_env()
-    # 集中 validation (跟 LLM_MAX_TOKENS pattern 对齐).
-    read_timeout = _read_read_timeout_env()
-
-    if proto == "anthropic":
-        return AnthropicProtocolClient(
-            api_key=api_key,
-            default_model=model,
-            base_url=base_url,
-            max_tokens=max_tokens,
-            enable_thinking=enable_thinking,
-            read_timeout=read_timeout,
-        )
-    if proto == "openai":
-        mode_str = os.environ.get("LLM_STRUCTURED_OUTPUT_MODE", "json_schema")
-        if mode_str not in ("json_schema", "json_object"):
-            raise ValueError(
-                f"LLM_STRUCTURED_OUTPUT_MODE must be 'json_schema' or 'json_object', "
-                f"got {mode_str!r}"
-            )
-        mode: Mode = mode_str  # type: ignore[assignment]
-        # Phase 19 Task 5: openai 协议不接 enable_thinking 构造参 — vendor
-        # reasoning_content 由 vendor 控, 客户端无 disable. LLM_THINKING_DISABLED
-        # 仅影响 anthropic 是否传 thinking call_kwargs.
-        return OpenAIProtocolClient(
-            api_key=api_key,
-            default_model=model,
-            base_url=base_url,
-            mode=mode,
-            max_tokens=max_tokens,
-            read_timeout=read_timeout,
-        )
-    raise ValueError(
-        f"Unknown LLM_PROTOCOL: {proto!r}, must be 'anthropic' or 'openai'"
+    mode_str = os.environ.get("LLM_STRUCTURED_OUTPUT_MODE", "json_schema")
+    return _build_client(
+        protocol=proto,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        max_tokens=max_tokens,
+        structured_output_mode=mode_str,
+        enable_thinking=enable_thinking,
+        read_timeout=read_timeout,
     )
 
 
@@ -197,7 +236,24 @@ def make_light_llm_client() -> LLMClient:
 
     可选: LLM_LIGHT_PROTOCOL / LLM_LIGHT_BASE_URL / LLM_LIGHT_API_KEY /
     LLM_LIGHT_MODEL / LLM_LIGHT_MAX_TOKENS.
+
+    Phase 20.4: active profile 优先 — profile 的 light_* 缺省 fallback 该 profile
+    主字段 (跟 LLM_LIGHT_* fallback LLM_* 语义一致)。无 active profile → env 路径。
     """
+    enable_thinking = _read_thinking_enabled()
+    read_timeout = _read_read_timeout_env()
+
+    # Phase 20.4: active profile 优先。
+    from explain_engine.llm.llm_config import LLMConfigStore
+
+    profile = LLMConfigStore().active_profile()
+    if profile is not None:
+        return _build_client(
+            **profile.light_config(),
+            enable_thinking=enable_thinking,
+            read_timeout=read_timeout,
+        )
+
     load_dotenv(override=False)
     try:
         proto = os.environ.get("LLM_LIGHT_PROTOCOL") or os.environ["LLM_PROTOCOL"]
@@ -230,43 +286,21 @@ def make_light_llm_client() -> LLMClient:
                 f"got {max_tokens_env!r}: {exc}"
             ) from exc
 
-    # Phase 19 Task 5: light client 跟主 LLM 共享 LLM_THINKING_DISABLED env
-    # (无 LLM_LIGHT_THINKING_DISABLED 独立 knob — light model 一般给 cheap task
-    # 用, thinking 配置统一即可).
-    enable_thinking = _read_thinking_enabled()
-
-    # Phase 20.0 Layer A: LLM_READ_TIMEOUT_S 共享主 LLM knob (无 LIGHT 独立
-    # knob — 防 streaming chunk gap 永等, light client 同款受益). Task 1
-    # follow-up: 跟 make_llm_client 同一个 _read_read_timeout_env() helper
-    # (DRY, validation 单点维护).
-    read_timeout = _read_read_timeout_env()
-
-    if proto == "anthropic":
-        return AnthropicProtocolClient(
-            api_key=api_key,
-            default_model=model,
+    mode_str = os.environ.get("LLM_STRUCTURED_OUTPUT_MODE", "json_schema")
+    try:
+        return _build_client(
+            protocol=proto,
             base_url=base_url,
+            api_key=api_key,
+            model=model,
             max_tokens=max_tokens,
+            structured_output_mode=mode_str,
             enable_thinking=enable_thinking,
             read_timeout=read_timeout,
         )
-    if proto == "openai":
-        mode_str = os.environ.get("LLM_STRUCTURED_OUTPUT_MODE", "json_schema")
-        if mode_str not in ("json_schema", "json_object"):
-            raise ValueError(
-                f"LLM_STRUCTURED_OUTPUT_MODE must be 'json_schema' or 'json_object', "
-                f"got {mode_str!r}"
-            )
-        mode: Mode = mode_str  # type: ignore[assignment]
-        return OpenAIProtocolClient(
-            api_key=api_key,
-            default_model=model,
-            base_url=base_url,
-            mode=mode,
-            max_tokens=max_tokens,
-            read_timeout=read_timeout,
-        )
-    raise ValueError(
-        f"Unknown LLM_LIGHT_PROTOCOL (or LLM_PROTOCOL): {proto!r}, "
-        f"must be 'anthropic' or 'openai'"
-    )
+    except ValueError as exc:
+        # 保留原 LIGHT-specific 错误措辞 (proto 来自 LLM_LIGHT_PROTOCOL or LLM_PROTOCOL)
+        raise ValueError(
+            f"Unknown LLM_LIGHT_PROTOCOL (or LLM_PROTOCOL): {proto!r}, "
+            f"must be 'anthropic' or 'openai'"
+        ) from exc
