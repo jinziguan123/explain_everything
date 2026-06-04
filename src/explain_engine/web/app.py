@@ -11,4 +11,7 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    from explain_engine.web.routes_sessions import router as sessions_router
+    app.include_router(sessions_router)
+
     return app
