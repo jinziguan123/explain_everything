@@ -9,6 +9,13 @@ from typing import Any
 from explain_engine.chat.session import ChatEvent
 
 _locks: dict[str, asyncio.Lock] = {}
+"""进程级 per-sid 锁表.
+
+假设单事件循环 (uvicorn 生产即如此): asyncio.Lock 绑定到首次 await 时的 loop,
+跨 loop 复用会抛 'Future attached to a different loop'. 测试里每个 TestClient
+请求可能起新 loop, 故 tests/web/conftest.py 用 autouse fixture 在每个 test 前
+清空本表, 避免跨 loop 复用导致的 flaky。本地单用户单 loop 场景无此问题。
+"""
 
 
 def sid_lock(sid: str) -> asyncio.Lock:

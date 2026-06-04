@@ -48,3 +48,10 @@ def test_chat_sse_error_event(monkeypatch):
     ) as resp:
         body = "".join(resp.iter_text())
     assert "error" in body
+
+
+def test_chat_missing_session_404():
+    """缺失 session → 出 200 流之前转 404 (对齐 A3/A4 的 _load_chat 404 模式)."""
+    client = TestClient(create_app())
+    resp = client.post("/api/sessions/s_00000000/chat", json={"message": "hi"})
+    assert resp.status_code == 404

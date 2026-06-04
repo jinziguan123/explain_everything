@@ -6,20 +6,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from explain_engine.chat.session import ChatSession
 from explain_engine.config import Settings
 from explain_engine.persistence.session import Session, SessionMeta, SessionStore
 from explain_engine.schema.state import CognitiveState
+from explain_engine.web.deps import load_chat_or_404
 from explain_engine.web.serializers import graph_to_cytoscape
 
 router = APIRouter(prefix="/api/sessions")
-
-
-def _load_chat(sid: str) -> ChatSession:
-    try:
-        return ChatSession(sid)
-    except Exception as exc:  # FileNotFoundError / ChatSessionLoadError 等
-        raise HTTPException(status_code=404, detail=f"session {sid} 不可用: {exc}") from exc
 
 
 class CreateSessionBody(BaseModel):
@@ -60,7 +53,7 @@ async def list_sessions() -> list[dict[str, Any]]:
 
 @router.get("/{sid}")
 async def get_session(sid: str) -> dict[str, Any]:
-    chat = _load_chat(sid)
+    chat = load_chat_or_404(sid)
     meta = chat._session.meta
     graph = chat.state.graph
     return {
@@ -75,11 +68,11 @@ async def get_session(sid: str) -> dict[str, Any]:
 
 @router.get("/{sid}/graph")
 async def get_graph(sid: str) -> dict[str, Any]:
-    chat = _load_chat(sid)
+    chat = load_chat_or_404(sid)
     return graph_to_cytoscape(chat.state.graph)
 
 
 @router.get("/{sid}/transcript")
 async def get_transcript(sid: str) -> list[dict[str, Any]]:
-    chat = _load_chat(sid)
+    chat = load_chat_or_404(sid)
     return chat.transcript
