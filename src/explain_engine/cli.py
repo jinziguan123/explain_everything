@@ -1459,5 +1459,18 @@ def migrate_lexicon_pg_cmd(
     console.print(f"[green]Migration:[/green] {result}")
 
 
+@app.command()
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8800,
+) -> None:
+    """启动本地 Web 服务 (浏览器访问 http://127.0.0.1:8800)."""
+    import uvicorn
+
+    from explain_engine.web.app import create_app
+
+    uvicorn.run(create_app(), host=host, port=port)
+
+
 if __name__ == "__main__":
     app()
