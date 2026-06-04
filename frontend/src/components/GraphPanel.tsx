@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import cytoscape from "cytoscape";
-import dagre from "cytoscape-dagre";
 import { getGraph } from "../api/client";
 import NodeDrawer from "./NodeDrawer";
 import type { NodeData } from "./NodeDrawer";
@@ -21,75 +20,72 @@ interface GraphPayload {
   };
 }
 
-// 防止 dagre 在热重载 / 多实例下重复注册
-let dagreRegistered = false;
-function registerDagre() {
-  if (dagreRegistered) return;
-  try {
-    cytoscape.use(dagre);
-  } catch {
-    // 已注册时 cytoscape 会抛 warning/throw, 忽略即可
-  }
-  dagreRegistered = true;
-}
-
 // 按层级着色: 0 现象 / 1 模式 / 2 深层原因
 const LEVEL_COLORS: Record<string, string> = {
   "0": "#4f9da6",
-  "1": "#c98a3a",
+  "1": "#e0a458",
   "2": "#9b5de5",
 };
 
+// Obsidian 风格: 力导向(cose) + 圆形节点 + 标签在下 + 悬停高亮邻居
 const cyStyle: cytoscape.StylesheetStyle[] = [
   {
     selector: "node",
     style: {
       label: "data(label)",
-      "background-color": "#888",
-      color: "#fff",
-      "text-valign": "center",
+      shape: "ellipse",
+      width: 22,
+      height: 22,
+      "background-color": "#8a8a8a",
+      "border-width": 0,
+      // 标签在节点下方 (Obsidian 风格)
+      color: "#c9d1d9",
+      "font-size": "10px",
+      "text-valign": "bottom",
       "text-halign": "center",
+      "text-margin-y": 4,
       "text-wrap": "wrap",
       "text-max-width": "120px",
-      "font-size": "11px",
-      shape: "round-rectangle",
-      width: "label",
-      height: "label",
-      padding: "8px",
+      "text-outline-color": "#0d1117",
+      "text-outline-width": 2,
     },
   },
-  {
-    selector: 'node[level = 0]',
-    style: { "background-color": LEVEL_COLORS["0"] },
-  },
-  {
-    selector: 'node[level = 1]',
-    style: { "background-color": LEVEL_COLORS["1"] },
-  },
-  {
-    selector: 'node[level = 2]',
-    style: { "background-color": LEVEL_COLORS["2"] },
-  },
-  {
-    selector: 'node[lifecycle = "decayed"]',
-    style: { opacity: 0.4 },
-  },
+  { selector: "node[level = 0]", style: { "background-color": LEVEL_COLORS["0"] } },
+  { selector: "node[level = 1]", style: { "background-color": LEVEL_COLORS["1"], width: 28, height: 28 } },
+  { selector: "node[level = 2]", style: { "background-color": LEVEL_COLORS["2"], width: 34, height: 34 } },
+  { selector: 'node[lifecycle = "decayed"]', style: { opacity: 0.35 } },
   {
     selector: "edge",
     style: {
-      width: "mapData(confidence, 0, 1, 1, 6)",
-      "line-color": "#bbb",
-      "target-arrow-color": "#bbb",
+      width: "mapData(confidence, 0, 1, 1, 4)",
+      "line-color": "#3b434d",
+      "target-arrow-color": "#3b434d",
       "target-arrow-shape": "triangle",
+      "arrow-scale": 0.8,
       "curve-style": "bezier",
       "line-style": "solid",
+      opacity: 0.8,
     },
   },
+  { selector: 'edge[relation = "manifests_as"]', style: { "line-style": "dashed" } },
+  // 悬停高亮: 非邻域淡出
+  { selector: ".faded", style: { opacity: 0.12, "text-opacity": 0.12 } },
   {
-    selector: 'edge[relation = "manifests_as"]',
-    style: { "line-style": "dashed" },
+    selector: ".hl-node",
+    style: { "border-width": 3, "border-color": "#ffd166" },
   },
 ];
+
+const COSE_LAYOUT = {
+  name: "cose",
+  animate: false,
+  padding: 30,
+  idealEdgeLength: 90,
+  nodeRepulsion: 9000,
+  nodeOverlap: 16,
+  gravity: 0.3,
+  randomize: false,
+} as unknown as cytoscape.LayoutOptions;
 
 export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -114,17 +110,12 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
     const container = containerRef.current;
     if (!container || !hasNodes) return;
 
-    registerDagre();
-
     const cy = cytoscape({
       container,
       elements: { nodes, edges },
       style: cyStyle,
-      // dagre 的 rankDir 不在 @types/cytoscape 的 BaseLayoutOptions 里, 这里断言
-      layout: {
-        name: "dagre",
-        rankDir: "BT",
-      } as unknown as cytoscape.LayoutOptions,
+      layout: COSE_LAYOUT,
+      wheelSensitivity: 0.2,
     });
     cyRef.current = cy;
 
@@ -134,6 +125,17 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
     // 点击空白处关闭抽屉
     cy.on("tap", (evt) => {
       if (evt.target === cy) setSelected(null);
+    });
+    // Obsidian 风格悬停: 高亮当前节点 + 邻域, 其余淡出
+    cy.on("mouseover", "node", (evt) => {
+      const node = evt.target;
+      cy.elements().addClass("faded");
+      node.closedNeighborhood().removeClass("faded");
+      node.addClass("hl-node");
+    });
+    cy.on("mouseout", "node", (evt) => {
+      cy.elements().removeClass("faded");
+      evt.target.removeClass("hl-node");
     });
 
     return () => {

@@ -8,17 +8,51 @@ from pathlib import Path
 from fastapi import FastAPI
 
 
+def _pg_reachable(timeout: float = 1.5) -> bool:
+    """快速 TCP 探测 EXPLAIN_DB_URL 的 host:port 是否可连.
+
+    端口拒绝/无路由是瞬时或 timeout 内返回, 避免直接开连接池触发后台 worker
+    无限重连刷屏 + verify_connection 的 ~10s PoolTimeout 卡顿 (web 启动体验)。
+    解析失败/无法判断 → 返 True (交给 init_lexicon_backend 正常路径处理)。
+    """
+    import os
+    import socket
+    from urllib.parse import urlparse
+
+    dsn = os.environ.get("EXPLAIN_DB_URL", "postgresql://explain:changeme@127.0.0.1:5432/explain")
+    try:
+        parsed = urlparse(dsn)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 5432
+    except Exception:
+        return True
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # best-effort: 初始化 lexicon backend (PG 可达则反映 PG, 否则 JSON fallback).
-    # PG 不可达不致命 — dispatcher 默认走 JSON (variables.json)。
-    # PG 回退后关掉 async 池, 否则其后台 worker 会无限重连刷屏 (pool-1 error)。
+    # best-effort: 初始化 lexicon backend (PG 可达则反映 PG, 否则 JSON fallback)。
+    # 先做快速 TCP 探测: PG 端口不可达就直接走 JSON, 不开连接池 —— 避免 psycopg
+    # 池后台 worker 刷屏 + 10s PoolTimeout 卡顿。PG 不可达不致命 (dispatcher 默认
+    # JSON, variables.json)。探测通过才走完整 init; init 仍失败则关池兜底。
+    import logging
+
     try:
-        from explain_engine.engines.lexicon import init_lexicon_backend
-        active = await init_lexicon_backend()
-        if not active:
-            from explain_engine.persistence.lexicon_pg import close_async_pool
-            await close_async_pool()
+        if _pg_reachable():
+            from explain_engine.engines.lexicon import init_lexicon_backend
+            active = await init_lexicon_backend()
+            if not active:
+                from explain_engine.persistence.lexicon_pg import close_async_pool
+                await close_async_pool()
+        else:
+            logging.getLogger("explain_engine.web").info(
+                "lexicon backend: PG 端口不可达 (TCP 探测), 走本机 JSON。"
+                "如需全局知识数据, 先起 PG 再重启 serve。"
+            )
     except Exception:
         pass
     yield

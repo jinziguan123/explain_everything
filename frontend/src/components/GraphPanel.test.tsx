@@ -95,11 +95,11 @@ describe("GraphPanel", () => {
 
     const opts = instances[0].opts as {
       elements: { nodes: { data: { id: string } }[] };
-      layout: { name: string; rankDir: string };
+      layout: { name: string };
     };
     expect(opts.elements.nodes[0].data.id).toBe("c_001");
-    // dagre BT 布局: L0 在底部
-    expect(opts.layout).toMatchObject({ name: "dagre", rankDir: "BT" });
+    // Obsidian 风格力导向布局
+    expect(opts.layout).toMatchObject({ name: "cose" });
   });
 
   it("空图谱显示友好空状态且不初始化 cytoscape", async () => {
