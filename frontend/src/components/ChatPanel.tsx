@@ -1,0 +1,284 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import { streamChat } from "../api/chatStream";
+import type { SSEEvent } from "../api/chatStream";
+import "./ChatPanel.css";
+
+export interface ChatPanelProps {
+  sid: string;
+  /** 父组件用来刷新图谱 (A11) */
+  onTurnComplete?: () => void;
+}
+
+interface ToolChip {
+  id: number;
+  name: string;
+  done: boolean;
+}
+
+interface AssistantMessage {
+  role: "assistant";
+  /** markdown 正文 */
+  text: string;
+  /** 折叠的思考过程 */
+  thinking: string;
+  tools: ToolChip[];
+  error: string | null;
+  notice: string | null;
+}
+
+interface UserMessage {
+  role: "user";
+  text: string;
+}
+
+type ChatMessage = UserMessage | AssistantMessage;
+
+function emptyAssistant(): AssistantMessage {
+  return {
+    role: "assistant",
+    text: "",
+    thinking: "",
+    tools: [],
+    error: null,
+    notice: null,
+  };
+}
+
+/** 从 SSE payload 里尽量解析出工具名 */
+function toolName(content: unknown, metadata: unknown): string {
+  if (typeof content === "string" && content.trim()) return content;
+  if (content && typeof content === "object") {
+    const c = content as Record<string, unknown>;
+    if (typeof c.name === "string") return c.name;
+    if (typeof c.tool === "string") return c.tool;
+  }
+  if (metadata && typeof metadata === "object") {
+    const m = metadata as Record<string, unknown>;
+    if (typeof m.name === "string") return m.name;
+    if (typeof m.tool === "string") return m.tool;
+  }
+  return "工具";
+}
+
+function asString(content: unknown): string {
+  return typeof content === "string" ? content : "";
+}
+
+export default function ChatPanel({ sid, onTurnComplete }: ChatPanelProps) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const abortRef = useRef<AbortController | null>(null);
+  const toolIdRef = useRef(0);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  // 自动滚到底部
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, status]);
+
+  // 卸载时中断进行中的请求
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
+
+  /** 修改最后一条 assistant 消息 */
+  const patchLastAssistant = useCallback(
+    (fn: (m: AssistantMessage) => AssistantMessage) => {
+      setMessages((prev) => {
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].role === "assistant") {
+            const next = prev.slice();
+            next[i] = fn(prev[i] as AssistantMessage);
+            return next;
+          }
+        }
+        return prev;
+      });
+    },
+    [],
+  );
+
+  const handleEvent = useCallback(
+    (ev: SSEEvent) => {
+      const { content, metadata } = ev.data;
+      switch (ev.event) {
+        case "assistant_text_delta":
+          patchLastAssistant((m) => ({ ...m, text: m.text + asString(content) }));
+          break;
+        case "thinking_delta":
+          patchLastAssistant((m) => ({
+            ...m,
+            thinking: m.thinking + asString(content),
+          }));
+          break;
+        case "tool_use": {
+          const id = ++toolIdRef.current;
+          patchLastAssistant((m) => ({
+            ...m,
+            tools: [...m.tools, { id, name: toolName(content, metadata), done: false }],
+          }));
+          break;
+        }
+        case "tool_result":
+          patchLastAssistant((m) => {
+            const tools = m.tools.slice();
+            for (let i = tools.length - 1; i >= 0; i--) {
+              if (!tools[i].done) {
+                tools[i] = { ...tools[i], done: true };
+                break;
+              }
+            }
+            return { ...m, tools };
+          });
+          break;
+        case "status_start":
+          setStatus(asString(content) || "处理中…");
+          break;
+        case "status_end":
+          setStatus(null);
+          break;
+        case "turn_complete":
+          setStreaming(false);
+          setStatus(null);
+          onTurnComplete?.();
+          break;
+        case "budget_exhausted":
+          patchLastAssistant((m) => ({
+            ...m,
+            notice: asString(content) || "预算已用尽，本轮提前结束。",
+          }));
+          setStreaming(false);
+          setStatus(null);
+          break;
+        case "error":
+          patchLastAssistant((m) => ({
+            ...m,
+            error: asString(content) || "发生错误。",
+          }));
+          setStreaming(false);
+          setStatus(null);
+          break;
+        default:
+          break;
+      }
+    },
+    [patchLastAssistant, onTurnComplete],
+  );
+
+  const send = useCallback(async () => {
+    const text = input.trim();
+    if (!text || streaming) return;
+
+    setInput("");
+    setMessages((prev) => [...prev, { role: "user", text }, emptyAssistant()]);
+    setStreaming(true);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      await streamChat(sid, text, handleEvent, controller.signal);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // 用户主动停止，静默处理
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        patchLastAssistant((m) => ({ ...m, error: `请求失败：${msg}` }));
+      }
+    } finally {
+      // turn_complete 没来时兜底（如网络断开）
+      setStreaming(false);
+      setStatus(null);
+      abortRef.current = null;
+    }
+  }, [input, streaming, sid, handleEvent, patchLastAssistant]);
+
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
+    setStatus(null);
+  }, []);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      void send();
+    }
+  };
+
+  return (
+    <div className="chat-panel">
+      <div className="chat-messages" ref={listRef}>
+        {messages.map((m, i) =>
+          m.role === "user" ? (
+            <div key={i} className="chat-msg chat-msg-user">
+              <div className="chat-bubble">{m.text}</div>
+            </div>
+          ) : (
+            <div key={i} className="chat-msg chat-msg-assistant">
+              <div className="chat-bubble">
+                {m.thinking && (
+                  <details className="chat-thinking">
+                    <summary>思考过程</summary>
+                    <pre>{m.thinking}</pre>
+                  </details>
+                )}
+                {m.tools.length > 0 && (
+                  <div className="chat-tools">
+                    {m.tools.map((t) => (
+                      <span
+                        key={t.id}
+                        className={`chat-tool-chip${t.done ? " done" : ""}`}
+                      >
+                        {t.done ? "✅" : <span className="chat-spinner">⏳</span>} 🔧{" "}
+                        {t.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {m.text && (
+                  <div className="chat-markdown">
+                    <ReactMarkdown>{m.text}</ReactMarkdown>
+                  </div>
+                )}
+                {m.notice && <div className="chat-notice">{m.notice}</div>}
+                {m.error && <div className="chat-error">{m.error}</div>}
+              </div>
+            </div>
+          ),
+        )}
+        {status && <div className="chat-status">{status}</div>}
+      </div>
+
+      <div className="chat-input-row">
+        <textarea
+          className="chat-input"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="输入消息，回车发送（Shift+回车换行）"
+          rows={2}
+        />
+        {streaming ? (
+          <button className="chat-btn chat-btn-stop" onClick={stop}>
+            停止
+          </button>
+        ) : (
+          <button
+            className="chat-btn chat-btn-send"
+            onClick={() => void send()}
+            disabled={!input.trim()}
+          >
+            发送
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
