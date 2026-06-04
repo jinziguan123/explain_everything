@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createSession, listSessions } from "../api/client";
 import type { SessionSummary } from "../api/client";
@@ -8,6 +7,9 @@ export interface SessionSidebarProps {
   selectedSid: string | null;
   onSelect: (sid: string) => void;
 }
+
+/** 新建 session 的默认标题 (无需用户预输入; 时间在列表项另行展示以区分)。 */
+const NEW_SESSION_TITLE = "新会话";
 
 /** Unix 秒时间戳 → 本地可读时间; 非法值回退为空串。 */
 function formatTs(ts: number): string {
@@ -20,7 +22,6 @@ export default function SessionSidebar({
   onSelect,
 }: SessionSidebarProps) {
   const queryClient = useQueryClient();
-  const [question, setQuestion] = useState("");
 
   const { data: sessions, isLoading, isError, error } = useQuery<
     SessionSummary[]
@@ -30,39 +31,26 @@ export default function SessionSidebar({
   });
 
   const createMut = useMutation({
-    mutationFn: (q: string) => createSession(q),
+    mutationFn: () => createSession(NEW_SESSION_TITLE),
     onSuccess: async (res) => {
-      setQuestion("");
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      onSelect(res.sid);
+      onSelect(res.sid); // 选中新 session → ChatPanel(key=sid) 重挂 → 聊天清空
     },
   });
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const q = question.trim();
-    if (!q || createMut.isPending) return;
-    createMut.mutate(q);
-  };
-
   return (
     <aside className="session-sidebar">
-      <form className="session-new" onSubmit={submit}>
-        <input
-          className="session-new-input"
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          placeholder="想搞懂的问题…"
-          aria-label="新建 session 的问题"
-        />
-        <button
-          className="session-new-btn"
-          type="submit"
-          disabled={!question.trim() || createMut.isPending}
-        >
-          新建
-        </button>
-      </form>
+      {/* 纯 + 长条按钮: 点击直接新建空 session (类似 TUI /new), 不预输入问题 */}
+      <button
+        className="session-new-btn"
+        type="button"
+        onClick={() => !createMut.isPending && createMut.mutate()}
+        disabled={createMut.isPending}
+        title="新建会话"
+        aria-label="新建会话"
+      >
+        ＋
+      </button>
       {createMut.isError && (
         <div className="session-error">
           创建失败：

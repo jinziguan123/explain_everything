@@ -331,27 +331,36 @@ export default function ChatPanel({ sid, onTurnComplete }: ChatPanelProps) {
       </div>
 
       <div className="chat-input-row">
-        <textarea
-          className="chat-input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="输入消息，回车发送（Shift+回车换行）"
-          rows={2}
-        />
-        {streaming ? (
-          <button className="chat-btn chat-btn-stop" onClick={stop}>
-            停止
-          </button>
-        ) : (
-          <button
-            className="chat-btn chat-btn-send"
-            onClick={() => void send()}
-            disabled={!input.trim()}
-          >
-            发送
-          </button>
-        )}
+        <div className="chat-input-wrap">
+          <textarea
+            className="chat-input"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="输入消息，回车发送（Shift+回车换行）"
+            rows={2}
+          />
+          {streaming ? (
+            <button
+              className="chat-icon-btn chat-icon-stop"
+              onClick={stop}
+              title="停止"
+              aria-label="停止"
+            >
+              ◼
+            </button>
+          ) : (
+            <button
+              className="chat-icon-btn chat-icon-send"
+              onClick={() => void send()}
+              disabled={!input.trim()}
+              title="发送（回车）"
+              aria-label="发送"
+            >
+              ↵
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

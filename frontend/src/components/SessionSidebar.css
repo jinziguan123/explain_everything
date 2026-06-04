@@ -6,54 +6,29 @@
   background: var(--surface-2);
 }
 
-.session-new {
-  display: flex;
-  gap: 8px;
-  padding: 14px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.session-new-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 8px 10px;
-  font-size: 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text);
-  outline: none;
-  transition: border-color var(--dur) var(--ease),
-    box-shadow var(--dur) var(--ease);
-}
-
-.session-new-input::placeholder {
-  color: var(--text-subtle);
-}
-
-.session-new-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--ring);
-}
-
+/* 新建: 整条 + 号按钮 (虚线描边, 极简; hover 实线变黑) */
 .session-new-btn {
-  flex: 0 0 auto;
-  padding: 6px 12px;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.2;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--accent-contrast);
+  display: block;
+  width: calc(100% - 24px);
+  margin: 12px;
+  padding: 9px 0;
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-muted);
   cursor: pointer;
-  transition: background var(--dur) var(--ease),
-    transform var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease),
-    opacity var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), transform var(--dur-fast) var(--ease);
 }
 
 .session-new-btn:hover:not(:disabled) {
-  box-shadow: var(--shadow-sm);
+  border-color: var(--accent);
+  border-style: solid;
+  color: var(--text);
+  background: var(--surface-2);
 }
 
 .session-new-btn:active:not(:disabled) {
@@ -61,7 +36,7 @@
 }
 
 .session-new-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 

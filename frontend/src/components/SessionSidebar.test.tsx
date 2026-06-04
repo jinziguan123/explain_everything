@@ -75,7 +75,7 @@ describe("SessionSidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("s_2");
   });
 
-  it("提交新建表单调用 createSession 并自动选中新 sid", async () => {
+  it("点击 + 按钮直接新建 session 并自动选中 (无需预输入问题)", async () => {
     mockList.mockResolvedValue(SESSIONS);
     mockCreate.mockResolvedValue({ sid: "s_new" });
     const onSelect = vi.fn();
@@ -83,13 +83,9 @@ describe("SessionSidebar", () => {
 
     await waitFor(() => expect(mockList).toHaveBeenCalled());
 
-    const input = screen.getByLabelText("新建 session 的问题");
-    fireEvent.change(input, { target: { value: "意识从何而来" } });
-    fireEvent.click(screen.getByRole("button", { name: "新建" }));
+    fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
 
-    await waitFor(() =>
-      expect(mockCreate).toHaveBeenCalledWith("意识从何而来"),
-    );
+    await waitFor(() => expect(mockCreate).toHaveBeenCalled());
     await waitFor(() => expect(onSelect).toHaveBeenCalledWith("s_new"));
   });
 

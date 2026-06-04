@@ -170,16 +170,21 @@
 
 .chat-input-row {
   display: flex;
-  gap: 10px;
   padding: 14px 16px;
   border-top: 1px solid var(--border);
   background: var(--surface);
+}
+/* 输入框容器: 相对定位, 让回车/停止图标浮在右下角 */
+.chat-input-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
 }
 
 .chat-input {
   flex: 1;
   resize: none;
-  padding: 10px 12px;
+  padding: 10px 44px 10px 12px; /* 右留白给图标 */
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--surface);
@@ -197,39 +202,40 @@
   box-shadow: 0 0 0 3px var(--ring);
 }
 
-.chat-btn {
-  padding: 6px 12px;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.2;
-  border: 1px solid transparent;
+/* 输入框内右下角的透明图标按钮 (↵ 回车发送 / ◼ 停止) */
+.chat-icon-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
   border-radius: var(--radius-sm);
+  color: var(--text-subtle);
+  font-size: 16px;
+  line-height: 1;
   cursor: pointer;
   font-family: inherit;
-  transition: background var(--dur) var(--ease),
-    color var(--dur) var(--ease), border-color var(--dur) var(--ease),
-    transform var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease),
-    opacity var(--dur) var(--ease);
+  transition: color var(--dur) var(--ease),
+    background var(--dur) var(--ease), opacity var(--dur) var(--ease),
+    transform var(--dur-fast) var(--ease);
 }
-.chat-btn:hover:not(:disabled) {
-  box-shadow: var(--shadow-sm);
-}
-.chat-btn:active:not(:disabled) {
-  transform: translateY(1px) scale(0.99);
-}
-.chat-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* 发送: 黑色实心 */
-.chat-btn-send {
-  background: var(--accent);
-  color: var(--accent-contrast);
-}
-/* 停止: 描边 */
-.chat-btn-stop {
-  background: var(--surface);
+.chat-icon-btn:hover:not(:disabled) {
   color: var(--text);
-  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+.chat-icon-btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.96);
+}
+.chat-icon-send:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.chat-icon-stop {
+  color: var(--text);
 }
