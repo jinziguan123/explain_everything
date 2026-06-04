@@ -57,13 +57,19 @@
   color: #b91c1c;
 }
 
+/* 列表项容器: 承载入场动画 + 删除按钮定位 */
+.session-item-wrap {
+  position: relative;
+  margin-bottom: 4px;
+  animation: fadeInUp var(--dur-slow) var(--ease) both;
+}
+
 .session-item {
   position: relative;
   display: block;
   width: 100%;
   text-align: left;
-  padding: 10px 12px;
-  margin-bottom: 4px;
+  padding: 10px 28px 10px 12px; /* 右留白给删除按钮 */
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: transparent;
@@ -72,7 +78,36 @@
   overflow: hidden;
   transition: background var(--dur) var(--ease),
     transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
-  animation: fadeInUp var(--dur-slow) var(--ease) both;
+}
+
+/* 删除按钮: 默认隐藏, hover 整项时浮现于右上 */
+.session-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+.session-item-wrap:hover .session-del {
+  opacity: 1;
+}
+.session-del:hover {
+  color: #b91c1c;
+  background: var(--surface);
 }
 
 .session-item::before {
@@ -89,22 +124,22 @@
   transition: transform var(--dur) var(--ease);
 }
 
-.session-item:nth-child(1) {
+.session-item-wrap:nth-child(1) {
   animation-delay: 0ms;
 }
-.session-item:nth-child(2) {
+.session-item-wrap:nth-child(2) {
   animation-delay: 40ms;
 }
-.session-item:nth-child(3) {
+.session-item-wrap:nth-child(3) {
   animation-delay: 80ms;
 }
-.session-item:nth-child(4) {
+.session-item-wrap:nth-child(4) {
   animation-delay: 120ms;
 }
-.session-item:nth-child(5) {
+.session-item-wrap:nth-child(5) {
   animation-delay: 160ms;
 }
-.session-item:nth-child(6) {
+.session-item-wrap:nth-child(6) {
   animation-delay: 200ms;
 }
 

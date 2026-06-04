@@ -30,6 +30,11 @@ export async function getTranscript(sid: string): Promise<TranscriptEntry[]> {
   return r.json();
 }
 
+export async function deleteSession(sid: string): Promise<void> {
+  const r = await fetch(`/api/sessions/${sid}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`deleteSession ${r.status}`);
+}
+
 export async function createSession(question: string): Promise<{ sid: string }> {
   const r = await fetch("/api/sessions", {
     method: "POST",

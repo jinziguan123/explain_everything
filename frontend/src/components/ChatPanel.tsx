@@ -10,6 +10,8 @@ export interface ChatPanelProps {
   sid: string;
   /** 父组件用来刷新图谱 (A11) */
   onTurnComplete?: () => void;
+  /** 告知父组件当前会话是否为空 (无任何消息); 用于"空会话不重复新建" */
+  onEmptyChange?: (empty: boolean) => void;
 }
 
 interface ToolChip {
@@ -120,7 +122,11 @@ function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
   return out;
 }
 
-export default function ChatPanel({ sid, onTurnComplete }: ChatPanelProps) {
+export default function ChatPanel({
+  sid,
+  onTurnComplete,
+  onEmptyChange,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -137,6 +143,11 @@ export default function ChatPanel({ sid, onTurnComplete }: ChatPanelProps) {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, status]);
+
+  // 上报当前会话是否为空 (无消息) — Workspace 据此决定"+"是否新建
+  useEffect(() => {
+    onEmptyChange?.(messages.length === 0);
+  }, [messages, onEmptyChange]);
 
   // 卸载时中断进行中的请求
   useEffect(() => {

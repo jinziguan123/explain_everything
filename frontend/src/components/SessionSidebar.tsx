@@ -1,15 +1,18 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createSession, listSessions } from "../api/client";
+import { useQuery } from "@tanstack/react-query";
+import { listSessions } from "../api/client";
 import type { SessionSummary } from "../api/client";
 import "./SessionSidebar.css";
 
 export interface SessionSidebarProps {
   selectedSid: string | null;
   onSelect: (sid: string) => void;
+  /** 点击 + 新建会话 (创建逻辑在 Workspace, 含空会话守卫) */
+  onNew: () => void;
+  /** 删除某会话 (确认逻辑在 Workspace) */
+  onDelete: (sid: string) => void;
+  /** 新建进行中 → 禁用 + 按钮 */
+  creating?: boolean;
 }
-
-/** 新建 session 的默认标题 (无需用户预输入; 时间在列表项另行展示以区分)。 */
-const NEW_SESSION_TITLE = "新会话";
 
 /** Unix 秒时间戳 → 本地可读时间; 非法值回退为空串。 */
 function formatTs(ts: number): string {
@@ -20,22 +23,15 @@ function formatTs(ts: number): string {
 export default function SessionSidebar({
   selectedSid,
   onSelect,
+  onNew,
+  onDelete,
+  creating = false,
 }: SessionSidebarProps) {
-  const queryClient = useQueryClient();
-
   const { data: sessions, isLoading, isError, error } = useQuery<
     SessionSummary[]
   >({
     queryKey: ["sessions"],
     queryFn: listSessions,
-  });
-
-  const createMut = useMutation({
-    mutationFn: () => createSession(NEW_SESSION_TITLE),
-    onSuccess: async (res) => {
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      onSelect(res.sid); // 选中新 session → ChatPanel(key=sid) 重挂 → 聊天清空
-    },
   });
 
   return (
@@ -44,21 +40,13 @@ export default function SessionSidebar({
       <button
         className="session-new-btn"
         type="button"
-        onClick={() => !createMut.isPending && createMut.mutate()}
-        disabled={createMut.isPending}
+        onClick={onNew}
+        disabled={creating}
         title="新建会话"
         aria-label="新建会话"
       >
         ＋
       </button>
-      {createMut.isError && (
-        <div className="session-error">
-          创建失败：
-          {createMut.error instanceof Error
-            ? createMut.error.message
-            : String(createMut.error)}
-        </div>
-      )}
 
       <div className="session-list">
         {isLoading && <div className="session-msg">加载中…</div>}
@@ -73,21 +61,31 @@ export default function SessionSidebar({
           </div>
         )}
         {sessions?.map((s) => (
-          <button
-            key={s.sid}
-            type="button"
-            className={`session-item${
-              s.sid === selectedSid ? " selected" : ""
-            }`}
-            onClick={() => onSelect(s.sid)}
-            aria-current={s.sid === selectedSid}
-          >
-            <div className="session-item-q">{s.question}</div>
-            <div className="session-item-meta">
-              <span className="session-stage">{s.stage}</span>
-              <span className="session-time">{formatTs(s.updated_at)}</span>
-            </div>
-          </button>
+          <div key={s.sid} className="session-item-wrap">
+            <button
+              type="button"
+              className={`session-item${
+                s.sid === selectedSid ? " selected" : ""
+              }`}
+              onClick={() => onSelect(s.sid)}
+              aria-current={s.sid === selectedSid}
+            >
+              <div className="session-item-q">{s.question}</div>
+              <div className="session-item-meta">
+                <span className="session-stage">{s.stage}</span>
+                <span className="session-time">{formatTs(s.updated_at)}</span>
+              </div>
+            </button>
+            <button
+              type="button"
+              className="session-del"
+              onClick={() => onDelete(s.sid)}
+              title="删除会话"
+              aria-label={`删除会话 ${s.question}`}
+            >
+              ×
+            </button>
+          </div>
         ))}
       </div>
     </aside>

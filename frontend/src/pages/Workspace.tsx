@@ -1,14 +1,19 @@
 import { useCallback, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import SessionSidebar from "../components/SessionSidebar";
 import ChatPanel from "../components/ChatPanel";
 import GraphPanel from "../components/GraphPanel";
+import { createSession, deleteSession } from "../api/client";
 import "./Workspace.css";
+
+const NEW_SESSION_TITLE = "新会话";
 
 export default function Workspace() {
   const [selectedSid, setSelectedSid] = useState<string | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  // 当前选中会话是否为空 (无任何消息); 由 ChatPanel 上报
+  const [currentEmpty, setCurrentEmpty] = useState(true);
   const queryClient = useQueryClient();
 
   const handleTurnComplete = useCallback(() => {
@@ -16,6 +21,39 @@ export default function Workspace() {
       void queryClient.invalidateQueries({ queryKey: ["graph", selectedSid] });
     }
   }, [selectedSid, queryClient]);
+
+  const createMut = useMutation({
+    mutationFn: () => createSession(NEW_SESSION_TITLE),
+    onSuccess: async (res) => {
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      setCurrentEmpty(true); // 新会话本就空
+      setSelectedSid(res.sid); // 选中 → ChatPanel(key=sid) 重挂 → 聊天清空
+    },
+  });
+
+  // 新建守卫: 当前已是一个空会话 → 留在原地, 不再堆一条空记录
+  const handleNew = useCallback(() => {
+    if (createMut.isPending) return;
+    if (selectedSid && currentEmpty) return;
+    createMut.mutate();
+  }, [createMut, selectedSid, currentEmpty]);
+
+  const deleteMut = useMutation({
+    mutationFn: (sid: string) => deleteSession(sid),
+    onSuccess: async (_res, sid) => {
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      if (sid === selectedSid) setSelectedSid(null); // 删的是当前 → 回到空白
+    },
+  });
+
+  const handleDelete = useCallback(
+    (sid: string) => {
+      if (deleteMut.isPending) return;
+      if (!window.confirm("删除该会话? 此操作不可恢复。")) return;
+      deleteMut.mutate(sid);
+    },
+    [deleteMut],
+  );
 
   const cls = [
     "workspace",
@@ -41,7 +79,13 @@ export default function Workspace() {
           </button>
         </div>
         <div className="workspace-pane-body">
-          <SessionSidebar selectedSid={selectedSid} onSelect={setSelectedSid} />
+          <SessionSidebar
+            selectedSid={selectedSid}
+            onSelect={setSelectedSid}
+            onNew={handleNew}
+            onDelete={handleDelete}
+            creating={createMut.isPending}
+          />
         </div>
       </aside>
 
@@ -63,6 +107,7 @@ export default function Workspace() {
             key={selectedSid}
             sid={selectedSid}
             onTurnComplete={handleTurnComplete}
+            onEmptyChange={setCurrentEmpty}
           />
         ) : (
           <div className="workspace-hint">

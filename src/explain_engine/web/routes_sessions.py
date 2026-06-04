@@ -1,9 +1,9 @@
-"""Session 只读端点 (list / get / graph / transcript)."""
+"""Session 端点 (list / get / graph / transcript / create / delete)."""
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from explain_engine.config import Settings
@@ -76,3 +76,13 @@ async def get_graph(sid: str) -> dict[str, Any]:
 async def get_transcript(sid: str) -> list[dict[str, Any]]:
     chat = load_chat_or_404(sid)
     return chat.transcript
+
+
+@router.delete("/{sid}", status_code=204)
+async def delete_session(sid: str) -> Response:
+    """删除整个 session (graph / transcript / chat_state 等)。缺失/非法 sid → 404。"""
+    try:
+        SessionStore().delete(sid)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=f"session {sid} 不可删: {exc}") from exc
+    return Response(status_code=204)

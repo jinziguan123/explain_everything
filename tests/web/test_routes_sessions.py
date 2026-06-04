@@ -59,3 +59,20 @@ def test_invalid_sid_404():
     c = _client()
     assert c.get("/api/sessions/not-a-sid").status_code == 404
     assert c.get("/api/sessions/s_zzzz/graph").status_code == 404
+
+
+def test_delete_session():
+    _make_done_session("s_a1b2c3e0")
+    c = _client()
+    assert any(s["sid"] == "s_a1b2c3e0" for s in c.get("/api/sessions").json())
+    assert c.delete("/api/sessions/s_a1b2c3e0").status_code == 204
+    # 删后列表不再含它
+    assert not any(s["sid"] == "s_a1b2c3e0" for s in c.get("/api/sessions").json())
+
+
+def test_delete_missing_session_404():
+    assert _client().delete("/api/sessions/s_00000000").status_code == 404
+
+
+def test_delete_invalid_sid_404():
+    assert _client().delete("/api/sessions/not-a-sid").status_code == 404

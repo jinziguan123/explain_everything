@@ -3,30 +3,28 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import SessionSidebar from "./SessionSidebar";
-import { listSessions, createSession } from "../api/client";
+import { listSessions } from "../api/client";
 
 vi.mock("../api/client", () => ({
   listSessions: vi.fn(),
-  createSession: vi.fn(),
 }));
 
 const mockList = vi.mocked(listSessions);
-const mockCreate = vi.mocked(createSession);
 
 const SESSIONS = [
   {
     sid: "s_1",
     question: "为什么天是蓝的",
     stage: "exploring",
-    created_at: "2026-06-01T00:00:00Z",
-    updated_at: "2026-06-02T00:00:00Z",
+    created_at: 1781000000,
+    updated_at: 1781100000,
   },
   {
     sid: "s_2",
     question: "黑洞是什么",
     stage: "synthesizing",
-    created_at: "2026-06-03T00:00:00Z",
-    updated_at: "2026-06-04T00:00:00Z",
+    created_at: 1781200000,
+    updated_at: 1781300000,
   },
 ];
 
@@ -37,15 +35,29 @@ function wrap(ui: ReactNode) {
   return <QueryClientProvider client={qc}>{ui}</QueryClientProvider>;
 }
 
+/** 带默认 props 渲染 */
+function renderSidebar(
+  props: Partial<React.ComponentProps<typeof SessionSidebar>> = {},
+) {
+  const all = {
+    selectedSid: null,
+    onSelect: vi.fn(),
+    onNew: vi.fn(),
+    onDelete: vi.fn(),
+    ...props,
+  };
+  render(wrap(<SessionSidebar {...all} />));
+  return all;
+}
+
 beforeEach(() => {
   mockList.mockReset();
-  mockCreate.mockReset();
 });
 
 describe("SessionSidebar", () => {
   it("渲染 session 列表", async () => {
     mockList.mockResolvedValue(SESSIONS);
-    render(wrap(<SessionSidebar selectedSid={null} onSelect={vi.fn()} />));
+    renderSidebar();
 
     await waitFor(() =>
       expect(screen.getByText("为什么天是蓝的")).toBeInTheDocument(),
@@ -56,7 +68,7 @@ describe("SessionSidebar", () => {
 
   it("无 session 时显示空状态", async () => {
     mockList.mockResolvedValue([]);
-    render(wrap(<SessionSidebar selectedSid={null} onSelect={vi.fn()} />));
+    renderSidebar();
 
     await waitFor(() =>
       expect(screen.getByText(/还没有 session/)).toBeInTheDocument(),
@@ -66,7 +78,7 @@ describe("SessionSidebar", () => {
   it("点击 session 调用 onSelect", async () => {
     mockList.mockResolvedValue(SESSIONS);
     const onSelect = vi.fn();
-    render(wrap(<SessionSidebar selectedSid={null} onSelect={onSelect} />));
+    renderSidebar({ onSelect });
 
     await waitFor(() =>
       expect(screen.getByText("黑洞是什么")).toBeInTheDocument(),
@@ -75,30 +87,36 @@ describe("SessionSidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("s_2");
   });
 
-  it("点击 + 按钮直接新建 session 并自动选中 (无需预输入问题)", async () => {
+  it("点击 + 按钮调用 onNew (新建逻辑在父组件)", async () => {
     mockList.mockResolvedValue(SESSIONS);
-    mockCreate.mockResolvedValue({ sid: "s_new" });
-    const onSelect = vi.fn();
-    render(wrap(<SessionSidebar selectedSid={null} onSelect={onSelect} />));
+    const onNew = vi.fn();
+    renderSidebar({ onNew });
 
     await waitFor(() => expect(mockList).toHaveBeenCalled());
-
     fireEvent.click(screen.getByRole("button", { name: "新建会话" }));
+    expect(onNew).toHaveBeenCalled();
+  });
 
-    await waitFor(() => expect(mockCreate).toHaveBeenCalled());
-    await waitFor(() => expect(onSelect).toHaveBeenCalledWith("s_new"));
+  it("点击删除按钮调用 onDelete(sid)", async () => {
+    mockList.mockResolvedValue(SESSIONS);
+    const onDelete = vi.fn();
+    renderSidebar({ onDelete });
+
+    await waitFor(() =>
+      expect(screen.getByText("黑洞是什么")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "删除会话 黑洞是什么" }));
+    expect(onDelete).toHaveBeenCalledWith("s_2");
   });
 
   it("高亮选中的 session", async () => {
     mockList.mockResolvedValue(SESSIONS);
-    render(wrap(<SessionSidebar selectedSid="s_1" onSelect={vi.fn()} />));
+    renderSidebar({ selectedSid: "s_1" });
 
     await waitFor(() =>
       expect(screen.getByText("为什么天是蓝的")).toBeInTheDocument(),
     );
-    const selected = screen
-      .getByText("为什么天是蓝的")
-      .closest("button");
+    const selected = screen.getByText("为什么天是蓝的").closest("button");
     expect(selected).toHaveClass("selected");
   });
 });
