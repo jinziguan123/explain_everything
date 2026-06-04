@@ -1466,6 +1466,12 @@ def serve(
 ) -> None:
     """启动本地 Web 服务 (浏览器访问 http://127.0.0.1:8800)."""
     import uvicorn
+    from dotenv import load_dotenv
+
+    # 关键: 进程启动即加载 .env, 让 EXPLAIN_DB_URL / LLM_* 进 os.environ。
+    # 否则 lexicon backend init (startup) 拿不到真实 DSN → 回退默认 127.0.0.1:5432
+    # 连不上 (TUI 走 config.load_dotenv 才能连真实远程 DB); 且 chat 也需 LLM_* 。
+    load_dotenv(override=False)
 
     from explain_engine.web.app import _frontend_dist, create_app
 
