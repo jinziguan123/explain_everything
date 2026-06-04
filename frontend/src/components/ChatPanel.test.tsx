@@ -3,15 +3,24 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import ChatPanel from "./ChatPanel";
 import { streamChat } from "../api/chatStream";
 import type { SSEEvent } from "../api/chatStream";
+import { getTranscript } from "../api/client";
+import type { TranscriptEntry } from "../api/client";
 
 vi.mock("../api/chatStream", () => ({
   streamChat: vi.fn(),
 }));
 
+vi.mock("../api/client", () => ({
+  getTranscript: vi.fn(async () => [] as TranscriptEntry[]),
+}));
+
 const mockStream = vi.mocked(streamChat);
+const mockGetTranscript = vi.mocked(getTranscript);
 
 beforeEach(() => {
   mockStream.mockReset();
+  mockGetTranscript.mockReset();
+  mockGetTranscript.mockResolvedValue([]);
 });
 
 function typeAndSend(text: string) {
@@ -129,5 +138,23 @@ describe("ChatPanel", () => {
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(mockStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("挂载时回放已持久化的历史对话", async () => {
+    mockGetTranscript.mockResolvedValue([
+      { role: "user", content: "历史问题" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "历史回答" }],
+      },
+    ] as TranscriptEntry[]);
+
+    render(<ChatPanel sid="s_test" />);
+
+    await waitFor(() =>
+      expect(screen.getByText("历史问题")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("历史回答")).toBeInTheDocument();
+    expect(mockGetTranscript).toHaveBeenCalledWith("s_test");
   });
 });

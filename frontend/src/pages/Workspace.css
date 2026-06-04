@@ -2,10 +2,27 @@
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: 280px 1fr 1fr;
+  /* 左面板 | 左展开条 | 中间 | 右展开条 | 右面板 */
+  grid-template-columns: 280px 0 1fr 0 1fr;
   background: var(--bg);
+  transition: grid-template-columns var(--dur) var(--ease);
 }
 
+/* 左折叠: 左面板 -> 0, 左展开条 -> 30px */
+.workspace.left-collapsed {
+  grid-template-columns: 0 30px 1fr 0 1fr;
+}
+
+/* 右折叠: 右面板 -> 0, 右展开条 -> 30px */
+.workspace.right-collapsed {
+  grid-template-columns: 280px 0 1fr 30px 0;
+}
+
+.workspace.left-collapsed.right-collapsed {
+  grid-template-columns: 0 30px 1fr 30px 0;
+}
+
+.workspace-left,
 .workspace-center,
 .workspace-right {
   min-width: 0;
@@ -15,8 +32,143 @@
   overflow: hidden;
 }
 
+.workspace-left {
+  border-right: 1px solid var(--border);
+}
+
 .workspace-center {
   border-inline: 1px solid var(--border);
+}
+
+.workspace-right {
+  border-left: 1px solid var(--border);
+}
+
+/* 折叠的面板彻底隐藏 (不可聚焦, 无边框残留) */
+.workspace.left-collapsed .workspace-left,
+.workspace.right-collapsed .workspace-right {
+  border: 0;
+  visibility: hidden;
+}
+
+/* 面板头部: 标题 + 折叠按钮 */
+.workspace-pane-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  height: 40px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.workspace-pane-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* 右面板标题靠右 */
+.workspace-right .workspace-pane-header {
+  justify-content: flex-end;
+}
+
+.workspace-pane-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 折叠按钮 (icon-ish, 更小) */
+.workspace-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 500;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease),
+    color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.workspace-right .workspace-toggle {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+.workspace-toggle:hover {
+  color: var(--text);
+  border-color: var(--text);
+  background: var(--surface-3);
+}
+
+.workspace-toggle:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+/* 折叠后的竖条展开按钮 */
+.workspace-strip {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border: 0;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.workspace-strip-left {
+  border-right: 1px solid var(--border);
+}
+
+.workspace-strip-right {
+  border-left: 1px solid var(--border);
+}
+
+.workspace.left-collapsed .workspace-strip-left,
+.workspace.right-collapsed .workspace-strip-right {
+  display: flex;
+}
+
+.workspace-strip:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.workspace-strip-chevron {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* 竖排的小标签 */
+.workspace-strip-label {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--text-subtle);
 }
 
 .workspace-hint {

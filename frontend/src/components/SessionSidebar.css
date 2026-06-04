@@ -38,8 +38,10 @@
 
 .session-new-btn {
   flex: 0 0 auto;
-  padding: 8px 14px;
-  font-size: 14px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--accent);

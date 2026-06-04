@@ -18,6 +18,18 @@ export async function getGraph(sid: string) {
   return r.json();
 }
 
+export interface TranscriptEntry {
+  role: "user" | "assistant";
+  content: unknown; // string | content-block[]
+  turn?: number;
+}
+
+export async function getTranscript(sid: string): Promise<TranscriptEntry[]> {
+  const r = await fetch(`/api/sessions/${sid}/transcript`);
+  if (!r.ok) throw new Error(`getTranscript ${r.status}`);
+  return r.json();
+}
+
 export async function createSession(question: string): Promise<{ sid: string }> {
   const r = await fetch("/api/sessions", {
     method: "POST",

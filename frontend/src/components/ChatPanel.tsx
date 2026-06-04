@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { streamChat } from "../api/chatStream";
 import type { SSEEvent } from "../api/chatStream";
+import { getTranscript } from "../api/client";
+import type { TranscriptEntry } from "../api/client";
 import "./ChatPanel.css";
 
 export interface ChatPanelProps {
@@ -65,6 +67,59 @@ function asString(content: unknown): string {
   return typeof content === "string" ? content : "";
 }
 
+/** 把持久化的 transcript (Anthropic 风格) 解析为 ChatPanel 的消息模型 */
+function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const entry of entries) {
+    if (entry.role === "user") {
+      // 纯文本 user 消息 -> UserMessage; 数组(tool_result 等管线)直接跳过
+      if (typeof entry.content === "string") {
+        out.push({ role: "user", text: entry.content });
+      }
+      continue;
+    }
+    // assistant: 聚合所有 block
+    const blocks = Array.isArray(entry.content) ? entry.content : [];
+    const texts: string[] = [];
+    const thinkings: string[] = [];
+    const tools: ToolChip[] = [];
+    for (const raw of blocks) {
+      if (!raw || typeof raw !== "object") continue;
+      const b = raw as Record<string, unknown>;
+      switch (b.type) {
+        case "text":
+          if (typeof b.text === "string") texts.push(b.text);
+          break;
+        case "thinking":
+          if (typeof b.thinking === "string") thinkings.push(b.thinking);
+          break;
+        case "tool_use":
+          tools.push({
+            id: tools.length,
+            name: typeof b.name === "string" ? b.name : "工具",
+            done: true,
+          });
+          break;
+        default:
+          break;
+      }
+    }
+    const text = texts.join("\n");
+    const thinking = thinkings.join("");
+    // 完全空的 assistant 条目跳过; 仅有 thinking 也保留
+    if (!text && !thinking && tools.length === 0) continue;
+    out.push({
+      role: "assistant",
+      text,
+      thinking,
+      tools,
+      error: null,
+      notice: null,
+    });
+  }
+  return out;
+}
+
 export default function ChatPanel({ sid, onTurnComplete }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -74,6 +129,8 @@ export default function ChatPanel({ sid, onTurnComplete }: ChatPanelProps) {
   const abortRef = useRef<AbortController | null>(null);
   const toolIdRef = useRef(0);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // 用户一旦发起新对话, 晚到的历史回放不得覆盖现场消息
+  const dirtyRef = useRef(false);
 
   // 自动滚到底部
   useEffect(() => {
@@ -85,6 +142,22 @@ export default function ChatPanel({ sid, onTurnComplete }: ChatPanelProps) {
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
+
+  // 选中(切换) session 时回放已持久化的历史对话; 新流式轮次随后 append
+  useEffect(() => {
+    let cancelled = false;
+    getTranscript(sid)
+      .then((entries) => {
+        if (!cancelled && !dirtyRef.current)
+          setMessages(transcriptToMessages(entries));
+      })
+      .catch(() => {
+        if (!cancelled && !dirtyRef.current) setMessages([]); // 新/空 session 或失败 -> 空
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sid]);
 
   /** 修改最后一条 assistant 消息 */
   const patchLastAssistant = useCallback(
@@ -175,6 +248,7 @@ export default function ChatPanel({ sid, onTurnComplete }: ChatPanelProps) {
     if (!text || streaming) return;
 
     setInput("");
+    dirtyRef.current = true;
     setMessages((prev) => [...prev, { role: "user", text }, emptyAssistant()]);
     setStreaming(true);
 

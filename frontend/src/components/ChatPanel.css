@@ -185,11 +185,14 @@
 }
 
 .chat-btn {
-  padding: 0 18px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font: inherit;
+  font-family: inherit;
   transition: background var(--dur) var(--ease),
     color var(--dur) var(--ease), border-color var(--dur) var(--ease),
     transform var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease),
