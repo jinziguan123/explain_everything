@@ -1,10 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
 import Workspace from './pages/Workspace'
+import Knowledge from './pages/Knowledge'
 import './App.css'
-
-function KnowledgePage() {
-  return <div className="page-placeholder">全局知识 (Phase C)</div>
-}
 
 function App() {
   return (
@@ -20,7 +17,7 @@ function App() {
       </nav>
       <Routes>
         <Route path="/" element={<Workspace />} />
-        <Route path="/knowledge" element={<KnowledgePage />} />
+        <Route path="/knowledge" element={<Knowledge />} />
       </Routes>
     </div>
   )

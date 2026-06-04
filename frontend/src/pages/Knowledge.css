@@ -1,0 +1,33 @@
+.knowledge-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.knowledge-msg {
+  padding: 16px 20px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.knowledge-error {
+  color: #e57373;
+}
+
+.knowledge-graph-section {
+  padding: 0 20px 20px;
+}
+
+.knowledge-graph-title {
+  margin: 0 0 10px;
+  font-size: 16px;
+  color: var(--text-h);
+}
+
+.knowledge-graph-wrap {
+  position: relative;
+  height: 480px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}

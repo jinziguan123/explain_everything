@@ -27,3 +27,41 @@ export async function createSession(question: string): Promise<{ sid: string }> 
   if (!r.ok) throw new Error(`createSession ${r.status}`);
   return r.json();
 }
+
+export interface KnowledgeOverview {
+  session_count: number;
+  variable_count: number;
+  theory_count: { stable: number; tentative: number };
+  top_variables: {
+    global_id: string;
+    name: string;
+    reuse_count: number;
+    abstraction_level: number;
+  }[];
+  theories: {
+    id: string;
+    summary: string;
+    motif_type: string;
+    predictive_power: number;
+    stability_status: string;
+    supporting_session_count: number;
+  }[];
+}
+
+export async function getKnowledgeOverview(): Promise<KnowledgeOverview> {
+  const r = await fetch("/api/knowledge/overview");
+  if (!r.ok) throw new Error(`getKnowledgeOverview ${r.status}`);
+  return r.json();
+}
+
+export async function getKnowledgeGraph() {
+  const r = await fetch("/api/knowledge/graph");
+  if (!r.ok) throw new Error(`getKnowledgeGraph ${r.status}`);
+  return r.json();
+}
+
+export async function rejectTheory(id: string): Promise<{ rejected: boolean }> {
+  const r = await fetch(`/api/theories/${id}/reject`, { method: "POST" });
+  if (!r.ok) throw new Error(`rejectTheory ${r.status}`);
+  return r.json();
+}

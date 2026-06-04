@@ -1,0 +1,115 @@
+.kd {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+}
+
+.kd-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.kd-card {
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+
+.kd-card-num {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.kd-card-label {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.kd-section-title {
+  margin: 0 0 10px;
+  font-size: 16px;
+  color: var(--text-h);
+}
+
+.kd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.kd-table th,
+.kd-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.kd-table th {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.kd-empty {
+  color: var(--text);
+  font-size: 14px;
+  padding: 8px 0;
+}
+
+.kd-theories {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.kd-theory {
+  position: relative;
+  background: var(--social-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kd-theory-summary {
+  color: var(--text-h);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.kd-theory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kd-tag {
+  font-size: 12px;
+  color: var(--text);
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.kd-theory-reject {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.kd-theory-reject:hover {
+  background: var(--accent-bg);
+}
