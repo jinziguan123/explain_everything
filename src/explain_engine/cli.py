@@ -1467,8 +1467,14 @@ def serve(
     """启动本地 Web 服务 (浏览器访问 http://127.0.0.1:8800)."""
     import uvicorn
 
-    from explain_engine.web.app import create_app
+    from explain_engine.web.app import _frontend_dist, create_app
 
+    if not _frontend_dist().is_dir():
+        print(
+            "提示: 前端未构建 (frontend/dist 不存在), 当前仅 API 可用。\n"
+            "  生产: cd frontend && npm run build\n"
+            "  开发: cd frontend && npm run dev  (Vite 代理 /api 到本服务)"
+        )
     uvicorn.run(create_app(), host=host, port=port)
 
 
