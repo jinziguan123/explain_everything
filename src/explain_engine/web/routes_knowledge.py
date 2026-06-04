@@ -1,0 +1,102 @@
+"""Task C1: 全局知识端点 (knowledge overview + theories 列表 / reject).
+
+只读聚合现有引擎: SessionStore (session 数), lexicon dispatcher (变量),
+theory cache (理论)。薄包, 本地单用户。
+
+注意 — 不阻塞 event loop:
+- get_active_theories 显式传 embedder=None: cache miss 时返 stale/empty cache,
+  不触发同步 BGE-M3 重算 (无 embedding 进请求路径)。
+- lexicon / theory cache 读是 file/PG IO, 跟现有 session 端点同级别。
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter
+
+from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
+from explain_engine.engines.theory.cache import get_active_theories, reject_theory
+from explain_engine.persistence.session import SessionStore
+from explain_engine.persistence.storage_v2 import StorageV2
+
+router = APIRouter(prefix="/api")
+
+
+def _normalize_variable(row: Any) -> dict[str, Any]:
+    """统一两种 lexicon backend shape 为 {global_id, name, reuse_count, abstraction_level}.
+
+    - PG backend: list[dict] (SELECT * dict_row), 含 global_id / name /
+      canonical_mechanism / reuse_count / abstraction_level 全列。
+    - JSON backend: list[tuple] (global_id, canonical_mechanism, reuse_count) ——
+      无 name / abstraction_level, 用 global_id 兜 name, level 默认 0。
+    """
+    if isinstance(row, dict):
+        return {
+            "global_id": row.get("global_id", ""),
+            "name": row.get("name") or row.get("global_id", ""),
+            "reuse_count": row.get("reuse_count", 0),
+            "abstraction_level": row.get("abstraction_level", 0),
+        }
+    # JSON tuple: (global_id, canonical_mechanism, reuse_count)
+    global_id, _canonical_mechanism, reuse_count = row
+    return {
+        "global_id": global_id,
+        "name": global_id,
+        "reuse_count": reuse_count,
+        "abstraction_level": 0,
+    }
+
+
+def _theory_to_slim(theory: Any) -> dict[str, Any]:
+    return {
+        "id": theory.id,
+        "summary": theory.natural_language_summary,
+        "motif_type": theory.motif_type,
+        "predictive_power": theory.predictive_power,
+        "stability_status": theory.stability_status,
+        "supporting_session_count": len(theory.supporting_sessions),
+    }
+
+
+def _slim_theories() -> list[dict[str, Any]]:
+    cache = get_active_theories(StorageV2(), embedder=None)
+    theories = list(cache.stable_theories) + list(cache.tentative_theories)
+    return [_theory_to_slim(t) for t in theories]
+
+
+@router.get("/knowledge/overview")
+async def knowledge_overview() -> dict[str, Any]:
+    session_count = len(SessionStore().list())
+
+    variables = [
+        _normalize_variable(row)
+        for row in get_lexicon_top_k_for_compress(StorageV2(), k=100000)
+    ]
+
+    cache = get_active_theories(StorageV2(), embedder=None)
+    theories = [
+        _theory_to_slim(t)
+        for t in list(cache.stable_theories) + list(cache.tentative_theories)
+    ]
+
+    return {
+        "session_count": session_count,
+        "variable_count": len(variables),
+        "theory_count": {
+            "stable": len(cache.stable_theories),
+            "tentative": len(cache.tentative_theories),
+        },
+        "top_variables": variables[:30],
+        "theories": theories,
+    }
+
+
+@router.get("/theories")
+async def list_theories() -> list[dict[str, Any]]:
+    return _slim_theories()
+
+
+@router.post("/theories/{theory_id}/reject")
+async def reject(theory_id: str) -> dict[str, bool]:
+    rejected = reject_theory(StorageV2(), theory_id)
+    return {"rejected": rejected}
