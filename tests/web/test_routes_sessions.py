@@ -43,3 +43,12 @@ def test_get_transcript() -> None:
 def test_get_missing_session_404() -> None:
     resp = _client().get("/api/sessions/s_00000000")
     assert resp.status_code == 404
+
+
+def test_create_session() -> None:
+    resp = _client().post("/api/sessions", json={"question": "为什么年轻人不消费"})
+    assert resp.status_code == 201
+    sid = resp.json()["sid"]
+    assert sid.startswith("s_")
+    # 新建后可在列表看到
+    assert any(s["sid"] == sid for s in _client().get("/api/sessions").json())
