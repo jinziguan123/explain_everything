@@ -12,6 +12,34 @@
 - [技术设计 v2](技术设计v2.md) — 长期 roadmap（persistent world model / evolving variable / multi-perspective / simulation / meta-cognition）
 - [MVP Design Doc](docs/plans/2026-05-13-cognitive-engine-mvp-design.md) — 当前实现的范围与取舍
 - [Phase 0+1+2 Plan](docs/plans/2026-05-13-cognitive-engine-phase-0-1-2-plan.md)
+- [Web 前端设计](docs/plans/2026-06-04-web-frontend-design.md) / [实现计划](docs/plans/2026-06-04-web-frontend-plan.md) — 本地 Web 界面（舒适聊天 + 知识图谱可视化）
+
+## Web 前端（本地可视化界面）
+
+TUI 之外的互补界面：更舒适的流式聊天 + 可视化看每个 session 的知识图谱 + 全局知识总览。与 TUI **共用同一引擎与 `~/.explain` 存储**。本地单用户，绑 `127.0.0.1`。
+
+**架构**：FastAPI 服务层（`src/explain_engine/web/`，薄包现有 `ChatSession`/engine/lexicon/theories）+ React+Vite+TS SPA（`frontend/`）+ Cytoscape.js 图谱。聊天/事件走 SSE 单向流。
+
+**运行**：
+
+```bash
+# 1) 起后端 (仓库根)
+explain serve                      # 默认 127.0.0.1:8800
+
+# 2a) 开发模式: 另开终端跑 Vite (热更新, 代理 /api → 后端)
+cd frontend && npm install         # 首次
+npm run dev                        # 打开提示的本地址 (默认 5173)
+
+# 2b) 生产模式: 构建后由 explain serve 直接托管 dist
+cd frontend && npm run build
+explain serve                      # 访问 http://127.0.0.1:8800
+```
+
+**功能**：左栏新建/切换 session；中栏流式聊天（Markdown / thinking 折叠 / 工具调用可见 / 停止按钮）；右栏该 session 的因果知识图谱（L0/L1/L2 分层，点节点看详情），每轮对话后自动刷新；`/knowledge` 页看全局知识（会话/变量/理论指标 + 高频变量表 + theory 卡片 + 跨 session 知识图谱）。
+
+**API**（节选，均 `/api` 前缀）：`GET/POST /sessions`、`GET /sessions/{sid}/graph|transcript`、`POST /sessions/{sid}/chat`（SSE）、`GET /knowledge/overview|graph`、`GET /theories`、`POST /theories/{id}/reject`。
+
+> 范围：MVP 聊天驱动 + 显式引擎控制按钮（后续 Phase B），图谱只读；无鉴权/多用户。详见设计文档。
 
 ## MVP 目标
 
