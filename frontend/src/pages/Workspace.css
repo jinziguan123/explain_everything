@@ -2,24 +2,32 @@
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  /* 左面板 | 左展开条 | 中间 | 右展开条 | 右面板 */
-  grid-template-columns: 280px 0 1fr 0 1fr;
+  /* 左面板 | 左展开条 | 中间(聊天) | 右展开条 | 右面板(图谱) */
+  grid-template-columns: 280px 0 minmax(360px, 1.4fr) 0 minmax(0, 1fr);
   background: var(--bg);
   transition: grid-template-columns var(--dur) var(--ease);
 }
 
+/* 关键: 给每个子项显式 grid-column。展开条平时 display:none, 若不固定列,
+   grid 会把剩余子项自动重排到前面轨道 → 聊天被挤进 0 宽轨道而消失。 */
+.workspace-left { grid-column: 1; }
+.workspace-strip-left { grid-column: 2; }
+.workspace-center { grid-column: 3; }
+.workspace-strip-right { grid-column: 4; }
+.workspace-right { grid-column: 5; }
+
 /* 左折叠: 左面板 -> 0, 左展开条 -> 30px */
 .workspace.left-collapsed {
-  grid-template-columns: 0 30px 1fr 0 1fr;
+  grid-template-columns: 0 30px minmax(360px, 1.4fr) 0 minmax(0, 1fr);
 }
 
 /* 右折叠: 右面板 -> 0, 右展开条 -> 30px */
 .workspace.right-collapsed {
-  grid-template-columns: 280px 0 1fr 30px 0;
+  grid-template-columns: 280px 0 minmax(360px, 1fr) 30px 0;
 }
 
 .workspace.left-collapsed.right-collapsed {
-  grid-template-columns: 0 30px 1fr 30px 0;
+  grid-template-columns: 0 30px minmax(360px, 1fr) 30px 0;
 }
 
 .workspace-left,
