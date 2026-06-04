@@ -26,7 +26,9 @@ const cyStyle: cytoscape.StylesheetStyle[] = [
     selector: "node",
     style: {
       label: "data(label)",
-      "background-color": "mapData(theme, 0, 9, #4f9da6, #9b5de5)",
+      // theme_index 是数值序号 (theme 本身是字符串 id, mapData 需数值);
+      // 无 theme → -1, mapData 会回退到下界色。
+      "background-color": "mapData(theme_index, 0, 9, #4f9da6, #9b5de5)",
       color: "#fff",
       "text-valign": "center",
       "text-halign": "center",
@@ -39,7 +41,8 @@ const cyStyle: cytoscape.StylesheetStyle[] = [
     },
   },
   {
-    selector: "node[in_theory]",
+    // [?in_theory] = 真值选择器 (存在性 [in_theory] 会把 false 也选中 → 全高亮)
+    selector: "node[?in_theory]",
     style: {
       "border-width": 3,
       "border-color": "#ffd166",

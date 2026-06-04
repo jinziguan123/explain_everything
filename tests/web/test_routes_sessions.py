@@ -52,3 +52,10 @@ def test_create_session() -> None:
     assert sid.startswith("s_")
     # 新建后可在列表看到
     assert any(s["sid"] == sid for s in _client().get("/api/sessions").json())
+
+
+def test_invalid_sid_404():
+    """M-4: 非 s_<8hex> 形态的 sid → 404 (防 path-traversal, defense-in-depth)."""
+    c = _client()
+    assert c.get("/api/sessions/not-a-sid").status_code == 404
+    assert c.get("/api/sessions/s_zzzz/graph").status_code == 404

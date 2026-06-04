@@ -67,10 +67,21 @@ def _theory_to_slim(theory: Any) -> dict[str, Any]:
     }
 
 
+def _active_theories(cache: Any) -> tuple[list[Any], list[Any]]:
+    """过滤掉用户 reject 的理论 (cache 只 mark 不删, 见 theory/cache.reject_theory).
+
+    返 (stable, tentative) 两个去 rejected 后的列表 — 与 CLI `theories` 命令一致。
+    """
+    rejected = cache.rejected_theory_ids
+    stable = [t for t in cache.stable_theories if t.id not in rejected]
+    tentative = [t for t in cache.tentative_theories if t.id not in rejected]
+    return stable, tentative
+
+
 def _slim_theories() -> list[dict[str, Any]]:
     cache = get_active_theories(StorageV2(), embedder=None)
-    theories = list(cache.stable_theories) + list(cache.tentative_theories)
-    return [_theory_to_slim(t) for t in theories]
+    stable, tentative = _active_theories(cache)
+    return [_theory_to_slim(t) for t in stable + tentative]
 
 
 @router.get("/knowledge/overview")
@@ -80,17 +91,15 @@ async def knowledge_overview() -> dict[str, Any]:
     variables = _fetch_normalized_variables()
 
     cache = get_active_theories(StorageV2(), embedder=None)
-    theories = [
-        _theory_to_slim(t)
-        for t in list(cache.stable_theories) + list(cache.tentative_theories)
-    ]
+    stable, tentative = _active_theories(cache)
+    theories = [_theory_to_slim(t) for t in stable + tentative]
 
     return {
         "session_count": session_count,
         "variable_count": len(variables),
         "theory_count": {
-            "stable": len(cache.stable_theories),
-            "tentative": len(cache.tentative_theories),
+            "stable": len(stable),
+            "tentative": len(tentative),
         },
         "top_variables": variables[:30],
         "theories": theories,

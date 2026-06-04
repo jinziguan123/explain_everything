@@ -2,8 +2,8 @@ export interface SessionSummary {
   sid: string;
   question: string;
   stage: string;
-  created_at: string;
-  updated_at: string;
+  created_at: number; // Unix 时间戳 (秒)
+  updated_at: number; // Unix 时间戳 (秒)
 }
 
 export async function listSessions(): Promise<SessionSummary[]> {

@@ -47,16 +47,25 @@ def lexicon_to_cytoscape(
     """跨 session 知识图 → Cytoscape elements.
 
     nodes = lexicon 变量 (按 reuse 调大小, 按 theme 上色),
-    edges = theory motif 结构 (stable + tentative 并集), 连接变量。
-    in_theory 标记参与任意 theory 的变量。
-    """
-    # gid -> (theme_id, theme_name)
-    theme_of: dict[str, tuple[str, str]] = {}
-    for theme in cache.themes:
-        for gid in theme.member_global_ids:
-            theme_of[gid] = (theme.id, theme.name)
+    edges = theory motif 结构 (stable + tentative 并集, 去 rejected), 连接变量。
+    in_theory 标记参与任意 (非 rejected) theory 的变量。
 
-    all_theories = list(cache.stable_theories) + list(cache.tentative_theories)
+    rejected theory (cache.rejected_theory_ids, 只 mark 不删) 不出现在边/in_theory。
+    theme_index: theme 的数值序号 (前端 Cytoscape mapData 需数值才能上色; theme
+    本身是字符串 id)。无 theme → -1。
+    """
+    rejected = cache.rejected_theory_ids
+    # gid -> (theme_id, theme_name, theme_index)
+    theme_of: dict[str, tuple[str, str, int]] = {}
+    for idx, theme in enumerate(cache.themes):
+        for gid in theme.member_global_ids:
+            theme_of[gid] = (theme.id, theme.name, idx)
+
+    all_theories = [
+        t
+        for t in list(cache.stable_theories) + list(cache.tentative_theories)
+        if t.id not in rejected
+    ]
     in_theory_ids: set[str] = set()
     for theory in all_theories:
         in_theory_ids.update(theory.node_ids)
@@ -65,7 +74,7 @@ def lexicon_to_cytoscape(
     nodes = []
     for v in variables:
         gid = v["global_id"]
-        theme_id, theme_name = theme_of.get(gid, ("", ""))
+        theme_id, theme_name, theme_index = theme_of.get(gid, ("", "", -1))
         nodes.append({"data": {
             "id": gid,
             "label": v["name"],
@@ -73,6 +82,7 @@ def lexicon_to_cytoscape(
             "level": v["abstraction_level"],
             "theme": theme_id,
             "theme_name": theme_name,
+            "theme_index": theme_index,
             "in_theory": gid in in_theory_ids,
         }})
 

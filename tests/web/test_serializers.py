@@ -72,3 +72,44 @@ def test_lexicon_to_cytoscape_skips_dangling_edge():
     cache = TheoriesCache(stable_theories=[theory])
     out = lexicon_to_cytoscape(vars_, cache)
     assert out["elements"]["edges"] == []  # v_missing 不在节点集 → 跳过
+
+
+def test_lexicon_to_cytoscape_excludes_rejected_theory():
+    """I-1: rejected theory 不进 in_theory / 边集。"""
+    from explain_engine.engines.theory.cache import TheoriesCache
+    from explain_engine.engines.theory.theory import Theory
+    from explain_engine.web.serializers import lexicon_to_cytoscape
+
+    vars_ = [
+        {"global_id": "v_a", "name": "a", "reuse_count": 1, "abstraction_level": 0},
+        {"global_id": "v_b", "name": "b", "reuse_count": 1, "abstraction_level": 0},
+    ]
+    theory = Theory(
+        id="th1", motif_type="chain", theme_ids=(), node_ids=("v_a", "v_b"),
+        edges=(("v_a", "v_b", "causes"),), supporting_sessions=("s_1",),
+        natural_language_summary="x", structure_complexity=1,
+        first_seen_session="s_1", last_seen_session="s_1",
+    )
+    cache = TheoriesCache(stable_theories=[theory], rejected_theory_ids={"th1"})
+    out = lexicon_to_cytoscape(vars_, cache)
+    nodes = {n["data"]["id"]: n["data"] for n in out["elements"]["nodes"]}
+    assert nodes["v_a"]["in_theory"] is False  # 理论被拒 → 不算 in_theory
+    assert out["elements"]["edges"] == []      # 被拒理论的边不出现
+
+
+def test_lexicon_to_cytoscape_theme_index_numeric():
+    """M-3: theme 输出数值 theme_index 供前端 mapData 上色; 无 theme → -1。"""
+    from explain_engine.engines.theory.cache import TheoriesCache
+    from explain_engine.engines.theory.theory import Theme
+    from explain_engine.web.serializers import lexicon_to_cytoscape
+
+    vars_ = [
+        {"global_id": "v_a", "name": "a", "reuse_count": 1, "abstraction_level": 1},
+        {"global_id": "v_x", "name": "x", "reuse_count": 1, "abstraction_level": 0},
+    ]
+    theme = Theme(id="t1", name="经济", member_global_ids=("v_a",), centroid_summary="s")
+    cache = TheoriesCache(themes=[theme])
+    out = lexicon_to_cytoscape(vars_, cache)
+    nodes = {n["data"]["id"]: n["data"] for n in out["elements"]["nodes"]}
+    assert nodes["v_a"]["theme_index"] == 0
+    assert nodes["v_x"]["theme_index"] == -1

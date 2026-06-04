@@ -9,6 +9,12 @@ export interface SessionSidebarProps {
   onSelect: (sid: string) => void;
 }
 
+/** Unix 秒时间戳 → 本地可读时间; 非法值回退为空串。 */
+function formatTs(ts: number): string {
+  if (!ts || Number.isNaN(ts)) return "";
+  return new Date(ts * 1000).toLocaleString();
+}
+
 export default function SessionSidebar({
   selectedSid,
   onSelect,
@@ -91,7 +97,7 @@ export default function SessionSidebar({
             <div className="session-item-q">{s.question}</div>
             <div className="session-item-meta">
               <span className="session-stage">{s.stage}</span>
-              <span className="session-time">{s.updated_at}</span>
+              <span className="session-time">{formatTs(s.updated_at)}</span>
             </div>
           </button>
         ))}
