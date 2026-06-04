@@ -1,0 +1,98 @@
+.graph-panel {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #1b1b1f;
+  overflow: hidden;
+}
+
+.graph-canvas {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.graph-msg {
+  padding: 16px;
+  color: #9aa0a6;
+  font-size: 14px;
+  text-align: center;
+}
+
+.graph-empty {
+  margin: auto;
+}
+
+.graph-error {
+  color: #e57373;
+}
+
+/* 节点详情抽屉 */
+.node-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 280px;
+  max-width: 80%;
+  background: #26262b;
+  border-left: 1px solid #3a3a40;
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+  overflow-y: auto;
+}
+
+.node-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #3a3a40;
+}
+
+.node-drawer-title {
+  font-weight: 600;
+  color: #f1f1f1;
+  font-size: 15px;
+  word-break: break-word;
+}
+
+.node-drawer-close {
+  background: none;
+  border: none;
+  color: #9aa0a6;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px;
+}
+
+.node-drawer-close:hover {
+  color: #fff;
+}
+
+.node-drawer-body {
+  margin: 0;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 6px 10px;
+}
+
+.node-drawer-body dt {
+  color: #9aa0a6;
+  font-size: 12px;
+}
+
+.node-drawer-body dd {
+  margin: 0;
+  color: #e8e8e8;
+  font-size: 13px;
+  word-break: break-word;
+}
