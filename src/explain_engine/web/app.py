@@ -14,4 +14,7 @@ def create_app() -> FastAPI:
     from explain_engine.web.routes_sessions import router as sessions_router
     app.include_router(sessions_router)
 
+    from explain_engine.web.routes_chat import router as chat_router
+    app.include_router(chat_router)
+
     return app
