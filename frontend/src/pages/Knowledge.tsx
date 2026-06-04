@@ -20,20 +20,21 @@ interface KnowledgeGraphPayload {
   };
 }
 
-// 跨 session 知识图样式: 节点大小随 reuse, 颜色随 theme, in_theory 高亮
+// 跨 session 知识图样式 (浅色单色): 节点大小随 reuse, 统一深灰, in_theory 高亮
 const cyStyle: cytoscape.StylesheetStyle[] = [
   {
     selector: "node",
     style: {
       label: "data(label)",
-      // theme_index 是数值序号 (theme 本身是字符串 id, mapData 需数值);
-      // 无 theme → -1, mapData 会回退到下界色。
-      "background-color": "mapData(theme_index, 0, 9, #4f9da6, #9b5de5)",
-      color: "#fff",
-      "text-valign": "center",
+      "background-color": "#6b6b72",
+      color: "#3a3a3f",
+      "text-valign": "bottom",
       "text-halign": "center",
+      "text-margin-y": 4,
       "text-wrap": "wrap",
       "text-max-width": "120px",
+      "text-outline-color": "#ffffff",
+      "text-outline-width": 2,
       "font-size": "11px",
       shape: "ellipse",
       width: "mapData(reuse, 0, 10, 24, 72)",
@@ -44,16 +45,17 @@ const cyStyle: cytoscape.StylesheetStyle[] = [
     // [?in_theory] = 真值选择器 (存在性 [in_theory] 会把 false 也选中 → 全高亮)
     selector: "node[?in_theory]",
     style: {
+      "background-color": "#111114",
       "border-width": 3,
-      "border-color": "#ffd166",
+      "border-color": "#111114",
     },
   },
   {
     selector: "edge",
     style: {
       width: 1.5,
-      "line-color": "#bbb",
-      "target-arrow-color": "#bbb",
+      "line-color": "#d4d4d8",
+      "target-arrow-color": "#d4d4d8",
       "target-arrow-shape": "triangle",
       "curve-style": "bezier",
     },

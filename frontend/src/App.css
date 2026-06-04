@@ -1,10 +1,9 @@
-/* 工作台需要占满整屏, 覆盖脚手架在 index.css 里给 #root 的窄居中布局 */
+/* 工作台需要占满整屏 */
 #root {
   width: 100%;
   max-width: none;
   margin: 0;
   text-align: left;
-  border-inline: none;
 }
 
 .app {
@@ -12,41 +11,78 @@
   flex-direction: column;
   height: 100svh;
   box-sizing: border-box;
+  background: var(--bg);
 }
 
 .app-nav {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 8px 16px;
+  gap: 4px;
+  padding: 0 20px;
+  height: 52px;
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
 }
 
 .app-brand {
   font-weight: 600;
-  color: var(--text-h);
-  margin-right: 8px;
+  color: var(--text);
+  margin-right: auto;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .app-nav-link {
-  color: var(--text);
+  position: relative;
+  color: var(--text-muted);
   text-decoration: none;
-  font-size: 15px;
-  padding: 4px 8px;
-  border-radius: 6px;
+  font-size: 14px;
+  padding: 6px 4px;
+  margin-left: 20px;
+  transition: color var(--dur) var(--ease);
+}
+
+.app-nav-link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur) var(--ease);
 }
 
 .app-nav-link:hover {
-  background: var(--accent-bg);
+  color: var(--text);
+}
+
+.app-nav-link:hover::after {
+  transform: scaleX(1);
 }
 
 .app-nav-link.active {
-  color: var(--accent);
-  background: var(--accent-bg);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.app-nav-link.active::after {
+  transform: scaleX(1);
+}
+
+.app-routes {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn var(--dur-slow) var(--ease) both;
 }
 
 .page-placeholder {
   padding: 32px;
-  color: var(--text);
+  color: var(--text-muted);
 }

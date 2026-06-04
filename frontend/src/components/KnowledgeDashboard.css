@@ -1,40 +1,64 @@
 .kd {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 20px;
+  gap: 28px;
+  padding: 24px 20px;
 }
 
 .kd-cards {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  gap: 14px;
 }
 
 .kd-card {
-  background: var(--accent-bg);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
-  text-align: center;
+  border-radius: var(--radius);
+  padding: 18px 16px;
+  text-align: left;
+  transition: transform var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  animation: fadeInUp var(--dur-slow) var(--ease) both;
+}
+.kd-card:nth-child(1) {
+  animation-delay: 0ms;
+}
+.kd-card:nth-child(2) {
+  animation-delay: 40ms;
+}
+.kd-card:nth-child(3) {
+  animation-delay: 80ms;
+}
+.kd-card:nth-child(4) {
+  animation-delay: 120ms;
+}
+
+.kd-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-strong);
 }
 
 .kd-card-num {
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 700;
-  color: var(--text-h);
-}
-
-.kd-card-label {
-  margin-top: 4px;
-  font-size: 13px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
   color: var(--text);
 }
 
+.kd-card-label {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .kd-section-title {
-  margin: 0 0 10px;
-  font-size: 16px;
-  color: var(--text-h);
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
 }
 
 .kd-table {
@@ -46,18 +70,28 @@
 .kd-table th,
 .kd-table td {
   text-align: left;
-  padding: 8px 10px;
+  padding: 10px 10px;
   border-bottom: 1px solid var(--border);
   color: var(--text);
 }
 
 .kd-table th {
-  color: var(--text-h);
+  color: var(--text-subtle);
   font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.kd-table tbody tr {
+  transition: background var(--dur) var(--ease);
+}
+.kd-table tbody tr:hover {
+  background: var(--surface-2);
 }
 
 .kd-empty {
-  color: var(--text);
+  color: var(--text-muted);
   font-size: 14px;
   padding: 8px 0;
 }
@@ -65,24 +99,51 @@
 .kd-theories {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
+  gap: 14px;
 }
 
 .kd-theory {
   position: relative;
-  background: var(--social-bg);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px;
+  border-radius: var(--radius);
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  transition: transform var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  animation: fadeInUp var(--dur-slow) var(--ease) both;
+}
+.kd-theory:nth-child(1) {
+  animation-delay: 0ms;
+}
+.kd-theory:nth-child(2) {
+  animation-delay: 40ms;
+}
+.kd-theory:nth-child(3) {
+  animation-delay: 80ms;
+}
+.kd-theory:nth-child(4) {
+  animation-delay: 120ms;
+}
+.kd-theory:nth-child(5) {
+  animation-delay: 160ms;
+}
+.kd-theory:nth-child(6) {
+  animation-delay: 200ms;
+}
+
+.kd-theory:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-strong);
 }
 
 .kd-theory-summary {
-  color: var(--text-h);
+  color: var(--text);
   font-size: 14px;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .kd-theory-meta {
@@ -92,24 +153,34 @@
 }
 
 .kd-tag {
-  font-size: 12px;
-  color: var(--text);
-  background: var(--code-bg);
-  border-radius: 4px;
-  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
 }
 
 .kd-theory-reject {
   align-self: flex-start;
-  background: none;
-  border: 1px solid var(--accent-border);
-  color: var(--accent);
-  border-radius: 6px;
-  padding: 4px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: 5px 14px;
   font-size: 13px;
   cursor: pointer;
+  transition: background var(--dur) var(--ease),
+    color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    transform var(--dur-fast) var(--ease);
 }
 
 .kd-theory-reject:hover {
-  background: var(--accent-bg);
+  background: var(--surface-3);
+  color: var(--text);
+  border-color: var(--text);
+}
+
+.kd-theory-reject:active {
+  transform: translateY(1px) scale(0.99);
 }

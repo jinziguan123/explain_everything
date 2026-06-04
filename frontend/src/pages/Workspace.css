@@ -2,7 +2,8 @@
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: 260px 1fr 1fr;
+  grid-template-columns: 280px 1fr 1fr;
+  background: var(--bg);
 }
 
 .workspace-center,
@@ -20,7 +21,11 @@
 
 .workspace-hint {
   margin: auto;
-  padding: 24px;
+  padding: 32px;
+  max-width: 320px;
   text-align: center;
-  color: var(--text);
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.6;
+  animation: fadeIn var(--dur-slow) var(--ease) both;
 }

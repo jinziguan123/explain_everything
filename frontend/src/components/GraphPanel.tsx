@@ -20,14 +20,14 @@ interface GraphPayload {
   };
 }
 
-// 按层级着色: 0 现象 / 1 模式 / 2 深层原因
+// 按层级灰度: 0 现象 (浅) / 1 模式 (中) / 2 深层原因 (黑)
 const LEVEL_COLORS: Record<string, string> = {
-  "0": "#4f9da6",
-  "1": "#e0a458",
-  "2": "#9b5de5",
+  "0": "#c4c4c8",
+  "1": "#8a8a90",
+  "2": "#111114",
 };
 
-// Obsidian 风格: 力导向(cose) + 圆形节点 + 标签在下 + 悬停高亮邻居
+// 浅色单色风格: 力导向(cose) + 圆形节点 + 标签在下 + 悬停高亮邻居
 const cyStyle: cytoscape.StylesheetStyle[] = [
   {
     selector: "node",
@@ -36,17 +36,17 @@ const cyStyle: cytoscape.StylesheetStyle[] = [
       shape: "ellipse",
       width: 22,
       height: 22,
-      "background-color": "#8a8a8a",
+      "background-color": "#8a8a90",
       "border-width": 0,
-      // 标签在节点下方 (Obsidian 风格)
-      color: "#c9d1d9",
+      // 标签在节点下方
+      color: "#3a3a3f",
       "font-size": "10px",
       "text-valign": "bottom",
       "text-halign": "center",
       "text-margin-y": 4,
       "text-wrap": "wrap",
       "text-max-width": "120px",
-      "text-outline-color": "#0d1117",
+      "text-outline-color": "#ffffff",
       "text-outline-width": 2,
     },
   },
@@ -58,13 +58,13 @@ const cyStyle: cytoscape.StylesheetStyle[] = [
     selector: "edge",
     style: {
       width: "mapData(confidence, 0, 1, 1, 4)",
-      "line-color": "#3b434d",
-      "target-arrow-color": "#3b434d",
+      "line-color": "#d4d4d8",
+      "target-arrow-color": "#d4d4d8",
       "target-arrow-shape": "triangle",
       "arrow-scale": 0.8,
       "curve-style": "bezier",
       "line-style": "solid",
-      opacity: 0.8,
+      opacity: 0.9,
     },
   },
   { selector: 'edge[relation = "manifests_as"]', style: { "line-style": "dashed" } },
@@ -72,7 +72,7 @@ const cyStyle: cytoscape.StylesheetStyle[] = [
   { selector: ".faded", style: { opacity: 0.12, "text-opacity": 0.12 } },
   {
     selector: ".hl-node",
-    style: { "border-width": 3, "border-color": "#ffd166" },
+    style: { "border-width": 3, "border-color": "#111114" },
   },
 ];
 

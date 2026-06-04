@@ -15,10 +15,12 @@ function App() {
           全局知识
         </NavLink>
       </nav>
-      <Routes>
-        <Route path="/" element={<Workspace />} />
-        <Route path="/knowledge" element={<Knowledge />} />
-      </Routes>
+      <div className="app-routes">
+        <Routes>
+          <Route path="/" element={<Workspace />} />
+          <Route path="/knowledge" element={<Knowledge />} />
+        </Routes>
+      </div>
     </div>
   )
 }
