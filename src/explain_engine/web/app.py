@@ -12,9 +12,13 @@ from fastapi import FastAPI
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # best-effort: 初始化 lexicon backend (PG 可达则反映 PG, 否则 JSON fallback).
     # PG 不可达不致命 — dispatcher 默认走 JSON (variables.json)。
+    # PG 回退后关掉 async 池, 否则其后台 worker 会无限重连刷屏 (pool-1 error)。
     try:
         from explain_engine.engines.lexicon import init_lexicon_backend
-        await init_lexicon_backend()
+        active = await init_lexicon_backend()
+        if not active:
+            from explain_engine.persistence.lexicon_pg import close_async_pool
+            await close_async_pool()
     except Exception:
         pass
     yield

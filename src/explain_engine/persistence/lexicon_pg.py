@@ -91,6 +91,22 @@ def get_sync_pool() -> ConnectionPool:
     return _sync_pool
 
 
+async def close_async_pool() -> None:
+    """关闭并丢弃 async pool 单例.
+
+    用于 PG 不可达回退 JSON 后: verify_connection 失败时池仍是 open 的单例,
+    其后台 worker 会按 min_size 无限重连刷屏 (error connecting in 'pool-1')。
+    关掉它止刷屏。下次需要时 get_async_pool 会重建 (PG 恢复后重启进程即可)。
+    """
+    global _async_pool
+    if _async_pool is not None:
+        try:
+            await _async_pool.close()
+        except Exception:
+            pass
+        _async_pool = None
+
+
 async def verify_connection() -> None:
     """启动 fail-fast — chat REPL 启动前调.
 
