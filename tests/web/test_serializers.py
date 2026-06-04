@@ -32,3 +32,43 @@ def test_empty_graph():
     out = graph_to_cytoscape(g)
     assert out["elements"]["nodes"] == []
     assert out["elements"]["edges"] == []
+
+
+def test_lexicon_to_cytoscape_nodes_and_theme():
+    from explain_engine.engines.theory.cache import TheoriesCache
+    from explain_engine.engines.theory.theory import Theme, Theory
+    from explain_engine.web.serializers import lexicon_to_cytoscape
+    vars_ = [
+        {"global_id": "v_a", "name": "不确定性", "reuse_count": 5, "abstraction_level": 1},
+        {"global_id": "v_b", "name": "房价", "reuse_count": 2, "abstraction_level": 0},
+    ]
+    theme = Theme(id="t1", name="经济", member_global_ids=("v_a",), centroid_summary="s")
+    theory = Theory(
+        id="th1", motif_type="chain", theme_ids=("t1",), node_ids=("v_a", "v_b"),
+        edges=(("v_a", "v_b", "manifests_as"),), supporting_sessions=("s_1",),
+        natural_language_summary="x", structure_complexity=1,
+        first_seen_session="s_1", last_seen_session="s_1",
+    )
+    cache = TheoriesCache(themes=[theme], stable_theories=[theory])
+    out = lexicon_to_cytoscape(vars_, cache)
+    nodes = {n["data"]["id"]: n["data"] for n in out["elements"]["nodes"]}
+    assert nodes["v_a"]["theme"] == "t1" and nodes["v_a"]["in_theory"] is True
+    assert nodes["v_b"]["theme"] == ""  # 不在任何 theme
+    edges = out["elements"]["edges"]
+    assert len(edges) == 1 and edges[0]["data"]["relation"] == "manifests_as"
+
+
+def test_lexicon_to_cytoscape_skips_dangling_edge():
+    from explain_engine.engines.theory.cache import TheoriesCache
+    from explain_engine.engines.theory.theory import Theory
+    from explain_engine.web.serializers import lexicon_to_cytoscape
+    vars_ = [{"global_id": "v_a", "name": "a", "reuse_count": 1, "abstraction_level": 0}]
+    theory = Theory(
+        id="th1", motif_type="chain", theme_ids=(), node_ids=("v_a", "v_missing"),
+        edges=(("v_a", "v_missing", "causes"),), supporting_sessions=("s_1",),
+        natural_language_summary="x", structure_complexity=1,
+        first_seen_session="s_1", last_seen_session="s_1",
+    )
+    cache = TheoriesCache(stable_theories=[theory])
+    out = lexicon_to_cytoscape(vars_, cache)
+    assert out["elements"]["edges"] == []  # v_missing 不在节点集 → 跳过

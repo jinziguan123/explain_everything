@@ -18,6 +18,7 @@ from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
 from explain_engine.engines.theory.cache import get_active_theories, reject_theory
 from explain_engine.persistence.session import SessionStore
 from explain_engine.persistence.storage_v2 import StorageV2
+from explain_engine.web.serializers import lexicon_to_cytoscape
 
 router = APIRouter(prefix="/api")
 
@@ -47,6 +48,14 @@ def _normalize_variable(row: Any) -> dict[str, Any]:
     }
 
 
+def _fetch_normalized_variables() -> list[dict[str, Any]]:
+    """拉全量 lexicon 变量并归一化为 {global_id, name, reuse_count, abstraction_level}."""
+    return [
+        _normalize_variable(row)
+        for row in get_lexicon_top_k_for_compress(StorageV2(), k=100000)
+    ]
+
+
 def _theory_to_slim(theory: Any) -> dict[str, Any]:
     return {
         "id": theory.id,
@@ -68,10 +77,7 @@ def _slim_theories() -> list[dict[str, Any]]:
 async def knowledge_overview() -> dict[str, Any]:
     session_count = len(SessionStore().list())
 
-    variables = [
-        _normalize_variable(row)
-        for row in get_lexicon_top_k_for_compress(StorageV2(), k=100000)
-    ]
+    variables = _fetch_normalized_variables()
 
     cache = get_active_theories(StorageV2(), embedder=None)
     theories = [
@@ -89,6 +95,14 @@ async def knowledge_overview() -> dict[str, Any]:
         "top_variables": variables[:30],
         "theories": theories,
     }
+
+
+@router.get("/knowledge/graph")
+async def knowledge_graph() -> dict[str, Any]:
+    """跨 session 知识图: 变量节点 + theory motif 边。只读, embedder=None 不重算。"""
+    variables = _fetch_normalized_variables()
+    cache = get_active_theories(StorageV2(), embedder=None)
+    return lexicon_to_cytoscape(variables, cache)
 
 
 @router.get("/theories")

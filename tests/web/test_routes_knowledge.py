@@ -42,3 +42,11 @@ def test_reject_unknown_theory() -> None:
     resp = _client().post("/api/theories/nonexistent/reject")
     assert resp.status_code == 200
     assert resp.json() == {"rejected": False}
+
+
+def test_knowledge_graph_empty() -> None:
+    resp = _client().get("/api/knowledge/graph")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["elements"]["nodes"] == []
+    assert body["elements"]["edges"] == []
