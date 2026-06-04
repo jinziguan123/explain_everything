@@ -44,6 +44,19 @@
   white-space: pre-wrap;
 }
 
+/* 用户气泡是黑底白字, 全局 ::selection 也是黑底白字 → 选中不可见。
+   这里反色: 白底黑字, 框选时清晰高亮 (可见 = 可复制)。 */
+.chat-msg-user .chat-bubble::selection,
+.chat-msg-user .chat-bubble *::selection {
+  background: #ffffff;
+  color: #111114;
+}
+.chat-msg-user .chat-bubble::-moz-selection,
+.chat-msg-user .chat-bubble *::-moz-selection {
+  background: #ffffff;
+  color: #111114;
+}
+
 /* 助手: 无重气泡, 纯文本铺在白底上 + 左侧细发丝线 */
 .chat-msg-assistant .chat-bubble {
   max-width: 100%;
