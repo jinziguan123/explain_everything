@@ -48,6 +48,14 @@
   border-inline: 1px solid var(--border);
 }
 
+/* keep-alive 聊天面板宿主: 撑满中栏 (display 由 JS 切 flex/none) */
+.chat-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+}
+
 .workspace-right {
   border-left: 1px solid var(--border);
 }

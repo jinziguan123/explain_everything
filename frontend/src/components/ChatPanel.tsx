@@ -8,6 +8,8 @@ import "./ChatPanel.css";
 
 export interface ChatPanelProps {
   sid: string;
+  /** 是否为当前激活(可见)面板; keep-alive 下隐藏面板仍挂载、流式不中断 */
+  active?: boolean;
   /** 父组件用来刷新图谱 (A11) */
   onTurnComplete?: () => void;
   /** 告知父组件当前会话是否为空 (无任何消息); 用于"空会话不重复新建" */
@@ -124,6 +126,7 @@ function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
 
 export default function ChatPanel({
   sid,
+  active = true,
   onTurnComplete,
   onEmptyChange,
 }: ChatPanelProps) {
@@ -138,11 +141,12 @@ export default function ChatPanel({
   // 用户一旦发起新对话, 晚到的历史回放不得覆盖现场消息
   const dirtyRef = useRef(false);
 
-  // 自动滚到底部
+  // 自动滚到底部 (消息变化时; 以及面板从隐藏→激活时, 因隐藏期间 scroll 不生效)
   useEffect(() => {
+    if (!active) return;
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, status]);
+  }, [messages, status, active]);
 
   // 上报当前会话是否为空 (无消息) — Workspace 据此决定"+"是否新建
   useEffect(() => {

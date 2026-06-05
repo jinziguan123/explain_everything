@@ -10,38 +10,51 @@ const NEW_SESSION_TITLE = "新会话";
 
 export default function Workspace() {
   const [selectedSid, setSelectedSid] = useState<string | null>(null);
+  // 本次运行打开过的所有 session — 它们的 ChatPanel 常驻 (keep-alive), 切换只切
+  // 显隐, 后台的 AI 流式不中断 → 支持同时操控多个 session。
+  const [openSids, setOpenSids] = useState<string[]>([]);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
-  // 当前选中会话是否为空 (无任何消息); 由 ChatPanel 上报
-  const [currentEmpty, setCurrentEmpty] = useState(true);
+  // 每个会话是否为空 (无任何消息); 由各 ChatPanel 上报, 供"空会话不重复新建"判断
+  const [emptyMap, setEmptyMap] = useState<Record<string, boolean>>({});
   const queryClient = useQueryClient();
 
-  const handleTurnComplete = useCallback(() => {
-    if (selectedSid) {
-      void queryClient.invalidateQueries({ queryKey: ["graph", selectedSid] });
-    }
-  }, [selectedSid, queryClient]);
+  // 选中会话: 确保进入 openSids (常驻), 再设为当前
+  const selectSession = useCallback((sid: string) => {
+    setOpenSids((prev) => (prev.includes(sid) ? prev : [...prev, sid]));
+    setSelectedSid(sid);
+  }, []);
+
+  const setEmpty = useCallback((sid: string, empty: boolean) => {
+    setEmptyMap((m) => (m[sid] === empty ? m : { ...m, [sid]: empty }));
+  }, []);
 
   const createMut = useMutation({
     mutationFn: () => createSession(NEW_SESSION_TITLE),
     onSuccess: async (res) => {
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      setCurrentEmpty(true); // 新会话本就空
-      setSelectedSid(res.sid); // 选中 → ChatPanel(key=sid) 重挂 → 聊天清空
+      setEmpty(res.sid, true); // 新会话本就空
+      selectSession(res.sid);
     },
   });
 
   // 新建守卫: 当前已是一个空会话 → 留在原地, 不再堆一条空记录
   const handleNew = useCallback(() => {
     if (createMut.isPending) return;
-    if (selectedSid && currentEmpty) return;
+    if (selectedSid && (emptyMap[selectedSid] ?? true)) return;
     createMut.mutate();
-  }, [createMut, selectedSid, currentEmpty]);
+  }, [createMut, selectedSid, emptyMap]);
 
   const deleteMut = useMutation({
     mutationFn: (sid: string) => deleteSession(sid),
     onSuccess: async (_res, sid) => {
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      setOpenSids((prev) => prev.filter((s) => s !== sid)); // 卸载其 ChatPanel
+      setEmptyMap((m) => {
+        const next = { ...m };
+        delete next[sid];
+        return next;
+      });
       if (sid === selectedSid) setSelectedSid(null); // 删的是当前 → 回到空白
     },
   });
@@ -81,7 +94,7 @@ export default function Workspace() {
         <div className="workspace-pane-body">
           <SessionSidebar
             selectedSid={selectedSid}
-            onSelect={setSelectedSid}
+            onSelect={selectSession}
             onNew={handleNew}
             onDelete={handleDelete}
             creating={createMut.isPending}
@@ -101,19 +114,29 @@ export default function Workspace() {
       </button>
 
       <section className="workspace-center">
-        {selectedSid ? (
-          // key 让切换 session 时重建聊天面板, 清空上一段对话
-          <ChatPanel
-            key={selectedSid}
-            sid={selectedSid}
-            onTurnComplete={handleTurnComplete}
-            onEmptyChange={setCurrentEmpty}
-          />
-        ) : (
+        {!selectedSid && (
           <div className="workspace-hint">
             从左侧选择一个 session，或新建一个开始对话。
           </div>
         )}
+        {/* keep-alive: 每个打开过的 session 各保留常驻面板, 仅切显隐。
+            后台 session 的 AI 流式不被卸载中断 → 可同时操控多个 session。 */}
+        {openSids.map((sid) => (
+          <div
+            key={sid}
+            className="chat-host"
+            style={{ display: sid === selectedSid ? "flex" : "none" }}
+          >
+            <ChatPanel
+              sid={sid}
+              active={sid === selectedSid}
+              onTurnComplete={() =>
+                queryClient.invalidateQueries({ queryKey: ["graph", sid] })
+              }
+              onEmptyChange={(empty) => setEmpty(sid, empty)}
+            />
+          </div>
+        ))}
       </section>
 
       {/* 右侧折叠后的展开条 */}
