@@ -78,6 +78,48 @@ async def get_transcript(sid: str) -> list[dict[str, Any]]:
     return chat.transcript
 
 
+@router.post("/{sid}/autotitle")
+async def autotitle(sid: str) -> dict[str, str]:
+    """用 light LLM 据首条用户消息为会话生成简短标题, 写回 meta.question。
+
+    无首条用户消息 / LLM 不可用 / 生成失败 → 原样返回当前标题 (不改)。
+    """
+    chat = load_chat_or_404(sid)
+
+    first_user = ""
+    for e in chat.transcript:
+        if e.get("role") == "user" and isinstance(e.get("content"), str):
+            first_user = e["content"].strip()
+            break
+    if not first_user:
+        return {"title": chat._session.meta.question}
+
+    from explain_engine.config import make_light_llm_client
+    from explain_engine.llm.client import Message
+
+    try:
+        llm = make_light_llm_client()
+        prompt = (
+            "用不超过 12 个汉字概括下面这段提问的主题, 作为会话标题。"
+            "只输出标题本身, 不要引号、标点或任何解释。\n\n" + first_user[:500]
+        )
+        resp = await llm.chat([Message(role="user", content=prompt)])
+        title = (resp.text or "").strip().splitlines()[0].strip("「」\"' 　")[:30]
+    except Exception:
+        title = ""
+
+    if not title:
+        return {"title": chat._session.meta.question}
+
+    chat._session.meta.question = title
+    try:
+        chat.state.graph.root_question = title  # 与 meta 保持一致 (best-effort)
+    except Exception:
+        pass
+    chat.persist()
+    return {"title": title}
+
+
 @router.delete("/{sid}", status_code=204)
 async def delete_session(sid: str) -> Response:
     """删除整个 session (graph / transcript / chat_state 等)。缺失/非法 sid → 404。"""

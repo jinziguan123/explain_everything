@@ -30,6 +30,12 @@ export async function getTranscript(sid: string): Promise<TranscriptEntry[]> {
   return r.json();
 }
 
+export async function autotitleSession(sid: string): Promise<{ title: string }> {
+  const r = await fetch(`/api/sessions/${sid}/autotitle`, { method: "POST" });
+  if (!r.ok) throw new Error(`autotitleSession ${r.status}`);
+  return r.json();
+}
+
 export async function deleteSession(sid: string): Promise<void> {
   const r = await fetch(`/api/sessions/${sid}`, { method: "DELETE" });
   if (!r.ok) throw new Error(`deleteSession ${r.status}`);

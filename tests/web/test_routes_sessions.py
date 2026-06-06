@@ -76,3 +76,45 @@ def test_delete_missing_session_404():
 
 def test_delete_invalid_sid_404():
     assert _client().delete("/api/sessions/not-a-sid").status_code == 404
+
+
+def test_autotitle_generates_from_first_user_message(monkeypatch):
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    _make_done_session("s_a1b2c3f0")
+    StorageV2().append_transcript(
+        "s_a1b2c3f0", {"role": "user", "content": "日本经济为什么停滞了三十年"}
+    )
+
+    class _Resp:
+        text = "日本经济停滞"
+
+    class _LLM:
+        async def chat(self, messages, **kw):
+            return _Resp()
+
+    monkeypatch.setattr(
+        "explain_engine.config.make_light_llm_client", lambda: _LLM()
+    )
+
+    c = _client()
+    resp = c.post("/api/sessions/s_a1b2c3f0/autotitle")
+    assert resp.status_code == 200
+    assert resp.json()["title"] == "日本经济停滞"
+    # meta.question 已写回 → 列表/详情可见
+    assert c.get("/api/sessions/s_a1b2c3f0").json()["question"] == "日本经济停滞"
+
+
+def test_autotitle_no_user_message_keeps_current(monkeypatch):
+    _make_done_session("s_a1b2c3f1", stage="done")
+    # 无 user 文本消息 → 不调 LLM, 原样返回
+    called = {"n": 0}
+
+    def _boom():
+        called["n"] += 1
+        raise AssertionError("不应调用 LLM")
+
+    monkeypatch.setattr("explain_engine.config.make_light_llm_client", _boom)
+    resp = _client().post("/api/sessions/s_a1b2c3f1/autotitle")
+    assert resp.status_code == 200
+    assert called["n"] == 0

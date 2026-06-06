@@ -1,23 +1,53 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import SessionSidebar from "../components/SessionSidebar";
 import ChatPanel from "../components/ChatPanel";
 import GraphPanel from "../components/GraphPanel";
-import { createSession, deleteSession } from "../api/client";
+import {
+  autotitleSession,
+  createSession,
+  deleteSession,
+} from "../api/client";
 import "./Workspace.css";
 
 const NEW_SESSION_TITLE = "新会话";
+const LS_SELECTED = "ee.selectedSid";
+const LS_OPEN = "ee.openSids";
 
 export default function Workspace() {
-  const [selectedSid, setSelectedSid] = useState<string | null>(null);
+  // 视图状态持久化到 localStorage → 刷新/HMR 后恢复上次会话与历史 (避免"内容不见了")
+  const [selectedSid, setSelectedSid] = useState<string | null>(
+    () => localStorage.getItem(LS_SELECTED),
+  );
   // 本次运行打开过的所有 session — 它们的 ChatPanel 常驻 (keep-alive), 切换只切
   // 显隐, 后台的 AI 流式不中断 → 支持同时操控多个 session。
-  const [openSids, setOpenSids] = useState<string[]>([]);
+  const [openSids, setOpenSids] = useState<string[]>(() => {
+    let arr: string[] = [];
+    try {
+      const raw = localStorage.getItem(LS_OPEN);
+      if (raw) arr = JSON.parse(raw) as string[];
+    } catch {
+      arr = [];
+    }
+    const sel = localStorage.getItem(LS_SELECTED);
+    if (sel && !arr.includes(sel)) arr = [...arr, sel];
+    return arr;
+  });
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   // 每个会话是否为空 (无任何消息); 由各 ChatPanel 上报, 供"空会话不重复新建"判断
   const [emptyMap, setEmptyMap] = useState<Record<string, boolean>>({});
+  // 新建但尚未自动生成标题的会话 — 首轮对话完成后触发 autotitle
+  const needTitleRef = useRef<Set<string>>(new Set());
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    localStorage.setItem(LS_OPEN, JSON.stringify(openSids));
+  }, [openSids]);
+  useEffect(() => {
+    if (selectedSid) localStorage.setItem(LS_SELECTED, selectedSid);
+    else localStorage.removeItem(LS_SELECTED);
+  }, [selectedSid]);
 
   // 选中会话: 确保进入 openSids (常驻), 再设为当前
   const selectSession = useCallback((sid: string) => {
@@ -29,11 +59,28 @@ export default function Workspace() {
     setEmptyMap((m) => (m[sid] === empty ? m : { ...m, [sid]: empty }));
   }, []);
 
+  // 一轮对话完成: 刷新该会话图谱; 若是新建会话的首轮 → light LLM 自动起标题
+  const handleTurnComplete = useCallback(
+    (sid: string) => {
+      void queryClient.invalidateQueries({ queryKey: ["graph", sid] });
+      if (needTitleRef.current.has(sid)) {
+        needTitleRef.current.delete(sid);
+        autotitleSession(sid)
+          .then(() =>
+            queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+          )
+          .catch(() => {});
+      }
+    },
+    [queryClient],
+  );
+
   const createMut = useMutation({
     mutationFn: () => createSession(NEW_SESSION_TITLE),
     onSuccess: async (res) => {
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       setEmpty(res.sid, true); // 新会话本就空
+      needTitleRef.current.add(res.sid); // 首轮后自动起标题
       selectSession(res.sid);
     },
   });
@@ -130,9 +177,7 @@ export default function Workspace() {
             <ChatPanel
               sid={sid}
               active={sid === selectedSid}
-              onTurnComplete={() =>
-                queryClient.invalidateQueries({ queryKey: ["graph", sid] })
-              }
+              onTurnComplete={() => handleTurnComplete(sid)}
               onEmptyChange={(empty) => setEmpty(sid, empty)}
             />
           </div>
