@@ -45,12 +45,16 @@
 }
 
 .workspace-center {
+  position: relative; /* keep-alive 面板绝对定位铺满的定位上下文 */
   border-inline: 1px solid var(--border);
 }
 
-/* keep-alive 聊天面板宿主: 撑满中栏 (display 由 JS 切 flex/none) */
+/* keep-alive 聊天面板宿主: 绝对定位铺满中栏 (display 由 JS 切 flex/none)。
+   用 absolute inset:0 而非 flex:1 — 多个 host 叠放时不依赖脆弱的 flex 高度链,
+   可见 host 始终铺满 (修"刷新恢复后聊天区高度塌成 0、内容不显示")。 */
 .chat-host {
-  flex: 1 1 auto;
+  position: absolute;
+  inset: 0;
   min-height: 0;
   min-width: 0;
   flex-direction: column;
