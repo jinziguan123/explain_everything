@@ -61,6 +61,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     app = FastAPI(title="Explain Engine Web", version="0.1.0", lifespan=_lifespan)
 
+    # index.html 禁缓存: 每次刷新都取最新 index → 引用当前 hash 的 JS/CSS
+    # (带 hash 的资源可被长期缓存, hash 变即自动失效)。防"重建后刷新加载到旧包"。
+    @app.middleware("http")
+    async def _no_cache_html(request, call_next):  # type: ignore[no-untyped-def]
+        response = await call_next(request)
+        ctype = response.headers.get("content-type", "")
+        if ctype.startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
     @app.get("/api/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
