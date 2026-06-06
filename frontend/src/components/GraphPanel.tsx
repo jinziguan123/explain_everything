@@ -20,69 +20,98 @@ interface GraphPayload {
   };
 }
 
-// 按层级灰度: 0 现象 (浅) / 1 模式 (中) / 2 深层原因 (黑)
+// 按层级着色 (彩色, 类 MiroFish): 0 现象 / 1 模式 / 2 深层原因
 const LEVEL_COLORS: Record<string, string> = {
-  "0": "#c4c4c8",
-  "1": "#8a8a90",
-  "2": "#111114",
+  "0": "#2f6df6",
+  "1": "#f5921e",
+  "2": "#9b5de5",
+};
+const LEVEL_NAMES: Record<string, string> = {
+  "0": "现象",
+  "1": "模式",
+  "2": "深层原因",
+};
+// 边关系类型 → 中文标签
+const REL_LABELS: Record<string, string> = {
+  causes: "导致",
+  manifests_as: "表现为",
+  amplifies: "增强",
+  suppresses: "抑制",
+  constrains: "约束",
 };
 
-// 浅色单色风格: 力导向(cose) + 圆形节点 + 标签在下 + 悬停高亮邻居
-const cyStyle: cytoscape.StylesheetStyle[] = [
-  {
-    selector: "node",
-    style: {
-      label: "data(label)",
-      shape: "ellipse",
-      width: 22,
-      height: 22,
-      "background-color": "#8a8a90",
-      "border-width": 0,
-      // 标签在节点下方
-      color: "#3a3a3f",
-      "font-size": "10px",
-      "text-valign": "bottom",
-      "text-halign": "center",
-      "text-margin-y": 4,
-      "text-wrap": "wrap",
-      "text-max-width": "120px",
-      "text-outline-color": "#ffffff",
-      "text-outline-width": 2,
+function buildCyStyle(showEdgeLabels: boolean): cytoscape.StylesheetStyle[] {
+  // 数值/过渡等属性 @types/cytoscape 标注偏严, 整体断言一次避免逐属性报错。
+  return [
+    {
+      selector: "node",
+      style: {
+        label: "data(label)",
+        shape: "ellipse",
+        width: 24,
+        height: 24,
+        "background-color": "#9aa0a6",
+        "border-width": 2,
+        "border-color": "#ffffff",
+        color: "#1f2937",
+        "font-size": "10px",
+        "text-valign": "bottom",
+        "text-halign": "center",
+        "text-margin-y": 4,
+        "text-wrap": "wrap",
+        "text-max-width": "120px",
+        "text-outline-color": "#ffffff",
+        "text-outline-width": 2,
+        // 颜色/尺寸变化带过渡动画
+        "transition-property": "background-color, width, height, opacity",
+        "transition-duration": "220ms",
+      },
     },
-  },
-  { selector: "node[level = 0]", style: { "background-color": LEVEL_COLORS["0"] } },
-  { selector: "node[level = 1]", style: { "background-color": LEVEL_COLORS["1"], width: 28, height: 28 } },
-  { selector: "node[level = 2]", style: { "background-color": LEVEL_COLORS["2"], width: 34, height: 34 } },
-  { selector: 'node[lifecycle = "decayed"]', style: { opacity: 0.35 } },
-  {
-    selector: "edge",
-    style: {
-      width: "mapData(confidence, 0, 1, 1, 4)",
-      "line-color": "#d4d4d8",
-      "target-arrow-color": "#d4d4d8",
-      "target-arrow-shape": "triangle",
-      "arrow-scale": 0.8,
-      "curve-style": "bezier",
-      "line-style": "solid",
-      opacity: 0.9,
+    { selector: "node[level = 0]", style: { "background-color": LEVEL_COLORS["0"] } },
+    {
+      selector: "node[level = 1]",
+      style: { "background-color": LEVEL_COLORS["1"], width: 30, height: 30 },
     },
-  },
-  { selector: 'edge[relation = "manifests_as"]', style: { "line-style": "dashed" } },
-  // 悬停高亮: 非邻域淡出
-  { selector: ".faded", style: { opacity: 0.12, "text-opacity": 0.12 } },
-  {
-    selector: ".hl-node",
-    style: { "border-width": 3, "border-color": "#111114" },
-  },
-];
+    {
+      selector: "node[level = 2]",
+      style: { "background-color": LEVEL_COLORS["2"], width: 38, height: 38 },
+    },
+    { selector: 'node[lifecycle = "decayed"]', style: { opacity: 0.35 } },
+    {
+      selector: "edge",
+      style: {
+        width: "mapData(confidence, 0, 1, 1, 3.5)",
+        "line-color": "#c4cad3",
+        "target-arrow-color": "#c4cad3",
+        "target-arrow-shape": "triangle",
+        "arrow-scale": 0.8,
+        "curve-style": "bezier",
+        label: showEdgeLabels ? "data(relLabel)" : "",
+        "font-size": "8px",
+        color: "#8a93a0",
+        "text-rotation": "autorotate",
+        "text-background-color": "#ffffff",
+        "text-background-opacity": 0.85,
+        "text-background-padding": 2,
+        "transition-property": "line-color, opacity",
+        "transition-duration": "220ms",
+      },
+    },
+    { selector: 'edge[relation = "manifests_as"]', style: { "line-style": "dashed" } },
+    // 悬停高亮: 非邻域淡出
+    { selector: ".faded", style: { opacity: 0.12, "text-opacity": 0.12 } },
+    { selector: ".hl-node", style: { "border-color": "#111114", "border-width": 3 } },
+  ] as unknown as cytoscape.StylesheetStyle[];
+}
 
 const COSE_LAYOUT = {
   name: "cose",
-  animate: false,
-  padding: 30,
-  idealEdgeLength: 90,
+  animate: true,
+  animationDuration: 600,
+  padding: 40,
+  idealEdgeLength: 110,
   nodeRepulsion: 9000,
-  nodeOverlap: 16,
+  nodeOverlap: 18,
   gravity: 0.3,
   randomize: false,
 } as unknown as cytoscape.LayoutOptions;
@@ -91,11 +120,15 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
   const [selected, setSelected] = useState<NodeData | null>(null);
+  const [showEdgeLabels, setShowEdgeLabels] = useState(true);
+  const showEdgeLabelsRef = useRef(showEdgeLabels);
+  showEdgeLabelsRef.current = showEdgeLabels;
 
-  const { data, isLoading, isError, error, refetch } = useQuery<GraphPayload>({
-    queryKey: ["graph", sid],
-    queryFn: () => getGraph(sid),
-  });
+  const { data, isLoading, isError, error, refetch, isFetching } =
+    useQuery<GraphPayload>({
+      queryKey: ["graph", sid],
+      queryFn: () => getGraph(sid),
+    });
 
   // 父组件改 refreshKey 时主动重新拉取 (A11 也可改用 invalidateQueries)
   useEffect(() => {
@@ -110,10 +143,20 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
     const container = containerRef.current;
     if (!container || !hasNodes) return;
 
+    // 给边补中文关系标签
+    const edgesWithLabels = edges.map((e) => {
+      const d = (e.data ?? {}) as Record<string, unknown>;
+      const rel = typeof d.relation === "string" ? d.relation : "";
+      return { data: { ...d, relLabel: REL_LABELS[rel] ?? rel } };
+    });
+
     const cy = cytoscape({
       container,
-      elements: { nodes, edges },
-      style: cyStyle,
+      elements: {
+        nodes,
+        edges: edgesWithLabels as unknown as cytoscape.EdgeDefinition[],
+      },
+      style: buildCyStyle(showEdgeLabelsRef.current),
       layout: COSE_LAYOUT,
       wheelSensitivity: 0.2,
     });
@@ -126,7 +169,7 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
     cy.on("tap", (evt) => {
       if (evt.target === cy) setSelected(null);
     });
-    // Obsidian 风格悬停: 高亮当前节点 + 邻域, 其余淡出
+    // 悬停高亮当前节点 + 邻域, 其余淡出
     cy.on("mouseover", "node", (evt) => {
       const node = evt.target;
       cy.elements().addClass("faded");
@@ -144,6 +187,13 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
     };
   }, [nodes, edges, hasNodes]);
 
+  // 切换边标签: 重应用样式 (不重新布局, 保持节点位置)。mock 无 style() → 跳过。
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy || typeof cy.style !== "function") return;
+    cy.style(buildCyStyle(showEdgeLabels));
+  }, [showEdgeLabels]);
+
   return (
     <div className="graph-panel">
       {isLoading && <div className="graph-msg">加载图谱中…</div>}
@@ -157,6 +207,49 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
           该 session 暂无图谱, 开始对话以构建
         </div>
       )}
+
+      {hasNodes && (
+        <>
+          {/* 顶部工具条: 边标签开关 */}
+          <div className="graph-toolbar">
+            <button
+              type="button"
+              className={`graph-toggle${showEdgeLabels ? " on" : ""}`}
+              onClick={() => setShowEdgeLabels((v) => !v)}
+              aria-pressed={showEdgeLabels}
+              title="显示/隐藏关系标签"
+            >
+              <span className="graph-toggle-track">
+                <span className="graph-toggle-knob" />
+              </span>
+              关系标签
+            </button>
+          </div>
+
+          {/* 图例 */}
+          <div className="graph-legend">
+            <div className="graph-legend-title">节点层级</div>
+            {(["0", "1", "2"] as const).map((lv) => (
+              <div key={lv} className="graph-legend-row">
+                <span
+                  className="graph-legend-dot"
+                  style={{ background: LEVEL_COLORS[lv] }}
+                />
+                {LEVEL_NAMES[lv]}
+              </div>
+            ))}
+          </div>
+
+          {/* 实时更新指示 */}
+          {isFetching && (
+            <div className="graph-updating">
+              <span className="graph-updating-dot" />
+              实时更新中…
+            </div>
+          )}
+        </>
+      )}
+
       <div
         ref={containerRef}
         className="graph-canvas"

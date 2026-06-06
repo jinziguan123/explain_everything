@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import GraphPanel from "./GraphPanel";
 import { getGraph } from "../api/client";
@@ -128,10 +128,12 @@ describe("GraphPanel", () => {
     await waitFor(() =>
       expect(screen.getByRole("dialog")).toBeInTheDocument(),
     );
-    expect(screen.getByText("模式")).toBeInTheDocument(); // level 1 → 模式
-    expect(screen.getByText("insight")).toBeInTheDocument();
-    expect(screen.getByText("一段描述")).toBeInTheDocument();
-    expect(screen.getByText("0.80")).toBeInTheDocument(); // confidence
+    // 限定在抽屉内断言 (图例里也有"模式"字样, 全局 getByText 会撞)
+    const drawer = within(screen.getByRole("dialog"));
+    expect(drawer.getByText("模式")).toBeInTheDocument(); // level 1 → 模式
+    expect(drawer.getByText("insight")).toBeInTheDocument();
+    expect(drawer.getByText("一段描述")).toBeInTheDocument();
+    expect(drawer.getByText("0.80")).toBeInTheDocument(); // confidence
 
     // 关闭抽屉
     fireEvent.click(screen.getByRole("button", { name: "关闭" }));
