@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { streamChat } from "../api/chatStream";
 import type { SSEEvent } from "../api/chatStream";
 import { getTranscript } from "../api/client";
@@ -333,7 +334,9 @@ export default function ChatPanel({
                 )}
                 {m.text && (
                   <div className="chat-markdown">
-                    <ReactMarkdown>{m.text}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {m.text}
+                    </ReactMarkdown>
                   </div>
                 )}
                 {m.notice && <div className="chat-notice">{m.notice}</div>}

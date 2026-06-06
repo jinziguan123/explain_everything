@@ -72,6 +72,30 @@
 .chat-markdown :last-child {
   margin-bottom: 0;
 }
+/* GFM 表格 (remark-gfm): 极简描边 + 斑马纹 */
+.chat-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 0.9em;
+  display: block;
+  overflow-x: auto;
+}
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid var(--border-strong);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.chat-markdown th {
+  background: var(--surface-3);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.chat-markdown tbody tr:nth-child(even) {
+  background: var(--surface-2);
+}
 .chat-markdown pre {
   overflow-x: auto;
   background: var(--surface-3);
