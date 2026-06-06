@@ -345,7 +345,16 @@ export default function ChatPanel({
             </div>
           ),
         )}
-        {status && <div className="chat-status">{status}</div>}
+        {streaming && (
+          <div className="chat-status">
+            <span className="chat-status-dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+            <span>{status || "AI 思考中…"}</span>
+          </div>
+        )}
       </div>
 
       <div className="chat-input-row">
