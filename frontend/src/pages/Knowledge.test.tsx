@@ -32,6 +32,7 @@ vi.mock("cytoscape", () => {
   return { default: fn };
 });
 vi.mock("cytoscape-dagre", () => ({ default: {} }));
+vi.mock("cytoscape-cola", () => ({ default: {} }));
 
 vi.mock("../api/client", () => ({
   getKnowledgeOverview: vi.fn(),
@@ -89,7 +90,7 @@ beforeEach(() => {
 });
 
 describe("Knowledge page", () => {
-  it("渲染仪表盘并用 cose 布局初始化跨 session 图", async () => {
+  it("渲染仪表盘并用 cola 布局初始化跨 session 图", async () => {
     mockOverview.mockResolvedValue(overviewData());
     mockGraph.mockResolvedValue(graphData());
     render(wrap(<Knowledge />));
@@ -101,7 +102,7 @@ describe("Knowledge page", () => {
       layout: { name: string };
       elements: { nodes: { data: { id: string } }[] };
     };
-    expect(opts.layout).toMatchObject({ name: "cose" });
+    expect(opts.layout).toMatchObject({ name: "cola" });
     expect(opts.elements.nodes[0].data.id).toBe("n1");
   });
 

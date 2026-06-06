@@ -1,19 +1,7 @@
 import { useEffect, useRef } from "react";
 import cytoscape from "cytoscape";
-import dagre from "cytoscape-dagre";
+import { ensureColaLayout } from "../lib/cyLayout";
 import "./GraphPanel.css";
-
-// 防止 dagre 在热重载 / 多实例下重复注册
-let dagreRegistered = false;
-function registerDagre() {
-  if (dagreRegistered) return;
-  try {
-    cytoscape.use(dagre);
-  } catch {
-    // 已注册时 cytoscape 会抛 warning/throw, 忽略即可
-  }
-  dagreRegistered = true;
-}
 
 export interface CytoGraphProps {
   elements: { nodes: cytoscape.NodeDefinition[]; edges: cytoscape.EdgeDefinition[] };
@@ -47,13 +35,14 @@ export default function CytoGraph({
     const container = containerRef.current;
     if (!container || !hasNodes) return;
 
-    registerDagre();
+    ensureColaLayout();
 
     const cy = cytoscape({
       container,
       elements: { nodes, edges },
       style: stylesheet,
       layout: layout as cytoscape.LayoutOptions,
+      wheelSensitivity: 0.2,
     });
     cyRef.current = cy;
 
@@ -62,6 +51,17 @@ export default function CytoGraph({
         onNodeTap(evt.target.data() as Record<string, unknown>);
       });
     }
+    // 悬停高亮当前节点 + 邻域 (需 stylesheet 含 .faded / .hl-node)
+    cy.on("mouseover", "node", (evt) => {
+      const node = evt.target;
+      cy.elements().addClass("faded");
+      node.closedNeighborhood().removeClass("faded");
+      node.addClass("hl-node");
+    });
+    cy.on("mouseout", "node", (evt) => {
+      cy.elements().removeClass("faded");
+      evt.target.removeClass("hl-node");
+    });
 
     return () => {
       cy.destroy();

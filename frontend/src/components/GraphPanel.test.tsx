@@ -42,6 +42,7 @@ vi.mock("cytoscape", () => {
   return { default: fn };
 });
 vi.mock("cytoscape-dagre", () => ({ default: {} }));
+vi.mock("cytoscape-cola", () => ({ default: {} }));
 
 vi.mock("../api/client", () => ({
   getGraph: vi.fn(),
@@ -98,8 +99,8 @@ describe("GraphPanel", () => {
       layout: { name: string };
     };
     expect(opts.elements.nodes[0].data.id).toBe("c_001");
-    // Obsidian 风格力导向布局
-    expect(opts.layout).toMatchObject({ name: "cose" });
+    // cola 持续力导向布局 (拖动联动)
+    expect(opts.layout).toMatchObject({ name: "cola" });
   });
 
   it("空图谱显示友好空状态且不初始化 cytoscape", async () => {

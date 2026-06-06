@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import cytoscape from "cytoscape";
 import { getGraph } from "../api/client";
+import { COLA_LAYOUT, ensureColaLayout } from "../lib/cyLayout";
 import NodeDrawer from "./NodeDrawer";
 import type { NodeData } from "./NodeDrawer";
 import "./GraphPanel.css";
@@ -104,18 +105,6 @@ function buildCyStyle(showEdgeLabels: boolean): cytoscape.StylesheetStyle[] {
   ] as unknown as cytoscape.StylesheetStyle[];
 }
 
-const COSE_LAYOUT = {
-  name: "cose",
-  animate: true,
-  animationDuration: 600,
-  padding: 40,
-  idealEdgeLength: 110,
-  nodeRepulsion: 9000,
-  nodeOverlap: 18,
-  gravity: 0.3,
-  randomize: false,
-} as unknown as cytoscape.LayoutOptions;
-
 export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
@@ -150,6 +139,7 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
       return { data: { ...d, relLabel: REL_LABELS[rel] ?? rel } };
     });
 
+    ensureColaLayout();
     const cy = cytoscape({
       container,
       elements: {
@@ -157,7 +147,7 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
         edges: edgesWithLabels as unknown as cytoscape.EdgeDefinition[],
       },
       style: buildCyStyle(showEdgeLabelsRef.current),
-      layout: COSE_LAYOUT,
+      layout: COLA_LAYOUT,
       wheelSensitivity: 0.2,
     });
     cyRef.current = cy;
