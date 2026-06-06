@@ -278,7 +278,9 @@ class TestHandleUserInputBudgetEnforcement:
 class TestQueryLoopTranscriptPersist:
     @pytest.mark.asyncio
     async def test_appends_tool_result_to_transcript(self, mocker) -> None:
-        """Tool 调用后, transcript 多 2 条 (assistant + user 的 tool_result)."""
+        """Tool 调用 + 最终回答后, transcript 多 3 条:
+        assistant(text+tool_use) + user(tool_result) + assistant(最终纯文本回答)。
+        最终纯文本回答也必须存盘 (否则刷新/resume 后丢失)。"""
         from explain_engine.chat.loop import query_loop
         from explain_engine.engines.simulation import AcceptanceReport
 
@@ -307,15 +309,45 @@ class TestQueryLoopTranscriptPersist:
         ])
         async for _ev in query_loop(chat, llm):
             pass
-        # 2 messages appended: assistant turn (text + tool_use) + user (tool_result)
-        assert len(chat.transcript) - before_count == 2
-        assert chat.transcript[-2]["role"] == "assistant"
-        assert chat.transcript[-1]["role"] == "user"
-        # tool_result content shape
-        last = chat.transcript[-1]["content"]
-        assert isinstance(last, list)
-        assert last[0]["type"] == "tool_result"
-        assert last[0]["tool_use_id"] == "tu_1"
+        # 3 messages: assistant(text+tool_use) + user(tool_result) + assistant(最终回答)
+        assert len(chat.transcript) - before_count == 3
+        assert chat.transcript[-3]["role"] == "assistant"
+        assert chat.transcript[-2]["role"] == "user"
+        assert chat.transcript[-1]["role"] == "assistant"
+        # tool_result content shape (倒数第 2 条)
+        tr = chat.transcript[-2]["content"]
+        assert isinstance(tr, list)
+        assert tr[0]["type"] == "tool_result"
+        assert tr[0]["tool_use_id"] == "tu_1"
+        # 最终纯文本回答已存盘 (本次修复重点)
+        final = chat.transcript[-1]["content"]
+        assert any(b.get("type") == "text" and b.get("text") == "done" for b in final)
+
+    @pytest.mark.asyncio
+    async def test_final_text_only_answer_persisted(self) -> None:
+        """LLM 直接给纯文本答案(无任何 tool_use) 必须存进 transcript。
+
+        回归: 之前 'if not response.tool_uses: return' 在存盘前提前返回, 导致最终
+        答案只在实时流出现, 刷新/resume 后丢失。
+        """
+        from explain_engine.chat.loop import query_loop
+
+        _make_done_session("s_aaaa0011")
+        chat = ChatSession("s_aaaa0011")
+        before = len(chat.transcript)
+
+        llm = _FakeLLMClient(
+            [_FakeLLMResponse(text="这是最终答案", tool_uses=[], stop_reason="end_turn")]
+        )
+        async for _ev in query_loop(chat, llm):
+            pass
+
+        assert len(chat.transcript) - before == 1
+        assert chat.transcript[-1]["role"] == "assistant"
+        final = chat.transcript[-1]["content"]
+        assert any(
+            b.get("type") == "text" and b.get("text") == "这是最终答案" for b in final
+        )
 
     @pytest.mark.asyncio
     async def test_budget_consumed_per_tool_call(self, mocker) -> None:

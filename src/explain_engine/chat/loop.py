@@ -256,6 +256,23 @@ async def query_loop(
 
         # ── No tool calls → end turn ──
         if not response.tool_uses:
+            # 关键修复: 最终纯文本回答(无 tool_use)也必须存盘, 否则刷新/resume 后丢失。
+            # 之前这里直接 return, 没走到下方 append_transcript → 大段最终答案只在实时
+            # 流里出现, 持久化缺失 (web 刷新 / TUI resume 都看不到最终答案)。
+            raw_blocks = getattr(response, "raw_content_blocks", None) or []
+            final_content: list[dict[str, Any]] = (
+                list(raw_blocks)
+                if raw_blocks
+                else ([{"type": "text", "text": response.text}] if response.text else [])
+            )
+            if final_content:
+                final_msg = {
+                    "role": "assistant",
+                    "content": final_content,
+                    "turn": chat.chat_state.turn_count,
+                }
+                chat.transcript.append(final_msg)
+                chat.storage.append_transcript(chat.sid, final_msg)
             yield TurnCompleteEvent()
             return
 
