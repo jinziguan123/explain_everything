@@ -4,6 +4,9 @@
   display: grid;
   /* 左面板 | 左展开条 | 中间(聊天) | 右展开条 | 右面板(图谱) */
   grid-template-columns: 280px 0 minmax(360px, 1.4fr) 0 minmax(0, 1fr);
+  /* 关键: 显式行高铺满容器。否则行按内容撑高, 中间列内容(绝对定位)高度为 0 时
+     行高塌陷 → 聊天区高度归零、内容不显示。minmax(0,1fr) 让三栏始终满高。 */
+  grid-template-rows: minmax(0, 1fr);
   background: var(--bg);
   transition: grid-template-columns var(--dur) var(--ease);
 }
