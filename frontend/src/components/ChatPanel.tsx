@@ -79,6 +79,9 @@ function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
     if (entry.role === "user") {
       // 纯文本 user 消息 -> UserMessage; 数组(tool_result 等管线)直接跳过
       if (typeof entry.content === "string") {
+        // 合并连续重复的用户消息 (历史上"切换中断流/无反馈"导致的重复回车留下的)
+        const last = out[out.length - 1];
+        if (last && last.role === "user" && last.text === entry.content) continue;
         out.push({ role: "user", text: entry.content });
       }
       continue;
