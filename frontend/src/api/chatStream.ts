@@ -10,19 +10,11 @@ export interface SSEEvent {
   };
 }
 
-export async function streamChat(
-  sid: string,
-  message: string,
+/** 读取一个 SSE Response 流, 按帧解析并回调。流结束 (或 abort) 时 resolve。 */
+async function pumpSSE(
+  resp: Response,
   onEvent: (ev: SSEEvent) => void,
-  signal?: AbortSignal,
 ): Promise<void> {
-  const resp = await fetch(`/api/sessions/${sid}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
-    signal,
-  });
-  if (!resp.ok) throw new Error(`chat ${resp.status}`);
   if (!resp.body) throw new Error("no stream body");
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
@@ -42,5 +34,41 @@ export async function streamChat(
       }
       if (ev.event) onEvent(ev as SSEEvent);
     }
+  }
+}
+
+/** 启动一轮后台生成 (POST)。404=会话不存在, 409=已有进行中的生成。 */
+export async function startChat(
+  sid: string,
+  message: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const r = await fetch(`/api/sessions/${sid}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+    signal,
+  });
+  if (!r.ok) throw new Error(`startChat ${r.status}`);
+}
+
+/** 订阅当前轮事件流 (GET)。刷新后重连即调用此函数; 无进行中的生成时
+ * 后端会发一个 no_active_run 事件后立即结束。 */
+export async function openChatStream(
+  sid: string,
+  onEvent: (ev: SSEEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const resp = await fetch(`/api/sessions/${sid}/chat/stream`, { signal });
+  if (!resp.ok) throw new Error(`openChatStream ${resp.status}`);
+  await pumpSSE(resp, onEvent);
+}
+
+/** 取消进行中的后台生成 (POST)。best-effort, 失败静默。 */
+export async function stopChat(sid: string): Promise<void> {
+  try {
+    await fetch(`/api/sessions/${sid}/chat/stop`, { method: "POST" });
+  } catch {
+    // 忽略: 停止失败不影响 UI
   }
 }

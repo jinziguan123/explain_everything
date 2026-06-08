@@ -4,6 +4,7 @@ export interface SessionSummary {
   stage: string;
   created_at: number; // Unix 时间戳 (秒)
   updated_at: number; // Unix 时间戳 (秒)
+  last_user_message_at: number; // 最近用户提问时间 (秒); 0=尚未提问
 }
 
 export async function listSessions(): Promise<SessionSummary[]> {

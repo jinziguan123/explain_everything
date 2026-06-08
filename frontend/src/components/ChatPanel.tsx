@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { streamChat } from "../api/chatStream";
+import { openChatStream, startChat, stopChat } from "../api/chatStream";
 import type { SSEEvent } from "../api/chatStream";
 import { getTranscript } from "../api/client";
 import type { TranscriptEntry } from "../api/client";
@@ -266,6 +266,12 @@ export default function ChatPanel({
   const listRef = useRef<HTMLDivElement | null>(null);
   // 用户一旦发起新对话, 晚到的历史回放不得覆盖现场消息
   const dirtyRef = useRef(false);
+  // 把 onTurnComplete 收进 ref: 父组件每次 render 传新箭头函数, 若直接进
+  // handleEvent 依赖会让订阅 effect 反复重连。用 ref 保持 handleEvent 稳定。
+  const onTurnCompleteRef = useRef(onTurnComplete);
+  useEffect(() => {
+    onTurnCompleteRef.current = onTurnComplete;
+  }, [onTurnComplete]);
   // 是否"贴底跟随": 仅当用户本就在底部时才随新内容自动下滚; 用户上翻后停止跟随,
   // 避免流式生成时把正在阅读的视图硬拽到底。
   const stickToBottomRef = useRef(true);
@@ -296,23 +302,6 @@ export default function ChatPanel({
     return () => abortRef.current?.abort();
   }, []);
 
-  // 选中(切换) session 时回放已持久化的历史对话; 新流式轮次随后 append
-  useEffect(() => {
-    let cancelled = false;
-    stickToBottomRef.current = true; // 切到新会话 → 落到该会话底部
-    getTranscript(sid)
-      .then((entries) => {
-        if (!cancelled && !dirtyRef.current)
-          setMessages(transcriptToMessages(entries));
-      })
-      .catch(() => {
-        if (!cancelled && !dirtyRef.current) setMessages([]); // 新/空 session 或失败 -> 空
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sid]);
-
   /** 修改最后一条 assistant 消息 */
   const patchLastAssistant = useCallback(
     (fn: (m: AssistantMessage) => AssistantMessage) => {
@@ -334,6 +323,26 @@ export default function ChatPanel({
     (ev: SSEEvent) => {
       const { content, metadata } = ev.data;
       switch (ev.event) {
+        case "no_active_run":
+          // 订阅时没有进行中的生成 (常见于刷新后无活动轮) — 什么都不做,
+          // 历史由 transcript 渲染。
+          break;
+        case "run_start": {
+          // 本轮开始 (含刷新重连): 进入 streaming, 并把"当前轮"的 assistant
+          // 气泡重建为一个干净的空气泡作为渲染目标 —— 丢弃 send 的乐观空气泡 /
+          // 重连时来自磁盘的半截 assistant, 避免与回放重复。最后一条 user 之后
+          // 的所有 assistant 都截掉, 再挂一个空 assistant。
+          dirtyRef.current = true; // 防止晚到的 transcript 回放覆盖现场
+          stickToBottomRef.current = true;
+          toolIdRef.current = 0;
+          setStreaming(true);
+          setMessages((prev) => {
+            let end = prev.length;
+            while (end > 0 && prev[end - 1].role === "assistant") end--;
+            return [...prev.slice(0, end), emptyAssistant()];
+          });
+          break;
+        }
         case "assistant_text_delta":
           patchLastAssistant((m) => ({ ...m, text: m.text + asString(content) }));
           break;
@@ -377,7 +386,7 @@ export default function ChatPanel({
         case "turn_complete":
           setStreaming(false);
           setStatus(null);
-          onTurnComplete?.();
+          onTurnCompleteRef.current?.();
           break;
         case "budget_exhausted":
           patchLastAssistant((m) => ({
@@ -399,8 +408,52 @@ export default function ChatPanel({
           break;
       }
     },
-    [patchLastAssistant, onTurnComplete],
+    [patchLastAssistant],
   );
+
+  // 订阅当前轮事件流 (GET /chat/stream)。生成与连接已解耦: 这里只是"订阅",
+  // 断开 (刷新/切走) 不会停服务端生成; 重连再订阅即可继续。保证单一活动订阅:
+  // 新订阅前先 abort 旧的。
+  const subscribe = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      await openChatStream(sid, handleEvent, controller.signal);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // 主动断开订阅, 静默 (服务端仍在跑)
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        patchLastAssistant((m) => ({ ...m, error: `连接失败：${msg}` }));
+      }
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }, [sid, handleEvent, patchLastAssistant]);
+
+  // 挂载/刷新: 先回放已持久化的历史, 再尝试重连进行中的生成。
+  // 必须"历史优先、再订阅"串行: 否则二者并行赛跑, 重连的 run_start 可能在历史
+  // 加载完成前先置 dirtyRef, 导致历史被"防覆盖"逻辑跳过 → 历史聊天内容消失。
+  // 无进行中的生成时后端回 no_active_run, 历史原样保留、不打扰。
+  useEffect(() => {
+    let cancelled = false;
+    stickToBottomRef.current = true; // 落到该会话底部
+    (async () => {
+      try {
+        const entries = await getTranscript(sid);
+        if (!cancelled && !dirtyRef.current)
+          setMessages(transcriptToMessages(entries));
+      } catch {
+        if (!cancelled && !dirtyRef.current) setMessages([]);
+      }
+      if (!cancelled) await subscribe();
+    })();
+    return () => {
+      cancelled = true;
+      abortRef.current?.abort();
+    };
+  }, [sid, subscribe]);
 
   const send = useCallback(async () => {
     const text = input.trim();
@@ -410,28 +463,21 @@ export default function ChatPanel({
     setInput("");
     dirtyRef.current = true;
     stickToBottomRef.current = true; // 用户主动发消息 → 重新贴底跟随
+    // 乐观渲染 user 气泡 (assistant 气泡随后由 run_start 重建为干净目标)
     setMessages((prev) => [...prev, { role: "user", text }, emptyAssistant()]);
     setStreaming(true);
-    // 主流程之外并行起标题: 不 await, 与下面的 streamChat 同时进行
+    // 主流程之外并行起标题: 不 await, 与下面的启动同时进行
     if (isFirst) onFirstMessage?.(text);
 
-    const controller = new AbortController();
-    abortRef.current = controller;
-
     try {
-      await streamChat(sid, text, handleEvent, controller.signal);
+      // 1) 启动后台生成 (POST, 立即返回); 2) 订阅事件流 (GET)
+      await startChat(sid, text);
+      await subscribe();
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        // 用户主动停止，静默处理
-      } else {
-        const msg = err instanceof Error ? err.message : String(err);
-        patchLastAssistant((m) => ({ ...m, error: `请求失败：${msg}` }));
-      }
-    } finally {
-      // turn_complete 没来时兜底（如网络断开）
+      const msg = err instanceof Error ? err.message : String(err);
+      patchLastAssistant((m) => ({ ...m, error: `请求失败：${msg}` }));
       setStreaming(false);
       setStatus(null);
-      abortRef.current = null;
     }
   }, [
     input,
@@ -439,16 +485,18 @@ export default function ChatPanel({
     sid,
     messages.length,
     onFirstMessage,
-    handleEvent,
+    subscribe,
     patchLastAssistant,
   ]);
 
   const stop = useCallback(() => {
+    // 真正取消服务端后台生成 (不只是断订阅), 再断本地订阅。
+    void stopChat(sid);
     abortRef.current?.abort();
     abortRef.current = null;
     setStreaming(false);
     setStatus(null);
-  }, []);
+  }, [sid]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {

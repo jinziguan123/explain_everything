@@ -75,6 +75,26 @@ class TestSessionStore:
         # 按 created_at 降序
         assert metas[0].created_at >= metas[1].created_at >= metas[2].created_at
 
+    def test_list_sorts_by_last_user_message_at(self, tmp_sessions_dir):
+        """有 last_user_message_at 时按它降序 (最近提问置顶), 覆盖 created_at 顺序。"""
+        store = SessionStore(directory=tmp_sessions_dir)
+        # 故意让 created_at 顺序与 last_user_message_at 顺序相反:
+        # 旧会话 (created 早) 最近又提了问 → 应置顶。
+        specs = [
+            ("s_aaaaaaa1", 100.0, 900.0),  # 创建早, 最近提问 → 应第1
+            ("s_aaaaaaa2", 200.0, 500.0),
+            ("s_aaaaaaa3", 300.0, 100.0),  # 创建晚, 提问最早 → 应末尾
+        ]
+        for sid, created, last_q in specs:
+            meta = SessionMeta.new(question="q")
+            meta.session_id = sid
+            meta.created_at = created
+            meta.last_user_message_at = last_q
+            store.save(Session(meta=meta, state=CognitiveState.bootstrap("q", budget=10)))
+        # save() 会刷新 updated_at, 但 last_user_message_at 原样落盘
+        order = [m.session_id for m in store.list()]
+        assert order == ["s_aaaaaaa1", "s_aaaaaaa2", "s_aaaaaaa3"]
+
     def test_save_writes_json_file(self, tmp_sessions_dir):
         """Phase 9: save 应写 metadata.json + graph.json 到 storage_v2 session_dir."""
         from explain_engine.persistence.storage_v2 import StorageV2

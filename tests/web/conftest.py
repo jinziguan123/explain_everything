@@ -10,7 +10,9 @@ def _reset_sid_locks():
     TestClient 每请求可能起新 loop, 跨 test 复用同一锁会抛 'Future attached
     to a different loop'。清表保证隔离 (生产单 loop 无此问题)。
     """
-    from explain_engine.web import sse
+    from explain_engine.web import chat_runs, sse
     sse._locks.clear()
+    chat_runs._runs.clear()
     yield
     sse._locks.clear()
+    chat_runs._runs.clear()

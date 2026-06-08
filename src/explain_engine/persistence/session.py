@@ -43,6 +43,10 @@ class SessionMeta:
     stage: Stage
     created_at: float
     updated_at: float
+    # 最近一次"用户提问"的时间戳 (handle_user_input 追加 user 消息时记下,
+    # turn 收尾 persist 落盘)。会话列表按它降序排 → 最近用过的会话置顶。
+    # 旧 metadata.json 无此字段 → 默认 0.0, 排序时回落到 created_at。
+    last_user_message_at: float = 0.0
 
     def __post_init__(self) -> None:
         if not _SESSION_ID_RE.match(self.session_id):
@@ -178,7 +182,11 @@ class SessionStore:
             except (FileNotFoundError, ValueError, TypeError, KeyError) as exc:
                 logger.warning("skipping unreadable session %s: %s", sid, exc)
                 continue
-        metas.sort(key=lambda m: m.created_at, reverse=True)
+        # 按"最近用户提问时间"降序 (最近用过的会话置顶); 没提问过的会话
+        # (last_user_message_at=0) 回落到 created_at, 避免沉底。
+        metas.sort(
+            key=lambda m: m.last_user_message_at or m.created_at, reverse=True
+        )
         return metas
 
     def delete(self, session_id: str) -> None:

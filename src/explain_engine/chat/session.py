@@ -318,6 +318,11 @@ class ChatSession:
             "turn": self.chat_state.turn_count,
         })
         self.storage.append_transcript(self.sid, self.transcript[-1])
+        # 记下本次"用户提问"时间 (内存; turn 收尾 persist 随 metadata 落盘)。
+        # 会话列表据此降序 → 最近提问的会话置顶。只在此一处内存赋值, 不新增并发
+        # metadata 写入者, 以免与 autotitle 的标题写入互相覆盖 (复用单写者 persist)。
+        import time as _time
+        self._session.meta.last_user_message_at = _time.time()
         # Increment turn
         self.chat_state.turn_count += 1
         # Reset per-turn budget (Wave D.1: 走 BudgetCounter)

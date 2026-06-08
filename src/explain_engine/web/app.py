@@ -56,6 +56,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         pass
     yield
+    # 关闭时取消所有未结束的后台生成, 避免 "task pending" 噪声。
+    try:
+        from explain_engine.web.chat_runs import shutdown_runs
+        await shutdown_runs()
+    except Exception:
+        pass
 
 
 def create_app() -> FastAPI:

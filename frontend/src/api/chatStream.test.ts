@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { streamChat } from "./chatStream";
+import { openChatStream } from "./chatStream";
 
 function mockStreamResponse(text: string): Response {
   const body = new ReadableStream({
@@ -11,14 +11,14 @@ function mockStreamResponse(text: string): Response {
   return new Response(body, { status: 200 });
 }
 
-describe("streamChat", () => {
+describe("openChatStream (SSE 解析)", () => {
   it("parses SSE frames into events", async () => {
     const sse =
       'event: assistant_text_delta\ndata: {"content":"你好"}\n\n' +
       'event: turn_complete\ndata: {"content":null}\n\n';
     vi.spyOn(global, "fetch").mockResolvedValue(mockStreamResponse(sse));
     const got: string[] = [];
-    await streamChat("s_x", "hi", (ev) => got.push(ev.event));
+    await openChatStream("s_x", (ev) => got.push(ev.event));
     expect(got).toEqual(["assistant_text_delta", "turn_complete"]);
   });
 
@@ -26,7 +26,7 @@ describe("streamChat", () => {
     const sse = 'event: assistant_text_delta\ndata: {"content":"答案"}\n\n';
     vi.spyOn(global, "fetch").mockResolvedValue(mockStreamResponse(sse));
     const contents: unknown[] = [];
-    await streamChat("s_x", "hi", (ev) => contents.push(ev.data.content));
+    await openChatStream("s_x", (ev) => contents.push(ev.data.content));
     expect(contents).toEqual(["答案"]);
   });
 
@@ -43,7 +43,7 @@ describe("streamChat", () => {
     });
     vi.spyOn(global, "fetch").mockResolvedValue(new Response(body, { status: 200 }));
     const got: string[] = [];
-    await streamChat("s_x", "hi", (ev) => got.push(ev.event));
+    await openChatStream("s_x", (ev) => got.push(ev.event));
     expect(got).toEqual(["assistant_text_delta"]);
   });
 });

@@ -18,6 +18,7 @@ const SESSIONS = [
     stage: "exploring",
     created_at: 1781000000,
     updated_at: 1781100000,
+    last_user_message_at: 1781100000,
   },
   {
     sid: "s_2",
@@ -25,6 +26,7 @@ const SESSIONS = [
     stage: "synthesizing",
     created_at: 1781200000,
     updated_at: 1781300000,
+    last_user_message_at: 1781300000,
   },
 ];
 

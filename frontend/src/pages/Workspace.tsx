@@ -59,10 +59,12 @@ export default function Workspace() {
     setEmptyMap((m) => (m[sid] === empty ? m : { ...m, [sid]: empty }));
   }, []);
 
-  // 一轮对话完成: 刷新该会话图谱
+  // 一轮对话完成: 刷新该会话图谱 + 会话列表 (last_user_message_at 已落盘,
+  // 触发按最近提问时间重排序, 把刚用过的会话置顶)。
   const handleTurnComplete = useCallback(
     (sid: string) => {
       void queryClient.invalidateQueries({ queryKey: ["graph", sid] });
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
     [queryClient],
   );

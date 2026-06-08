@@ -52,6 +52,7 @@ async def list_sessions() -> list[dict[str, Any]]:
             "stage": meta.stage,
             "created_at": meta.created_at,
             "updated_at": meta.updated_at,
+            "last_user_message_at": meta.last_user_message_at,
         }
         for meta in store.list()
     ]

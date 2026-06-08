@@ -73,7 +73,9 @@ export default function SessionSidebar({
               <div className="session-item-q">{s.question}</div>
               <div className="session-item-meta">
                 <span className="session-stage">{s.stage}</span>
-                <span className="session-time">{formatTs(s.updated_at)}</span>
+                <span className="session-time">
+                  {formatTs(s.last_user_message_at || s.updated_at)}
+                </span>
               </div>
             </button>
             <button

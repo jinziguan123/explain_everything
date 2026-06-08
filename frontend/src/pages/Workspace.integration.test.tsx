@@ -6,7 +6,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // 用真实 ChatPanel, 只 stub 重依赖 (cytoscape 图谱 / 侧栏)
 vi.mock("../components/GraphPanel", () => ({ default: () => <div /> }));
 vi.mock("../components/SessionSidebar", () => ({ default: () => <div /> }));
-vi.mock("../api/chatStream", () => ({ streamChat: vi.fn() }));
+vi.mock("../api/chatStream", () => ({
+  startChat: vi.fn(async () => {}),
+  openChatStream: vi.fn(async () => {}),
+  stopChat: vi.fn(async () => {}),
+}));
 
 const REAL_TRANSCRIPT = [
   { role: "user", content: "日本经济为什么停滞三十年" },
