@@ -1,6 +1,13 @@
 export interface SSEEvent {
   event: string;
-  data: { content: unknown; metadata?: unknown };
+  data: {
+    content: unknown;
+    metadata?: unknown;
+    // tool_use / tool_result 事件携带的额外字段 (后端 sse.py 转发)
+    tool_name?: string;
+    tool_input?: unknown;
+    result?: unknown;
+  };
 }
 
 export async function streamChat(

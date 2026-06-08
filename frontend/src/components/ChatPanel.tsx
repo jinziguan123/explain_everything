@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { streamChat } from "../api/chatStream";
 import type { SSEEvent } from "../api/chatStream";
 import { getTranscript } from "../api/client";
@@ -13,6 +16,8 @@ export interface ChatPanelProps {
   active?: boolean;
   /** 父组件用来刷新图谱 (A11) */
   onTurnComplete?: () => void;
+  /** 本会话首条消息发出时回调 (主流程之外并行起标题用); 传首条文本 */
+  onFirstMessage?: (text: string) => void;
   /** 告知父组件当前会话是否为空 (无任何消息); 用于"空会话不重复新建" */
   onEmptyChange?: (empty: boolean) => void;
 }
@@ -21,6 +26,10 @@ interface ToolChip {
   id: number;
   name: string;
   done: boolean;
+  /** 工具入参 (展开卡片时显示) */
+  input?: unknown;
+  /** 工具返回结果文本 (展开卡片时显示) */
+  result?: string | null;
 }
 
 interface AssistantMessage {
@@ -72,9 +81,27 @@ function asString(content: unknown): string {
   return typeof content === "string" ? content : "";
 }
 
+/** 预扫整个 transcript, 收集 tool_use_id → 结果文本 (tool_result 在后续 user 消息里) */
+function collectToolResults(entries: TranscriptEntry[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.role !== "user" || !Array.isArray(entry.content)) continue;
+    for (const raw of entry.content) {
+      if (!raw || typeof raw !== "object") continue;
+      const b = raw as Record<string, unknown>;
+      if (b.type === "tool_result" && typeof b.tool_use_id === "string") {
+        const c = b.content;
+        map.set(b.tool_use_id, typeof c === "string" ? c : JSON.stringify(c));
+      }
+    }
+  }
+  return map;
+}
+
 /** 把持久化的 transcript (Anthropic 风格) 解析为 ChatPanel 的消息模型 */
 function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
   const out: ChatMessage[] = [];
+  const resultsById = collectToolResults(entries);
   for (const entry of entries) {
     if (entry.role === "user") {
       // 纯文本 user 消息 -> UserMessage; 数组(tool_result 等管线)直接跳过
@@ -101,13 +128,17 @@ function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
         case "thinking":
           if (typeof b.thinking === "string") thinkings.push(b.thinking);
           break;
-        case "tool_use":
+        case "tool_use": {
+          const tid = typeof b.id === "string" ? b.id : "";
           tools.push({
             id: tools.length,
             name: typeof b.name === "string" ? b.name : "工具",
             done: true,
+            input: b.input,
+            result: tid ? resultsById.get(tid) ?? null : null,
           });
           break;
+        }
         default:
           break;
       }
@@ -128,10 +159,101 @@ function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
   return out;
 }
 
+/* ── 工具卡片 (AI Studio 风格): 图标 + 工具名 + 状态徽章 + 展开箭头 ── */
+
+function IconWrench() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14.7 6.3a4 4 0 0 0-5.4 5.3l-6 6a1.4 1.4 0 0 0 2 2l6-6a4 4 0 0 0 5.3-5.4l-2.5 2.5-2-2 2.6-2.4z" />
+    </svg>
+  );
+}
+function IconCheck() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none"
+      stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8.5 12.5l2.3 2.3 4.7-5" />
+    </svg>
+  );
+}
+function IconClock() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7.5V12l3 1.8" />
+    </svg>
+  );
+}
+function IconChevron() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+function ToolCard({ tool }: { tool: ToolChip }) {
+  const [open, setOpen] = useState(false);
+  const inputStr =
+    tool.input === undefined || tool.input === null
+      ? ""
+      : typeof tool.input === "string"
+        ? tool.input
+        : JSON.stringify(tool.input, null, 2);
+  const hasResult = tool.result != null && tool.result !== "";
+  const hasDetail = inputStr !== "" || hasResult;
+
+  return (
+    <div className={`tool-card${tool.done ? " done" : " running"}`}>
+      <button
+        type="button"
+        className="tool-card-head"
+        onClick={() => hasDetail && setOpen((v) => !v)}
+        disabled={!hasDetail}
+      >
+        <span className="tool-card-icon">
+          <IconWrench />
+        </span>
+        <span className="tool-card-name">{tool.name}</span>
+        <span className={`tool-card-status${tool.done ? " done" : ""}`}>
+          {tool.done ? <IconCheck /> : <IconClock />}
+          {tool.done ? "Completed" : "Running"}
+        </span>
+        {hasDetail && (
+          <span className={`tool-card-chevron${open ? " open" : ""}`}>
+            <IconChevron />
+          </span>
+        )}
+      </button>
+      {open && hasDetail && (
+        <div className="tool-card-body">
+          {inputStr && (
+            <div className="tool-card-section">
+              <div className="tool-card-label">输入</div>
+              <pre>{inputStr}</pre>
+            </div>
+          )}
+          {hasResult && (
+            <div className="tool-card-section">
+              <div className="tool-card-label">结果</div>
+              <pre>{tool.result}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChatPanel({
   sid,
   active = true,
   onTurnComplete,
+  onFirstMessage,
   onEmptyChange,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -144,10 +266,22 @@ export default function ChatPanel({
   const listRef = useRef<HTMLDivElement | null>(null);
   // 用户一旦发起新对话, 晚到的历史回放不得覆盖现场消息
   const dirtyRef = useRef(false);
+  // 是否"贴底跟随": 仅当用户本就在底部时才随新内容自动下滚; 用户上翻后停止跟随,
+  // 避免流式生成时把正在阅读的视图硬拽到底。
+  const stickToBottomRef = useRef(true);
 
-  // 自动滚到底部 (消息变化时; 以及面板从隐藏→激活时, 因隐藏期间 scroll 不生效)
+  // 监听滚动: 距底足够近 → 继续跟随; 否则 (用户上翻) → 暂停跟随
+  const onMessagesScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distance < 80;
+  }, []);
+
+  // 自动滚到底部: 仅在"贴底跟随"时执行 (消息变化时; 以及面板从隐藏→激活时,
+  // 因隐藏期间 scroll 不生效)。用户上翻后 stickToBottomRef=false, 不再打扰。
   useEffect(() => {
-    if (!active) return;
+    if (!active || !stickToBottomRef.current) return;
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, status, active]);
@@ -165,6 +299,7 @@ export default function ChatPanel({
   // 选中(切换) session 时回放已持久化的历史对话; 新流式轮次随后 append
   useEffect(() => {
     let cancelled = false;
+    stickToBottomRef.current = true; // 切到新会话 → 落到该会话底部
     getTranscript(sid)
       .then((entries) => {
         if (!cancelled && !dirtyRef.current)
@@ -210,18 +345,23 @@ export default function ChatPanel({
           break;
         case "tool_use": {
           const id = ++toolIdRef.current;
+          const name = ev.data.tool_name || toolName(content, metadata);
           patchLastAssistant((m) => ({
             ...m,
-            tools: [...m.tools, { id, name: toolName(content, metadata), done: false }],
+            tools: [
+              ...m.tools,
+              { id, name, done: false, input: ev.data.tool_input, result: null },
+            ],
           }));
           break;
         }
         case "tool_result":
           patchLastAssistant((m) => {
             const tools = m.tools.slice();
+            const res = asString(ev.data.result) || asString(content);
             for (let i = tools.length - 1; i >= 0; i--) {
               if (!tools[i].done) {
-                tools[i] = { ...tools[i], done: true };
+                tools[i] = { ...tools[i], done: true, result: res };
                 break;
               }
             }
@@ -266,10 +406,14 @@ export default function ChatPanel({
     const text = input.trim();
     if (!text || streaming) return;
 
+    const isFirst = messages.length === 0; // 本会话首条消息
     setInput("");
     dirtyRef.current = true;
+    stickToBottomRef.current = true; // 用户主动发消息 → 重新贴底跟随
     setMessages((prev) => [...prev, { role: "user", text }, emptyAssistant()]);
     setStreaming(true);
+    // 主流程之外并行起标题: 不 await, 与下面的 streamChat 同时进行
+    if (isFirst) onFirstMessage?.(text);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -289,7 +433,15 @@ export default function ChatPanel({
       setStatus(null);
       abortRef.current = null;
     }
-  }, [input, streaming, sid, handleEvent, patchLastAssistant]);
+  }, [
+    input,
+    streaming,
+    sid,
+    messages.length,
+    onFirstMessage,
+    handleEvent,
+    patchLastAssistant,
+  ]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -307,7 +459,7 @@ export default function ChatPanel({
 
   return (
     <div className="chat-panel">
-      <div className="chat-messages" ref={listRef}>
+      <div className="chat-messages" ref={listRef} onScroll={onMessagesScroll}>
         {messages.map((m, i) =>
           m.role === "user" ? (
             <div key={i} className="chat-msg chat-msg-user">
@@ -325,19 +477,16 @@ export default function ChatPanel({
                 {m.tools.length > 0 && (
                   <div className="chat-tools">
                     {m.tools.map((t) => (
-                      <span
-                        key={t.id}
-                        className={`chat-tool-chip${t.done ? " done" : ""}`}
-                      >
-                        {t.done ? "✅" : <span className="chat-spinner">⏳</span>} 🔧{" "}
-                        {t.name}
-                      </span>
+                      <ToolCard key={t.id} tool={t} />
                     ))}
                   </div>
                 )}
                 {m.text && (
                   <div className="chat-markdown">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm, remarkMath]}
+                      rehypePlugins={[rehypeKatex]}
+                    >
                       {m.text}
                     </ReactMarkdown>
                   </div>

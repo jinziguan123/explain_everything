@@ -19,6 +19,12 @@ class CreateSessionBody(BaseModel):
     question: str
 
 
+class AutotitleBody(BaseModel):
+    # 首发并行场景: 前端把首条消息直接传来, 避免读磁盘 transcript
+    # (此刻 chat 流可能尚未把首条消息落盘 → 读不到)。缺省时回落到 transcript。
+    message: str | None = None
+
+
 @router.post("", status_code=201)
 async def create_session(body: CreateSessionBody) -> dict[str, str]:
     """新建空 session (仅 question + 新 sid + 初始 stage); 不调 LLM、不 bootstrap 现象。
@@ -79,20 +85,28 @@ async def get_transcript(sid: str) -> list[dict[str, Any]]:
 
 
 @router.post("/{sid}/autotitle")
-async def autotitle(sid: str) -> dict[str, str]:
+async def autotitle(sid: str, body: AutotitleBody | None = None) -> dict[str, str]:
     """用 light LLM 据首条用户消息为会话生成简短标题, 写回 meta.question。
 
+    可在用户首次发送后立即并行调用 (主流程之外): body.message 传入首条文本,
+    避免读尚未落盘的 transcript。未传 message 时回落到读磁盘 transcript。
+
     无首条用户消息 / LLM 不可用 / 生成失败 → 原样返回当前标题 (不改)。
+
+    落盘走 SessionStore.update_question (只写 metadata, 不动 graph), 这样与
+    并发进行的 chat 流 (会全量写 graph) 互不覆盖。
     """
     chat = load_chat_or_404(sid)
+    current = chat._session.meta.question
 
-    first_user = ""
-    for e in chat.transcript:
-        if e.get("role") == "user" and isinstance(e.get("content"), str):
-            first_user = e["content"].strip()
-            break
+    first_user = body.message.strip() if body and body.message else ""
     if not first_user:
-        return {"title": chat._session.meta.question}
+        for e in chat.transcript:
+            if e.get("role") == "user" and isinstance(e.get("content"), str):
+                first_user = e["content"].strip()
+                break
+    if not first_user:
+        return {"title": current}
 
     from explain_engine.config import make_light_llm_client
     from explain_engine.llm.client import Message
@@ -109,14 +123,12 @@ async def autotitle(sid: str) -> dict[str, str]:
         title = ""
 
     if not title:
-        return {"title": chat._session.meta.question}
+        return {"title": current}
 
-    chat._session.meta.question = title
     try:
-        chat.state.graph.root_question = title  # 与 meta 保持一致 (best-effort)
-    except Exception:
-        pass
-    chat.persist()
+        SessionStore().update_question(sid, title)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"session {sid} 不存在") from exc
     return {"title": title}
 
 

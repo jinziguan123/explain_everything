@@ -141,6 +141,33 @@ class SessionStore:
         except (KeyError, ValueError, TypeError) as exc:
             raise ValueError(f"invalid session dict: {exc}") from exc
 
+    def load_question(self, session_id: str) -> str | None:
+        """只读磁盘上 metadata.question (会话标题)。缺失/损坏 → None。
+
+        给对话流 persist 前回读最新标题用 (标题由 create/autotitle 拥有,
+        对话流不应用 turn 开始时的旧值覆盖它)。
+        """
+        try:
+            q = self._storage.load_metadata(session_id).get("question")
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            return None
+        return q if isinstance(q, str) and q else None
+
+    def update_question(self, session_id: str, question: str) -> None:
+        """只更新 metadata.question (+ updated_at), 不动 graph.json。
+
+        用于 autotitle 与正在进行的 chat 流并发的场景: chat 流会全量
+        save() (metadata + graph), 若 autotitle 也走 save() 会用它加载时的
+        旧图覆盖 chat 刚写入的新图 → 丢节点。这里只重写 metadata sidecar,
+        与 graph 写入互不干扰 (race-safe)。
+
+        session 不存在 → FileNotFoundError, 由上层转 404。
+        """
+        meta_dict = self._storage.load_metadata(session_id)
+        meta_dict["question"] = question
+        meta_dict["updated_at"] = time.time()
+        self._storage.save_metadata(session_id, meta_dict)
+
     def list(self) -> list[SessionMeta]:
         """List all session metas. 跳过 corrupted / 不合规的 session_dir."""
         metas: list[SessionMeta] = []

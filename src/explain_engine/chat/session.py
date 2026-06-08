@@ -448,6 +448,13 @@ class ChatSession:
             "last_input_alignment": self.chat_state.last_input_alignment,
         }
         self.storage.save_chat_state(self.sid, chat_state_dict)
+        # 标题 (meta.question) 由 create/autotitle 拥有, 对话流不拥有它。
+        # autotitle 可能在本 turn 进行中并发改了磁盘标题; 这里 persist 前先把
+        # 磁盘最新 question 读回, 避免用 turn 开始时载入的旧值 ("新会话") 覆盖,
+        # 否则刷新页面后标题会丢 (回退成"新会话")。
+        disk_q = self._session_store.load_question(self.sid)
+        if disk_q:
+            self._session.meta.question = disk_q
         # Save graph (may have mutated from tool calls in C.2)
         self._session.state = self.state
         self._session_store.save(self._session)

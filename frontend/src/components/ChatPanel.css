@@ -134,33 +134,128 @@
 
 .chat-tools {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
-.chat-tool-chip {
+/* ── 工具卡片 (AI Studio 风格) ── */
+.tool-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+  animation: fadeIn var(--dur) var(--ease) both;
+}
+.tool-card:hover {
+  border-color: var(--border-strong);
+}
+
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+}
+.tool-card-head:disabled {
+  cursor: default;
+}
+
+.tool-card-icon {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-family: var(--mono);
-  font-size: 0.72rem;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 7px;
+  background: var(--surface-3);
   color: var(--text-muted);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  padding: 3px 9px;
-  border-radius: var(--radius-pill);
-  transition: color var(--dur) var(--ease),
-    border-color var(--dur) var(--ease);
-}
-.chat-tool-chip.done {
-  color: var(--text);
-  border-color: var(--text);
 }
 
-.chat-spinner {
-  display: inline-block;
-  animation: spin 1.2s linear infinite;
+.tool-card-name {
+  font-size: 0.86rem;
+  font-weight: 550;
+  color: var(--text);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-size: 0.74rem;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  background: var(--surface-3);
+}
+.tool-card-status.done {
+  color: var(--success);
+  background: var(--success-bg);
+}
+.tool-card-status :is(svg) {
+  flex: none;
+}
+/* Running 状态时钟缓慢转动 */
+.tool-card.running .tool-card-status svg {
+  animation: spin 2s linear infinite;
+}
+
+.tool-card-chevron {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--text-subtle);
+  transition: transform var(--dur) var(--ease);
+}
+.tool-card-chevron.open {
+  transform: rotate(180deg);
+}
+
+.tool-card-body {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px 12px;
+  background: var(--surface-2);
+  animation: fadeIn var(--dur-fast) var(--ease) both;
+}
+.tool-card-section + .tool-card-section {
+  margin-top: 10px;
+}
+.tool-card-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin-bottom: 4px;
+}
+.tool-card-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text);
+  max-height: 280px;
+  overflow: auto;
 }
 
 /* 整个回答过程持续显示的"思考中"指示器 (streaming 期间常驻) */

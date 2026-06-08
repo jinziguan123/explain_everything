@@ -379,13 +379,20 @@ class TestReadNodeTool:
 
 
 class TestALL_TOOLS_v2:
-    def test_contains_7_tools_after_b2(self) -> None:
+    def test_contains_all_registered_tools(self) -> None:
         from explain_engine.chat.tools import ALL_TOOLS
         names = {t.name for t in ALL_TOOLS}
         assert names == {
             "expand", "compress", "check", "predict", "counterfactual",
             "add_observation", "read_node",
+            # 联网工具 (免费无 key DuckDuckGo)
+            "web_search", "web_read",
         }
+
+    def test_web_tools_are_readonly(self) -> None:
+        from explain_engine.chat.tools import web_read_tool, web_search_tool
+        assert web_search_tool.is_readonly is True
+        assert web_read_tool.is_readonly is True
 
 
 class TestAddObservationSourceLabel:

@@ -80,6 +80,23 @@ class TestChatSessionPersist:
         chat2 = ChatSession("s_003abcde")
         assert chat2.chat_state.turn_count == 5
 
+    def test_persist_preserves_concurrent_autotitle(self) -> None:
+        """回归: persist 不得用 turn 开始时的旧标题覆盖 autotitle 并发写入的真标题。
+
+        复现 bug: 新建会话标题"新会话", 首条消息时 chat 流与 autotitle 并行,
+        chat 流 turn 结束 persist 用内存旧值"新会话"覆盖了 autotitle 写的真标题,
+        刷新后标题丢失。
+        """
+        _make_done_session("s_ab12ab12")
+        SessionStore().update_question("s_ab12ab12", "新会话")
+        chat = ChatSession("s_ab12ab12")  # 内存 meta.question = "新会话"
+        # autotitle 在 turn 进行中并发把磁盘标题改成真标题
+        SessionStore().update_question("s_ab12ab12", "傅里叶分析主题")
+        # 对话流 turn 结束 persist (内存仍是旧"新会话")
+        chat.persist()
+        # 重新读盘: 真标题应被保留, 而非回退"新会话"
+        assert SessionStore().load("s_ab12ab12").meta.question == "傅里叶分析主题"
+
     def test_close_flushes(self) -> None:
         _make_done_session("s_004abcde")
         chat = ChatSession("s_004abcde")

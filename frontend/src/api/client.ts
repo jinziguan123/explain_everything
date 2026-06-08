@@ -30,8 +30,16 @@ export async function getTranscript(sid: string): Promise<TranscriptEntry[]> {
   return r.json();
 }
 
-export async function autotitleSession(sid: string): Promise<{ title: string }> {
-  const r = await fetch(`/api/sessions/${sid}/autotitle`, { method: "POST" });
+export async function autotitleSession(
+  sid: string,
+  message?: string,
+): Promise<{ title: string }> {
+  // message: 首发并行场景下把首条消息直接传给后端, 免去读尚未落盘的 transcript。
+  const r = await fetch(`/api/sessions/${sid}/autotitle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: message ?? null }),
+  });
   if (!r.ok) throw new Error(`autotitleSession ${r.status}`);
   return r.json();
 }

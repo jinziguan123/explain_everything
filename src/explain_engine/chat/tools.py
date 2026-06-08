@@ -441,6 +441,71 @@ read_node_tool = Tool(
 )
 
 
+# ─── web_search tool (联网搜索, 免费无 key DuckDuckGo) ───
+
+class _WebSearchInput(BaseModel):
+    query: str = Field(min_length=1, description="搜索关键词或问题 (自然语言均可)")
+    max_results: int = Field(
+        default=5, ge=1, le=10, description="返回结果条数 (1-10), 默认 5"
+    )
+
+
+async def _web_search_call(input: BaseModel, ctx: ToolContext) -> str:
+    assert isinstance(input, _WebSearchInput)
+    from explain_engine.chat.web_search import web_search
+    try:
+        results = await web_search(input.query, input.max_results)
+    except Exception as exc:
+        return f"web_search 失败: {type(exc).__name__}: {exc}"
+    if not results:
+        return f"web_search '{input.query}': 无结果"
+    lines = [f"web_search '{input.query}' — {len(results)} 条结果:"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"[{i}] {r.title}\n    {r.url}\n    {r.snippet}")
+    return "\n".join(lines)
+
+
+web_search_tool = Tool(
+    name="web_search",
+    input_schema=_WebSearchInput,
+    description=lambda ctx: (
+        "联网搜索实时/事实信息 (DuckDuckGo, 免费无 key). 适用于模型知识截止后的"
+        "新事件、最新数据 (经济数据/股价/新闻等). 返回 标题+URL+摘要; 摘要不够时"
+        "再用 web_read 取具体页面正文."
+    ),
+    call=_web_search_call,
+    is_readonly=True,
+)
+
+
+# ─── web_read tool (抓取网页正文, 免费) ───
+
+class _WebReadInput(BaseModel):
+    url: str = Field(min_length=1, description="要抓取正文的网页 URL (通常来自 web_search)")
+
+
+async def _web_read_call(input: BaseModel, ctx: ToolContext) -> str:
+    assert isinstance(input, _WebReadInput)
+    from explain_engine.chat.web_search import web_read
+    try:
+        text = await web_read(input.url)
+    except Exception as exc:
+        return f"web_read 失败: {type(exc).__name__}: {exc}"
+    return f"网页正文 {input.url}:\n{text}"
+
+
+web_read_tool = Tool(
+    name="web_read",
+    input_schema=_WebReadInput,
+    description=lambda ctx: (
+        "抓取指定 URL 的网页正文纯文本 (免费, 去脚本/导航, 截断 ~4000 字). "
+        "一般先 web_search 拿 URL, 再用本工具读全文细节."
+    ),
+    call=_web_read_call,
+    is_readonly=True,
+)
+
+
 # ───────────────────────── master registry ─────────────────────────
 
 ALL_TOOLS: tuple[Tool, ...] = (
@@ -451,4 +516,6 @@ ALL_TOOLS: tuple[Tool, ...] = (
     counterfactual_tool,
     add_observation_tool,
     read_node_tool,
+    web_search_tool,
+    web_read_tool,
 )

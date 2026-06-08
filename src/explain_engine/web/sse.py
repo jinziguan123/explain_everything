@@ -32,7 +32,13 @@ def sse_pack(event: str, data: Any) -> str:
 
 
 def chat_event_to_sse(ev: ChatEvent) -> str:
-    return sse_pack(ev.type, {"content": ev.content, "metadata": ev.metadata})
+    data: dict[str, Any] = {"content": ev.content, "metadata": ev.metadata}
+    # ToolUse/ToolResult 事件带基类没有的额外字段 (tool_name / tool_input / result);
+    # 显式转发给前端, 否则前端拿不到真实工具名与详情 (卡片只能显示兜底"工具")。
+    for attr in ("tool_name", "tool_input", "result"):
+        if hasattr(ev, attr):
+            data[attr] = getattr(ev, attr)
+    return sse_pack(ev.type, data)
 
 
 async def stream_chat_events(events: AsyncIterator[ChatEvent]) -> AsyncIterator[str]:

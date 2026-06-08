@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
-from explain_engine.chat.system_prompt import assemble_system_prompt
+from datetime import datetime, timedelta, timezone
+
+from explain_engine.chat.system_prompt import _render_now, assemble_system_prompt
 from explain_engine.engines.simulation import AcceptanceReport
 from explain_engine.schema.edges import RelationEdge
 from explain_engine.schema.graph import ExplanationGraph
@@ -47,6 +49,25 @@ def _make_budget(per_turn=10, per_session=50) -> dict:
         "per_session_remaining": per_session,
         "per_session_limit": 50,
     }
+
+
+class TestSystemPromptCurrentTime:
+    def test_render_now_includes_date_weekday_tz(self) -> None:
+        dt = datetime(2026, 6, 8, 15, 30, tzinfo=timezone(timedelta(hours=8)))
+        s = _render_now(dt)
+        assert "2026-06-08" in s
+        assert "周一" in s  # 2026-06-08 是周一
+        assert "15:30" in s
+        assert "UTC+0800" in s
+
+    def test_prompt_includes_current_time(self) -> None:
+        dt = datetime(2026, 6, 8, 15, 30, tzinfo=timezone(timedelta(hours=8)))
+        prompt = assemble_system_prompt(
+            state=_make_state(), question="why X", memory_md="",
+            budget=_make_budget(), now=dt,
+        )
+        assert "当前时间" in prompt
+        assert "2026-06-08" in prompt
 
 
 class TestSystemPromptToolCatalog:

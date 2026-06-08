@@ -14,8 +14,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from explain_engine.chat.tools import ALL_TOOLS, ToolContext
 from explain_engine.schema.state import CognitiveState
+
+_WEEKDAYS = "一二三四五六日"
 
 SYSTEM_PROMPT_TEMPLATE = """\
 你是一个 cognitive analysis agent. 你的任务: 通过 {tool_count} 个 tools 帮 user 构建并 refine
@@ -27,6 +31,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 
 # Current session state
 
+当前时间: {now_display} (每轮实时更新; 判断"最近/最新/今年"等时效表述及 web_search 时段以此为准)
 Question: {question}
 {graph_summary}
 {multi_signal_summary}
@@ -47,6 +52,9 @@ per-session: {per_session_display}
 - 用 check 验证 graph 健康度, 看 weak_chain_l1s / rollout_coverage 决定下一步.
 - 决策树参考: 弱 L1 → expand downward; root driver 过冗余 → counterfactual 试删;
   user 想知道"如果加 X" → predict.
+- 涉及实时/时效信息 (最新数据、近期事件、当前价格等) 或你知识截止后的事实:
+  先 web_search 联网核实, 需要正文细节再 web_read; 不要凭记忆硬答, 也不要声称
+  "无法联网/知识截止" —— 你有联网工具。
 - TurnComplete 时给 narrative 总结, 别只 dump tool output.
 """
 
@@ -130,6 +138,17 @@ def _render_multi_signal(state: CognitiveState) -> str:
     )
 
 
+def _render_now(now: datetime | None) -> str:
+    """当前时间, 含星期与时区 (e.g. '2026-06-08 周一 15:30 UTC+0800')。
+
+    now=None → 取系统本地时间 (含本地时区)。显式传入便于测试 determinism。
+    """
+    dt = now or datetime.now().astimezone()
+    base = f"{dt:%Y-%m-%d} 周{_WEEKDAYS[dt.weekday()]} {dt:%H:%M}"
+    tz = dt.strftime("%z")  # 如 '+0800'; naive datetime 时为 ''
+    return f"{base} UTC{tz}" if tz else base
+
+
 def _render_memory_section(memory_md: str) -> str:
     """Render session memory section.
 
@@ -153,6 +172,7 @@ def assemble_system_prompt(
     memory_md: str,
     budget: dict,
     hint: str | None = None,
+    now: datetime | None = None,
 ) -> str:
     """Build per-turn system prompt (called from query_loop each iteration).
 
@@ -186,6 +206,7 @@ def assemble_system_prompt(
     return SYSTEM_PROMPT_TEMPLATE.format(
         tool_count=len(ALL_TOOLS),
         tool_catalog=_render_tool_catalog(ctx),
+        now_display=_render_now(now),
         question=question,
         graph_summary=_render_graph_summary(state),
         multi_signal_summary=_render_multi_signal(state),

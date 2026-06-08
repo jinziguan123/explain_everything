@@ -65,8 +65,10 @@ describe("ChatPanel", () => {
 
     await waitFor(() => expect(screen.getByText("思考过程")).toBeInTheDocument());
     expect(screen.getByText("我在想…")).toBeInTheDocument();
-    const chip = screen.getByText(/search_graph/);
-    expect(chip.className).toContain("done");
+    // 工具卡片: 名字在 .tool-card-name, 完成态在 .tool-card 容器 + Completed 徽章
+    const name = screen.getByText("search_graph");
+    expect(name.closest(".tool-card")?.className).toContain("done");
+    expect(screen.getByText("Completed")).toBeInTheDocument();
   });
 
   it("error 事件渲染错误行并退出 streaming", async () => {

@@ -59,18 +59,23 @@ export default function Workspace() {
     setEmptyMap((m) => (m[sid] === empty ? m : { ...m, [sid]: empty }));
   }, []);
 
-  // 一轮对话完成: 刷新该会话图谱; 若是新建会话的首轮 → light LLM 自动起标题
+  // 一轮对话完成: 刷新该会话图谱
   const handleTurnComplete = useCallback(
     (sid: string) => {
       void queryClient.invalidateQueries({ queryKey: ["graph", sid] });
-      if (needTitleRef.current.has(sid)) {
-        needTitleRef.current.delete(sid);
-        autotitleSession(sid)
-          .then(() =>
-            queryClient.invalidateQueries({ queryKey: ["sessions"] }),
-          )
-          .catch(() => {});
-      }
+    },
+    [queryClient],
+  );
+
+  // 新建会话首条消息发出 → 主流程之外并行用 light LLM 起标题 (不等整轮跑完)。
+  // 把首条文本直传后端, 避免读尚未落盘的 transcript。
+  const handleFirstMessage = useCallback(
+    (sid: string, text: string) => {
+      if (!needTitleRef.current.has(sid)) return;
+      needTitleRef.current.delete(sid);
+      autotitleSession(sid, text)
+        .then(() => queryClient.invalidateQueries({ queryKey: ["sessions"] }))
+        .catch(() => {});
     },
     [queryClient],
   );
@@ -178,6 +183,7 @@ export default function Workspace() {
               sid={sid}
               active={sid === selectedSid}
               onTurnComplete={() => handleTurnComplete(sid)}
+              onFirstMessage={(text) => handleFirstMessage(sid, text)}
               onEmptyChange={(empty) => setEmpty(sid, empty)}
             />
           </div>
