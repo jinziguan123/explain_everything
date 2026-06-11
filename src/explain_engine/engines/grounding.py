@@ -304,12 +304,14 @@ async def ground_state(
     search_fn: SearchFn | None = None,
     top_k: int = GROUND_TOP_K,
     max_results: int = 5,
+    concurrency: int = 4,
 ) -> GroundingSummary:
     """接地管线主入口 (§六.1)。原地修改 state, 返回执行摘要。
 
     流程: 选 targets → 声明抽取 (1 LLM call) → 每 target 检索 + 立场判定
-    (1 search + 1 light-LLM call) → evidence 落盘 + evidence_state 更新
-    → 全图应用置信度公式 (§五.3)。
+    (1 search + 1 light-LLM call, Semaphore 限 concurrency 路并发)
+    → evidence 落盘 + evidence_state 更新 (按 target 顺序串行,
+    保证 evidence id 确定性) → 全图应用置信度公式 (§五.3)。
 
     单 target 失败 (限速/解析) 不中断: 记入 summary.errors, 该 target
     维持 unverified — 接地是 best-effort 增强, 不是硬依赖。
@@ -317,7 +319,10 @@ async def ground_state(
     Args:
         llm: 建议传 light model (分类型任务)。
         search_fn: 默认 chat.web_search.web_search (DuckDuckGo 免费端点)。
+        concurrency: 检索+判定的并发路数 (默认 4; 1 = 串行, 防限速可调低)。
     """
+    import asyncio
+
     if search_fn is None:
         from explain_engine.chat.web_search import web_search as search_fn
 
@@ -336,17 +341,35 @@ async def ground_state(
         summary.edges_reweighted = apply_grounded_confidence(state)
         return summary
 
+    # ── 并发段: 只做 I/O (检索 + 判定), 不碰 state ──
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def _fetch(target_id: str, claim: str):
+        async with sem:
+            try:
+                results = list(await search_fn(claim))[:max_results]
+                stances = (
+                    await _judge_stances(claim, results, llm) if results else []
+                )
+                return target_id, results, stances, None
+            except Exception as exc:
+                return target_id, [], [], exc
+
+    ordered = [*l0_ids, *edge_ids]
+    with_claims = [(t, claims[t]) for t in ordered if claims.get(t)]
+    fetched = await asyncio.gather(*[_fetch(t, c) for t, c in with_claims])
+    by_target = {t: (results, stances, err) for t, results, stances, err in fetched}
+
+    # ── 串行段: 按原顺序落盘 (evidence id 确定性 + 无并发写 state) ──
     now = datetime.now(UTC).isoformat(timespec="seconds")
-    for target_id in [*l0_ids, *edge_ids]:
-        claim = claims.get(target_id)
-        if not claim:
-            summary.unverified += 1
+    for target_id in ordered:
+        if target_id not in by_target:
+            summary.unverified += 1  # 声明抽取没给 claim
             continue
-        try:
-            results = list(await search_fn(claim))[:max_results]
-            stances = await _judge_stances(claim, results, llm) if results else []
-        except Exception as exc:
-            summary.errors.append(f"{target_id}: {type(exc).__name__}: {exc}")
+        results, stances, err = by_target[target_id]
+        claim = claims[target_id]
+        if err is not None:
+            summary.errors.append(f"{target_id}: {type(err).__name__}: {err}")
             summary.unverified += 1
             continue
 

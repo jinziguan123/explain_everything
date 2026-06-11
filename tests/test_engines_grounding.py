@@ -215,6 +215,44 @@ def test_ground_state_verifies_and_reweights():
     assert e1.confidence == pytest.approx(0.36)
 
 
+def test_ground_state_concurrency_limited_and_deterministic():
+    """并发限流 (Semaphore) 生效, 且 evidence id 按 target 顺序确定分配。"""
+    import asyncio as aio
+
+    state = _state()
+    # 多加几个 L0 撑大 target 数
+    for i in range(3, 9):
+        state.graph.add_node(_node(f"p_{i:03d}", f"现象{i}", 0))
+    l0_count = sum(
+        1 for n in state.graph.nodes.values() if n.abstraction_level == 0
+    )
+    targets = [f"p_{i:03d}" for i in range(1, l0_count + 1)] + ["e_003"]
+    llm = FakeGroundingLLM(targets)
+
+    current = 0
+    peak = 0
+
+    async def tracking_search(_q: str):
+        nonlocal current, peak
+        current += 1
+        peak = max(peak, current)
+        await aio.sleep(0.02)
+        current -= 1
+        return [
+            SearchResult(title="来源A", url="https://a.com/x", snippet="s"),
+            SearchResult(title="来源B", url="https://b.org/y", snippet="s"),
+        ]
+
+    summary = asyncio.run(ground_state(
+        state, llm, search_fn=tracking_search, concurrency=3,
+    ))
+    assert summary.verified == summary.targets_total
+    assert peak <= 3   # Semaphore 限流
+    assert peak >= 2   # 确实并发了
+    # evidence id 确定性: 串行落盘按 target 顺序, 首个 target 拿 ev_001/ev_002
+    assert state.graph.nodes["p_001"].evidence_ids[0] == "ev_001"
+
+
 def test_ground_state_search_failure_is_not_fatal():
     state = _state()
     llm = FakeGroundingLLM(["p_001", "p_002", "e_001", "e_002", "e_003"])

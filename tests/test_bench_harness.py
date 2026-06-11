@@ -150,6 +150,7 @@ def test_run_bench_single_failure_does_not_abort(tmp_path):
     manifest = asyncio.run(run_bench(
         ["好问题", "坏问题", "好问题2"], tmp_path,
         pipeline_fn=flaky_pipeline, baseline_fn=_fake_baseline,
+        failure_backoff_s=0,
     ))
     statuses = [q["status"] for q in manifest["questions"]]
     assert statuses == ["ok", "error", "ok"]
@@ -157,6 +158,86 @@ def test_run_bench_single_failure_does_not_abort(tmp_path):
     # 失败题不产出盲评材料, 成功题正常
     assert not (tmp_path / "q02" / "X.md").exists()
     assert (tmp_path / "q03" / "X.md").exists()
+
+
+def test_run_bench_resume_skips_completed(tmp_path):
+    """断点续跑: 第二次运行只重跑失败题, ok 题沿用旧产物与揭盲映射。"""
+    questions = ["好问题", "坏问题"]
+
+    async def flaky_pipeline(q: str):
+        if "坏" in q:
+            raise RuntimeError("第一轮限流")
+        return await _fake_pipeline(q)
+
+    asyncio.run(run_bench(
+        questions, tmp_path,
+        pipeline_fn=flaky_pipeline, baseline_fn=_fake_baseline,
+        failure_backoff_s=0,
+    ))
+    q01_x_before = (tmp_path / "q01" / "X.md").read_text(encoding="utf-8")
+
+    calls: list[str] = []
+
+    async def counting_pipeline(q: str):
+        calls.append(q)
+        return await _fake_pipeline(q)
+
+    manifest = asyncio.run(run_bench(
+        questions, tmp_path,
+        pipeline_fn=counting_pipeline, baseline_fn=_fake_baseline,
+        failure_backoff_s=0,
+    ))
+    # 只重跑了失败的 q02
+    assert calls == ["坏问题"]
+    assert [q["status"] for q in manifest["questions"]] == ["ok", "ok"]
+    # q01 产物未被改写, 揭盲映射齐全
+    assert (tmp_path / "q01" / "X.md").read_text(encoding="utf-8") == q01_x_before
+    answers = json.loads((tmp_path / ".answers.json").read_text(encoding="utf-8"))
+    assert set(answers) == {"q01", "q02"}
+
+
+def test_run_bench_fresh_reruns_everything(tmp_path):
+    """resume=False 忽略旧结果全量重跑。"""
+    questions = ["好问题"]
+    asyncio.run(run_bench(
+        questions, tmp_path,
+        pipeline_fn=_fake_pipeline, baseline_fn=_fake_baseline,
+        failure_backoff_s=0,
+    ))
+    calls: list[str] = []
+
+    async def counting_pipeline(q: str):
+        calls.append(q)
+        return await _fake_pipeline(q)
+
+    asyncio.run(run_bench(
+        questions, tmp_path,
+        pipeline_fn=counting_pipeline, baseline_fn=_fake_baseline,
+        resume=False, failure_backoff_s=0,
+    ))
+    assert calls == ["好问题"]
+
+
+def test_run_bench_circuit_breaker(tmp_path):
+    """连续 3 题失败熔断: 余题标 skipped, 不再调管线。"""
+    calls: list[str] = []
+
+    async def dead_pipeline(q: str):
+        calls.append(q)
+        raise ConnectionError("供应商断连")
+
+    questions = [f"问题{i}" for i in range(1, 6)]
+    manifest = asyncio.run(run_bench(
+        questions, tmp_path,
+        pipeline_fn=dead_pipeline, baseline_fn=_fake_baseline,
+        failure_backoff_s=0, max_consecutive_failures=3,
+    ))
+    statuses = [q["status"] for q in manifest["questions"]]
+    assert statuses == ["error", "error", "error", "skipped", "skipped"]
+    assert len(calls) == 3  # 熔断后不再烧 LLM
+    # manifest 已落盘且可用于续跑
+    saved = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert len(saved["questions"]) == 5
 
 
 def test_run_bench_requires_llm_or_injection(tmp_path):

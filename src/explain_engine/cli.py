@@ -1576,6 +1576,10 @@ def bench(
         True, "--grounding/--no-grounding",
         help="A 组是否启用证据接地 (Phase G 起默认开)",
     ),
+    fresh: bool = typer.Option(
+        False, "--fresh",
+        help="忽略旧结果全量重跑 (默认断点续跑: 已 ok 的题自动跳过)",
+    ),
 ) -> None:
     """H1 盲评实验: A 组(完整管线+报告) vs B 组(单次深度 prompt)。
 
@@ -1609,7 +1613,7 @@ def bench(
     manifest = asyncio.run(run_bench(
         questions, Path(out),
         llm=llm, light_llm=light_llm, budget=budget, seed=seed,
-        mode=mode, grounded=grounding,
+        mode=mode, grounded=grounding, resume=not fresh,
     ))
     n_ok = sum(1 for q in manifest["questions"] if q.get("status") == "ok")
     n_err = len(manifest["questions"]) - n_ok

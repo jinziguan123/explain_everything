@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -174,6 +175,9 @@ async def run_bench(
     baseline_fn: BaselineFn | None = None,
     mode: str = "h1",
     grounded: bool = True,
+    resume: bool = True,
+    failure_backoff_s: float = 10.0,
+    max_consecutive_failures: int = 3,
 ) -> dict:
     """对每个问题产出 A/B 两组结果并匿名化落盘。返回 manifest dict。
 
@@ -181,6 +185,13 @@ async def run_bench(
       - "h1": B 组 = 单次深度 prompt (检验"系统是否优于一个好 prompt")
       - "h2": B 组 = 同管线但关闭接地 (检验"接地是否增加信任与质量"),
               A 组强制 grounded=True
+
+    容错 (供应商限流/断连场景):
+      - resume=True: 旧 manifest 中 status=ok 且盲评产物完整的题直接沿用,
+        只重跑失败/缺失的题; manifest 每题落盘一次 (中途崩溃可续)
+      - 失败后指数退避 (failure_backoff_s × 2^(n-1)) 再跑下一题
+      - 连续 max_consecutive_failures 题失败 → 熔断: 余题标 skipped,
+        提前结束 (避免把整个题库烧成 error)
 
     目录结构:
         out_dir/
@@ -215,10 +226,50 @@ async def run_bench(
         "grounded": grounded, "questions": [],
     }
     answers: dict[str, dict[str, str]] = {}
+    manifest_path = out_dir / "manifest.json"
 
+    # ── 断点续跑: 读旧 manifest, ok 且产物完整的题沿用 ──
+    previous_ok: dict[tuple[int, str], dict] = {}
+    if resume and manifest_path.exists():
+        try:
+            old = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for e in old.get("questions", []):
+                if e.get("status") == "ok":
+                    previous_ok[(e.get("index"), e.get("question"))] = e
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("bench: 旧 manifest 不可读, 全量重跑: %s", exc)
+
+    def _flush() -> None:
+        """每题落盘一次 — 中途崩溃/熔断后 manifest 仍可用于续跑。"""
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+        (out_dir / ".answers.json").write_text(
+            json.dumps(answers, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+
+    consecutive_failures = 0
     for idx, question in enumerate(questions, start=1):
         qdir = out_dir / f"q{idx:02d}"
         qdir.mkdir(parents=True, exist_ok=True)
+
+        prev = previous_ok.get((idx, question))
+        if (
+            prev is not None
+            and (qdir / "X.md").exists()
+            and (qdir / "Y.md").exists()
+        ):
+            logger.info("bench: [%d/%d] 已完成, 跳过 (断点续跑)", idx, len(questions))
+            try:
+                answers[f"q{idx:02d}"] = json.loads(
+                    (qdir / ".key.json").read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError):
+                pass
+            manifest["questions"].append(prev)
+            _flush()
+            continue
+
         entry: dict = {"index": idx, "question": question}
         logger.info("bench: [%d/%d] %s", idx, len(questions), question)
 
@@ -285,19 +336,40 @@ async def run_bench(
                     round(counterintuitiveness(core_names, prior), 2) if prior else None
                 ),
             })
+            consecutive_failures = 0
         except Exception as exc:  # 单题失败不中断整场实验
             logger.exception("bench: q%02d 失败", idx)
             entry.update({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
+            consecutive_failures += 1
         manifest["questions"].append(entry)
+        _flush()
 
-    (out_dir / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8",
-    )
-    (out_dir / ".answers.json").write_text(
-        json.dumps(answers, ensure_ascii=False, indent=2), encoding="utf-8",
-    )
+        if entry.get("status") == "error":
+            if consecutive_failures >= max_consecutive_failures:
+                # 熔断: 供应商大概率限流/断连, 继续只会烧光题库
+                logger.error(
+                    "bench: 连续 %d 题失败, 熔断终止。修复后重跑同命令即可续跑 "
+                    "(已完成的题自动跳过)。", consecutive_failures,
+                )
+                for j in range(idx + 1, len(questions) + 1):
+                    manifest["questions"].append({
+                        "index": j, "question": questions[j - 1],
+                        "status": "skipped", "error": "circuit_breaker",
+                    })
+                _flush()
+                break
+            backoff = failure_backoff_s * (2 ** (consecutive_failures - 1))
+            if backoff > 0:
+                logger.warning(
+                    "bench: 连续失败 %d 次, 退避 %.0fs 后继续",
+                    consecutive_failures, backoff,
+                )
+                await asyncio.sleep(backoff)
+
+    _flush()
     (out_dir / "评分表.md").write_text(_scoring_sheet(questions), encoding="utf-8")
-    logger.info("bench: 完成, 输出在 %s", out_dir)
+    n_ok = sum(1 for q in manifest["questions"] if q.get("status") == "ok")
+    logger.info("bench: 结束, %d/%d 题完成, 输出在 %s", n_ok, len(questions), out_dir)
     return manifest
 
 
