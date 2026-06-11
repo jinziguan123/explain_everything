@@ -1503,6 +1503,64 @@ def report(
 
 
 @app.command()
+def ground(
+    session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+    top_k: int = typer.Option(
+        3, "--top-k", help="对中心度 top-K 核心变量的入边接地 (L0 总是全部接地)",
+    ),
+) -> None:
+    """Phase G 证据接地: 声明抽取 → web 检索 → 立场判定 → evidence 落盘。
+
+    完成后应用置信度公式 confidence = base(认知等级) × LLM 原始置信
+    (docs/设计预期-修正版.md §五.3 / §六)。需要联网 (DuckDuckGo 免费端点)。
+    """
+    from explain_engine.engines.grounding import (
+        TIER_LABELS,
+        compute_tiers,
+        ground_state,
+    )
+
+    store = _get_store()
+    try:
+        session = store.load(session_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if session.meta.stage not in ("done", "converged"):
+        console.print(
+            f"[red]session stage={session.meta.stage!r}, 需 done/converged "
+            f"才能接地 (先跑 explain compress / explain run)。[/red]"
+        )
+        raise typer.Exit(4)
+
+    light_llm = make_light_llm_client()
+    console.print("[INFO] 接地管线: 声明抽取 → 检索 → 判定 (走 light model)...")
+    try:
+        summary = asyncio.run(ground_state(session.state, light_llm, top_k=top_k))
+    except (LLMError, SchemaValidationError) as exc:
+        console.print(f"[red]接地失败: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    store.save(session)
+    tiers = compute_tiers(session.state)
+    dist: dict[str, int] = {}
+    for t in tiers.values():
+        dist[TIER_LABELS[t]] = dist.get(TIER_LABELS[t], 0) + 1
+    console.print(
+        f"\n[green]接地完成。[/green] {summary.targets_total} 个对象: "
+        f"实证 {summary.verified} / 争议 {summary.contested} / "
+        f"未验证 {summary.unverified}; 新增证据 {summary.evidence_added} 条; "
+        f"{summary.edges_reweighted} 条边按证据等级重新加权。"
+    )
+    console.print(f"全图认知等级分布: {dist}")
+    if summary.errors:
+        console.print(f"[yellow]{len(summary.errors)} 个对象接地出错 (维持未验证):[/yellow]")
+        for err in summary.errors[:5]:
+            console.print(f"  [dim]{err}[/dim]")
+
+
+@app.command()
 def bench(
     questions_file: str = typer.Argument(
         ..., help="题库文件: 每行一个问题, # 开头为注释",
@@ -1510,6 +1568,14 @@ def bench(
     out: str = typer.Option("bench_results", "--out", help="输出目录"),
     budget: int = typer.Option(20, "--budget", help="A 组推理 tick 上限"),
     seed: int = typer.Option(42, "--seed", help="盲化随机种子 (确定性)"),
+    h2: bool = typer.Option(
+        False, "--h2",
+        help="H2 模式: B 组改为同管线关接地 (检验接地价值, §四 H2)",
+    ),
+    grounding: bool = typer.Option(
+        True, "--grounding/--no-grounding",
+        help="A 组是否启用证据接地 (Phase G 起默认开)",
+    ),
 ) -> None:
     """H1 盲评实验: A 组(完整管线+报告) vs B 组(单次深度 prompt)。
 
@@ -1534,13 +1600,16 @@ def bench(
 
     llm = make_llm_client()
     light_llm = make_light_llm_client()
+    mode = "h2" if h2 else "h1"
     console.print(
-        f"[INFO] H1 盲评: {len(questions)} 题, budget={budget}, seed={seed}。"
+        f"[INFO] {mode.upper()} 盲评: {len(questions)} 题, budget={budget}, "
+        f"seed={seed}, 接地={'开' if (grounding or h2) else '关'}。"
         f"A 组每题约需数分钟与几十次 LLM 调用。"
     )
     manifest = asyncio.run(run_bench(
         questions, Path(out),
         llm=llm, light_llm=light_llm, budget=budget, seed=seed,
+        mode=mode, grounded=grounding,
     ))
     n_ok = sum(1 for q in manifest["questions"] if q.get("status") == "ok")
     n_err = len(manifest["questions"]) - n_ok

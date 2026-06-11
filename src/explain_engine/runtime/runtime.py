@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from explain_engine.engines import expansion, reflection
+from explain_engine.engines import expansion, metrics, reflection
 from explain_engine.engines import lifecycle as lifecycle_mod
 from explain_engine.engines.simulation import aggregate_acceptance
 from explain_engine.llm.client import LLMClient
@@ -33,6 +33,7 @@ async def run(
     budget: int,
     on_tick: Callable[[CognitiveState], None] | None = None,
     scheduler: PhaseScheduler | None = None,
+    cv_stop: bool = True,
 ) -> str:
     """主循环。返 stop_reason。
 
@@ -43,6 +44,9 @@ async def run(
     state.last_gain_tick = 0
     state.last_reflection_change_tick = 0
     sched = scheduler or PhaseScheduler(K=4)
+    # Phase G (设计预期-修正版 §五.4): 压缩值历史 — ΔCV 收敛判据用。
+    # in-memory: run() 总是从 tick=0 重跑, 不需要跨 resume 持久化。
+    cv_history: list[float] = [metrics.compression_value(state).cv]
 
     while True:
         stop, reason = stop_mod.should_stop(state)
@@ -140,3 +144,12 @@ async def run(
 
         if on_tick is not None:
             on_tick(state)
+
+        # Phase G (§五.4): 连续 W tick ΔCV < ε → 收敛。
+        # 取代"定时器式"停止的哲学缺口: 停止条件以解释力边际增益表达。
+        # 既有 stop 路径 (budget / no_gain / reflection_signaled) 全部保留;
+        # cv_stop=False 关闭本判据 (budget 语义测试 / 强制跑满场景用)。
+        if cv_stop:
+            cv_history.append(metrics.compression_value(state).cv)
+            if metrics.cv_converged(cv_history):
+                return "cv_converged"

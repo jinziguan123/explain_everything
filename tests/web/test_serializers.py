@@ -34,6 +34,37 @@ def test_empty_graph():
     assert out["elements"]["edges"] == []
 
 
+def test_graph_to_cytoscape_with_state_carries_evidence():
+    """Phase G: 传 state 时附带 tier / evidence_state / 来源列表。"""
+    from explain_engine.schema.evidence import Evidence
+    from explain_engine.schema.state import CognitiveState
+
+    state = CognitiveState.bootstrap("为什么", budget=5)
+    g2 = _graph()
+    state.graph._nodes = dict(g2.nodes)  # 测试便捷: 直接挪节点边
+    state.graph._edges = dict(g2.edges)
+    ev = Evidence(id="ev_001", claim="c", url="https://a.com/1", title="来源A",
+                  snippet="s", stance="support",
+                  retrieved_at="2026-06-11T00:00:00+00:00")
+    state.evidence["ev_001"] = ev
+    state.graph._nodes["p_001"] = state.graph._nodes["p_001"].model_copy(
+        update={"evidence_state": "verified", "evidence_ids": ["ev_001"]})
+
+    out = graph_to_cytoscape(state.graph, state=state)
+    node = next(n["data"] for n in out["elements"]["nodes"]
+                if n["data"]["id"] == "p_001")
+    assert node["evidence_state"] == "verified"
+    assert node["tier"] == "fact"
+    assert node["evidence"] == [
+        {"url": "https://a.com/1", "title": "来源A", "stance": "support"}
+    ]
+    edge = out["elements"]["edges"][0]["data"]
+    assert edge["tier"] == "hypothesis"  # 未接地边
+    # 不传 state 保持旧行为: tier 空串, evidence 空
+    legacy = graph_to_cytoscape(state.graph)
+    assert legacy["elements"]["nodes"][0]["data"]["tier"] == ""
+
+
 def test_lexicon_to_cytoscape_nodes_and_theme():
     from explain_engine.engines.theory.cache import TheoriesCache
     from explain_engine.engines.theory.theory import Theme, Theory

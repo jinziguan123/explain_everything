@@ -66,4 +66,10 @@ class VariableNode(BaseModel):
     Persisted to JSON to survive session save/load (修 review I1: in-memory
     dict 在 from_dict 后丢, stale 节点 resume 后永不 decay)."""
 
+    # ── Phase G 证据状态 (设计预期-修正版 §六.2; 默认值 backward compat) ──
+    evidence_state: Literal["unverified", "verified", "contested"] = "unverified"
+    """接地管线写入: verified = ≥2 独立来源支持且无冲突; contested = 来源冲突。
+    展示层 tier (实证/推断/假设/争议) 由 engines.grounding.compute_tiers
+    结合图结构计算, 不在此存储。证据本体经 evidence_ids 指向 state.evidence。"""
+
     model_config = {"frozen": False}  # MVP 可变，v0.2 可考虑 frozen + new_with()

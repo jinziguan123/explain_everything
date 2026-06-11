@@ -177,10 +177,13 @@ async def test_on_tick_callback_invoked_each_tick(mocker) -> None:
     # 所有 expand tick fall through 到 reflect, reflect 返 "continue" 不 bump
     # last_reflection_change_tick → 在 tick=4 时 reflection_signaled_stop 触发。
     # budget=4 让 budget 先于 reflection_stop 终止, 验证 on_tick 每 tick 调一次。
+    # cv_stop=False: 验证 on_tick 每 tick 必调; 此 fixture CV 不变,
+    # Phase G cv_converged 会在第 3 tick 提前结束 (那是 metrics 测试的事)。
     await run(
         state, mocker.AsyncMock(), budget=4,
         scheduler=PhaseScheduler(K=2),
         on_tick=lambda s: calls.append(s.tick),
+        cv_stop=False,
     )
     assert len(calls) == 4
 

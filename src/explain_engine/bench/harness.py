@@ -88,8 +88,13 @@ async def run_pipeline_headless(
     llm: LLMClient,
     light_llm: LLMClient | None = None,
     budget: int = 20,
+    grounded: bool = True,
+    search_fn=None,
 ) -> tuple[CognitiveState, dict]:
-    """无人值守跑完整管线: bootstrap → compress → run。
+    """无人值守跑完整管线: bootstrap → compress → run → (可选) 接地。
+
+    grounded=False 跳过接地管线 — H2 实验的对照组 (§四 H2), 也是
+    纯离线/无网环境的逃生门。
 
     HITL 等价于"全采纳": 现象全保留; insight 候选全保留 (候选节点在
     propose_candidates 时已入图, review 的 keep 路径本就是 no-op,
@@ -124,7 +129,21 @@ async def run_pipeline_headless(
     timings["run_s"] = time.monotonic() - t0
     logger.info("bench: run 完成 (reason=%s, tick=%d)", stop_reason, state.tick)
 
-    return state, {"stop_reason": stop_reason, "timings": timings}
+    meta: dict = {"stop_reason": stop_reason, "timings": timings}
+    if grounded:
+        from explain_engine.engines.grounding import ground_state
+
+        t0 = time.monotonic()
+        summary = await ground_state(
+            state, light_llm or llm, search_fn=search_fn,
+        )
+        timings["grounding_s"] = time.monotonic() - t0
+        meta["grounding"] = summary.as_dict()
+        logger.info(
+            "bench: 接地完成 (实证 %d / 争议 %d / 未验证 %d)",
+            summary.verified, summary.contested, summary.unverified,
+        )
+    return state, meta
 
 
 async def run_baseline(question: str, llm: LLMClient) -> str:
@@ -153,8 +172,15 @@ async def run_bench(
     seed: int = 42,
     pipeline_fn: PipelineFn | None = None,
     baseline_fn: BaselineFn | None = None,
+    mode: str = "h1",
+    grounded: bool = True,
 ) -> dict:
     """对每个问题产出 A/B 两组结果并匿名化落盘。返回 manifest dict。
+
+    mode (§四):
+      - "h1": B 组 = 单次深度 prompt (检验"系统是否优于一个好 prompt")
+      - "h2": B 组 = 同管线但关闭接地 (检验"接地是否增加信任与质量"),
+              A 组强制 grounded=True
 
     目录结构:
         out_dir/
@@ -165,22 +191,29 @@ async def run_bench(
           manifest.json               # 规模/耗时统计 (不含揭盲映射)
           .answers.json               # 全部揭盲映射汇总
     """
+    if mode not in ("h1", "h2"):
+        raise ValueError(f"未知 mode: {mode!r} (h1 | h2)")
+    if mode == "h2":
+        grounded = True  # H2 的 A 组定义即"开接地"
+
     if pipeline_fn is None:
         if llm is None:
             raise ValueError("run_bench 需要 llm 或注入 pipeline_fn")
 
         async def pipeline_fn(q: str) -> tuple[CognitiveState, dict]:
-            return await run_pipeline_headless(q, llm, light_llm=light_llm, budget=budget)
+            return await run_pipeline_headless(
+                q, llm, light_llm=light_llm, budget=budget, grounded=grounded,
+            )
 
-    if baseline_fn is None:
-        if llm is None:
-            raise ValueError("run_bench 需要 llm 或注入 baseline_fn")
-
-        async def baseline_fn(q: str) -> str:
-            return await run_baseline(q, llm)
+    if baseline_fn is None and llm is None:
+        raise ValueError("run_bench 需要 llm 或注入 baseline_fn")
+    # baseline_fn=None 时, h1/h2 的默认 B 组在循环内构造 (h2 需要 per-题 prior)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest: dict = {"seed": seed, "budget": budget, "questions": []}
+    manifest: dict = {
+        "seed": seed, "budget": budget, "mode": mode,
+        "grounded": grounded, "questions": [],
+    }
     answers: dict[str, dict[str, str]] = {}
 
     for idx, question in enumerate(questions, start=1):
@@ -207,7 +240,17 @@ async def run_bench(
             a_seconds = time.monotonic() - t0
 
             t0 = time.monotonic()
-            report_b = await baseline_fn(question)
+            if baseline_fn is not None:
+                report_b = await baseline_fn(question)
+            elif mode == "h2":
+                # H2 对照: 同管线、关接地、同 prior — 唯一变量是接地
+                state_b, _meta_b = await run_pipeline_headless(
+                    question, llm, light_llm=light_llm,
+                    budget=budget, grounded=False,
+                )
+                report_b = await generate_report(state_b, llm, prior_causes=prior)
+            else:
+                report_b = await run_baseline(question, llm)
             b_seconds = time.monotonic() - t0
 
             a_is_x = _blind_assignment(seed, idx, question)
@@ -236,6 +279,7 @@ async def run_bench(
                 "b_seconds": round(b_seconds, 1),
                 "a_stats": graph_stats(state),
                 "a_stop_reason": pipe_meta.get("stop_reason"),
+                "a_grounding": pipe_meta.get("grounding"),
                 "a_core_variables": core_names,
                 "counterintuitiveness": (
                     round(counterintuitiveness(core_names, prior), 2) if prior else None

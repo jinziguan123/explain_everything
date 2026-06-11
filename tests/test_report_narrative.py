@@ -86,10 +86,13 @@ def test_build_dossier_renders_causal_chain():
     assert "储蓄率上升" in chain_section
 
 
-def test_build_dossier_epistemic_wording():
+def test_build_dossier_tier_wording_ungrounded():
+    """Phase G: 未接地的图全部内容为假设级, 且档案声明未执行接地。"""
     dossier = build_dossier(_converged_state())
-    assert "解释性假设" in dossier   # insight 的措辞等级
-    assert "观察" in dossier         # observation 的措辞等级
+    assert "认知等级: 假设" in dossier
+    assert "证据接地: 未执行" in dossier
+    # 压缩值进档案头 (§五.1)
+    assert "压缩值 CV" in dossier
 
 
 def test_build_dossier_with_prior_causes():

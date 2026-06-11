@@ -6,6 +6,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from explain_engine.schema.evidence import Evidence
 from explain_engine.schema.graph import ExplanationGraph
 
 if TYPE_CHECKING:
@@ -97,6 +98,9 @@ class CognitiveState:
     last_input_alignment_report: "InputAlignmentReport | None" = field(
         default=None, repr=False
     )
+    # Phase G NEW (设计预期-修正版 §六): 证据库。节点/边经 evidence_ids 引用。
+    # 持久化 — 证据是认识论地基, 不是 runtime cache。
+    evidence: dict[str, "Evidence"] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.budget_remaining < 0:
@@ -139,6 +143,7 @@ class CognitiveState:
             "last_gains": dict(self.last_gains),
             "reasoning_trace": [e.to_dict() for e in self.reasoning_trace],
             "last_reflection_change_tick": self.last_reflection_change_tick,
+            "evidence": {eid: ev.model_dump() for eid, ev in self.evidence.items()},
         }
 
     @classmethod
@@ -157,6 +162,10 @@ class CognitiveState:
                     TraceEntry.from_dict(t) for t in d.get("reasoning_trace", [])
                 ],
                 last_reflection_change_tick=d.get("last_reflection_change_tick", 0),
+                evidence={
+                    eid: Evidence.model_validate(ev)
+                    for eid, ev in d.get("evidence", {}).items()
+                },
             )
         except (KeyError, ValueError) as exc:
             raise ValueError(f"invalid state dict: {exc}") from exc

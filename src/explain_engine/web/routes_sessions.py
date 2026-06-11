@@ -76,7 +76,8 @@ async def get_session(sid: str) -> dict[str, Any]:
 @router.get("/{sid}/graph")
 async def get_graph(sid: str) -> dict[str, Any]:
     chat = load_chat_or_404(sid)
-    return graph_to_cytoscape(chat.state.graph)
+    # Phase G: 传 state 附带证据字段 (tier / evidence_state / 来源列表)
+    return graph_to_cytoscape(chat.state.graph, state=chat.state)
 
 
 @router.get("/{sid}/transcript")

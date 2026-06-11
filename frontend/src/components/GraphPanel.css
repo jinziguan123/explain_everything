@@ -233,3 +233,96 @@
   font-size: 13px;
   word-break: break-word;
 }
+
+/* ── Phase G 证据等级 (设计预期-修正版 §六.2) ───────────────── */
+
+.graph-legend-sub {
+  margin-top: 8px;
+}
+
+.graph-legend-line {
+  display: inline-block;
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+  flex: none;
+}
+
+.graph-legend-dashed {
+  background-image: linear-gradient(
+    to right,
+    currentColor 0 4px,
+    transparent 4px 7px
+  );
+}
+
+.tier-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--surface, #f5f6f8);
+  border: 1px solid #d7dce3;
+}
+
+.tier-badge.tier-fact {
+  border-color: #16a34a;
+  color: #16a34a;
+}
+
+.tier-badge.tier-contested {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+.tier-badge.tier-hypothesis {
+  color: #8a93a0;
+}
+
+.node-drawer-evidence {
+  border-top: 1px solid #ececef;
+  padding: 10px 14px;
+}
+
+.node-drawer-evidence-title {
+  font-size: 12px;
+  color: #8a93a0;
+  margin-bottom: 6px;
+}
+
+.node-drawer-evidence ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.node-drawer-evidence li {
+  font-size: 12px;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.node-drawer-evidence a {
+  color: var(--text, #1f2937);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+
+.evidence-stance {
+  flex: none;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid #16a34a;
+  color: #16a34a;
+}
+
+.evidence-contradict .evidence-stance {
+  border-color: #dc2626;
+  color: #dc2626;
+}

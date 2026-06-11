@@ -120,6 +120,8 @@ STOP_REASON_MAP: dict[str, str] = {
     "no_gain_for_3_ticks":      "已停 3 步无新发现 (已收敛)",
     "reflection_signaled_stop": "回顾反思后判定收敛",
     "no_frontier_remaining":    "已收敛 (无更多可推进点)",
+    # Phase G (设计预期-修正版 §五.4): 压缩值边际增益收敛
+    "cv_converged":             "已收敛 (解释力边际增益趋零)",
     # design doc 假设 reasons (兼容已记入 transcript 的旧值 / 上层封装)
     "converged":            "已收敛 (无更多可推进点)",
     "no_meaningful_action": "无更多可推进点",

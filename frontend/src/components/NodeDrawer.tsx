@@ -1,5 +1,11 @@
 import "./GraphPanel.css";
 
+export interface EvidenceItem {
+  url: string;
+  title: string;
+  stance: "support" | "contradict";
+}
+
 export interface NodeData {
   id: string;
   label: string;
@@ -10,7 +16,18 @@ export interface NodeData {
   lifecycle?: string;
   activation?: number;
   stability?: number;
+  /** Phase G 证据字段 (后端 grounding.compute_tiers) */
+  tier?: string;
+  evidence_state?: string;
+  evidence?: EvidenceItem[];
 }
+
+const TIER_LABELS: Record<string, string> = {
+  fact: "实证",
+  inference: "推断",
+  hypothesis: "假设",
+  contested: "争议",
+};
 
 export interface NodeDrawerProps {
   node: NodeData | null;
@@ -50,8 +67,16 @@ export default function NodeDrawer({ node, onClose }: NodeDrawerProps) {
       <dl className="node-drawer-body">
         <dt>层级</dt>
         <dd>{levelLabel(node.level)}</dd>
-        <dt>认知状态</dt>
-        <dd>{node.epistemic || "—"}</dd>
+        <dt>认知等级</dt>
+        <dd>
+          {node.tier ? (
+            <span className={`tier-badge tier-${node.tier}`}>
+              {TIER_LABELS[node.tier] ?? node.tier}
+            </span>
+          ) : (
+            node.epistemic || "—"
+          )}
+        </dd>
         <dt>置信度</dt>
         <dd>{fmtNum(node.confidence)}</dd>
         <dt>描述</dt>
@@ -61,6 +86,25 @@ export default function NodeDrawer({ node, onClose }: NodeDrawerProps) {
         <dt>稳定度</dt>
         <dd>{fmtNum(node.stability)}</dd>
       </dl>
+      {node.evidence && node.evidence.length > 0 && (
+        <div className="node-drawer-evidence">
+          <div className="node-drawer-evidence-title">
+            证据来源 ({node.evidence.length})
+          </div>
+          <ul>
+            {node.evidence.map((ev, i) => (
+              <li key={i} className={`evidence-${ev.stance}`}>
+                <span className="evidence-stance">
+                  {ev.stance === "support" ? "支持" : "反驳"}
+                </span>
+                <a href={ev.url} target="_blank" rel="noreferrer">
+                  {ev.title || ev.url}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

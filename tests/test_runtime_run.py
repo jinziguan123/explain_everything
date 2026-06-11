@@ -56,7 +56,9 @@ async def test_run_budget_5_completes() -> None:
     后 frontier 空 → no_frontier_remaining。budget + tick 守恒。"""
     state = _state_with_2_frontiers()
     llm = FakeLLM(plausibility=4)
-    reason = await run(state, llm, budget=5)
+    # cv_stop=False: 本测试验证 budget/tick 守恒语义; fixture 无 L0 → CV 恒 0,
+    # Phase G 的 cv_converged 会在 3 tick 提前停 (那是另一个测试的事)。
+    reason = await run(state, llm, budget=5, cv_stop=False)
     assert reason in {"budget_exhausted", "no_gain_for_3_ticks", "no_frontier_remaining"}
     # budget_remaining + tick 守恒
     assert state.budget_remaining + state.tick == 5
@@ -69,7 +71,8 @@ async def test_run_budget_exhausted() -> None:
     """足够多 frontier (10) + budget=5: 5 tick 把 budget 吃光。"""
     state = _state_with_n_frontiers(10)
     llm = FakeLLM(plausibility=4)
-    reason = await run(state, llm, budget=5)
+    # cv_stop=False: 同上, 验证 budget 吃光语义不被 cv_converged 截断。
+    reason = await run(state, llm, budget=5, cv_stop=False)
     assert reason == "budget_exhausted"
     assert state.budget_remaining == 0
     assert state.tick == 5

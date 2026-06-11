@@ -11,16 +11,6 @@ from __future__ import annotations
 from explain_engine.engines.simulation import aggregate_acceptance
 from explain_engine.schema.state import CognitiveState
 
-# epistemic → 叙事措辞等级 (设计预期-修正版 §六.2 的 Phase V 简化版:
-# 证据状态机尚未落地, 先按现有 epistemic 字段分级措辞)
-EPISTEMIC_WORDING: dict[str, str] = {
-    "fact": "实证",
-    "observation": "观察",
-    "inference": "推断",
-    "insight": "解释性假设",
-    "speculation": "猜测",
-}
-
 
 def core_variables(state: CognitiveState, k: int = 3) -> list[str]:
     """中心度 top-k 的 L1/L2 节点 id (反直觉度 CI 的核心集, §五.2)。
@@ -90,13 +80,36 @@ def _causal_chains(state: CognitiveState, max_chains: int = 12) -> list[str]:
     return [text for _, text in chains[:max_chains]]
 
 
-def _render_node_line(n, extra: str = "") -> str:
-    tier = EPISTEMIC_WORDING.get(n.epistemic, n.epistemic)
+def _render_node_line(n, tier_label: str, extra: str = "") -> str:
     decayed = " (已衰亡)" if n.lifecycle_state == "decayed" else ""
     return (
         f"- [{n.id}] **{n.name}**{decayed} — {n.description}"
-        f"  (认知等级: {tier}; 置信 {n.confidence:.2f}{extra})"
+        f"  (认知等级: {tier_label}; 置信 {n.confidence:.2f}{extra})"
     )
+
+
+def _render_evidence_appendix(state: CognitiveState) -> list[str]:
+    """证据附录: 按 target 列出已落盘的来源 (叙事报告引用来源的依据)。"""
+    if not state.evidence:
+        return []
+    by_target: dict[str, list] = {}
+    for obj_id, obj in [*state.graph.nodes.items(), *state.graph.edges.items()]:
+        for ev_id in obj.evidence_ids:
+            ev = state.evidence.get(ev_id)
+            if ev is not None:
+                by_target.setdefault(obj_id, []).append(ev)
+    if not by_target:
+        return []
+    stance_zh = {"support": "支持", "contradict": "反驳"}
+    lines = ["## 证据附录 (接地管线检索结果)"]
+    for obj_id in sorted(by_target):
+        lines.append(f"- 关于 [{obj_id}]:")
+        for ev in by_target[obj_id]:
+            lines.append(
+                f"  - ({stance_zh[ev.stance]}) {ev.title} — {ev.url}"
+            )
+    lines.append("")
+    return lines
 
 
 def build_dossier(state: CognitiveState, prior_causes: list[str] | None = None) -> str:
@@ -106,7 +119,14 @@ def build_dossier(state: CognitiveState, prior_causes: list[str] | None = None) 
         state: 收敛后的 CognitiveState。
         prior_causes: 先验预期原因列表 (§五.2 反直觉度的 Prior 集, 可选)。
     """
+    # 局部 import: grounding.ground_targets 反向引用本模块的 core_variables
+    # (函数体内 deferred import), 顶层互引会循环。
+    from explain_engine.engines.grounding import TIER_LABELS, compute_tiers
+    from explain_engine.engines.metrics import compression_value
+
     report = aggregate_acceptance(state)
+    tiers = compute_tiers(state)
+    cv = compression_value(state)
     nodes = state.graph.nodes
     by_level: dict[int, list] = {0: [], 1: [], 2: []}
     for n in nodes.values():
@@ -126,8 +146,20 @@ def build_dossier(state: CognitiveState, prior_causes: list[str] | None = None) 
     lines.append(
         f"接受度: 平均一致性 {report.avg_consistency:.2f}, "
         f"平均必要性 {report.avg_essentialness:.2f}, "
-        f"现象覆盖率 {report.rollout_coverage:.0%}。"
+        f"现象覆盖率 {report.rollout_coverage:.0%}; "
+        f"压缩值 CV {cv.cv:.2f} (覆盖 {cv.coverage:.2f} / 结构长度 {cv.length:.1f})。"
     )
+    n_verified = sum(
+        1 for t in tiers.values() if t == "fact"
+    )
+    n_contested = sum(1 for t in tiers.values() if t == "contested")
+    if state.evidence:
+        lines.append(
+            f"证据接地: {len(state.evidence)} 条来源; "
+            f"实证 {n_verified} / 争议 {n_contested} (其余为推断或假设)。"
+        )
+    else:
+        lines.append("证据接地: 未执行 — 全部内容为 LLM 内省, 按假设/推断级措辞。")
     if report.missing_l0:
         missing_names = [
             f"[{nid}] {nodes[nid].name}" for nid in report.missing_l0 if nid in nodes
@@ -135,9 +167,13 @@ def build_dossier(state: CognitiveState, prior_causes: list[str] | None = None) 
         lines.append(f"未被任何机制解释的现象 (解释残差): {'; '.join(missing_names)}")
     lines.append("")
 
+    def _tier_label(obj_id: str) -> str:
+        return TIER_LABELS[tiers[obj_id]]
+
     lines.append("## 一、现象层 (L0, 待解释的观察)")
     for n in by_level[0]:
-        lines.append(_render_node_line(n))
+        extra = f"; 证据 {len(n.evidence_ids)} 条" if n.evidence_ids else ""
+        lines.append(_render_node_line(n, _tier_label(n.id), extra))
     lines.append("")
 
     lines.append("## 二、模式层 (L1, 归纳出的中层机制)")
@@ -146,14 +182,14 @@ def build_dossier(state: CognitiveState, prior_causes: list[str] | None = None) 
         extra = f"; 一致性 {cons:.2f}" if cons is not None else ""
         if n.id in report.weak_chain_l1s:
             extra += "; ⚠ 弱链"
-        lines.append(_render_node_line(n, extra))
+        lines.append(_render_node_line(n, _tier_label(n.id), extra))
     lines.append("")
 
     lines.append("## 三、驱动层 (L2, 深层驱动变量)")
     for n in by_level[2]:
         ess = report.per_l2.get(n.id)
         extra = f"; 必要性 {ess:.2f}" if ess is not None else ""
-        lines.append(_render_node_line(n, extra))
+        lines.append(_render_node_line(n, _tier_label(n.id), extra))
     lines.append("")
 
     lines.append("## 四、关键因果链 (按强度降序)")
@@ -171,8 +207,9 @@ def build_dossier(state: CognitiveState, prior_causes: list[str] | None = None) 
         if src is None or tgt is None:
             continue
         lines.append(
-            f"- [{src.id}] {src.name} ─{e.relation_type}({e.confidence:.2f})→ "
-            f"[{tgt.id}] {tgt.name}: {e.mechanism_description}"
+            f"- [{e.id}] [{src.id}] {src.name} ─{e.relation_type}"
+            f"({e.confidence:.2f})→ [{tgt.id}] {tgt.name}: "
+            f"{e.mechanism_description} (认知等级: {_tier_label(e.id)})"
         )
     lines.append("")
 
@@ -184,4 +221,5 @@ def build_dossier(state: CognitiveState, prior_causes: list[str] | None = None) 
         lines.append("## 七、提问前的先验预期原因 (用于反直觉度对照)")
         lines.extend(f"- {p}" for p in prior_causes)
     lines.append("")
+    lines.extend(_render_evidence_appendix(state))
     return "\n".join(lines)

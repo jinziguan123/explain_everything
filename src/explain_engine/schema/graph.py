@@ -88,6 +88,30 @@ class ExplanationGraph:
         self._nodes[node_id] = new_node
         # _g 不动：节点身份不变，只是 metadata 更新
 
+    def replace_edge(self, edge_id: str, new_edge: RelationEdge) -> None:
+        """原地替换 edge 的 metadata（confidence / evidence_state 等, Phase G）。
+
+        严格要求 id / source / target 三者不变（拓扑不可变, 否则走 remove+add）。
+
+        Raises:
+            ValueError: edge_id 不存在 OR id/端点不一致。
+        """
+        if edge_id not in self._edges:
+            raise ValueError(f"edge {edge_id} not found")
+        old = self._edges[edge_id]
+        if (
+            new_edge.id != edge_id
+            or new_edge.source_node != old.source_node
+            or new_edge.target_node != old.target_node
+        ):
+            raise ValueError(
+                f"edge identity mismatch: cannot replace {edge_id!r} "
+                f"({old.source_node}→{old.target_node}) with {new_edge.id!r} "
+                f"({new_edge.source_node}→{new_edge.target_node})"
+            )
+        self._edges[edge_id] = new_edge
+        # _g 不动：端点不变，只是 metadata 更新
+
     def coverage_score(self) -> float:
         concretes = [nid for nid, n in self._nodes.items() if n.abstraction_level == 0]
         if not concretes:

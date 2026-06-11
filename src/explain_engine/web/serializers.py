@@ -5,10 +5,33 @@ from typing import Any
 
 from explain_engine.engines.theory.cache import TheoriesCache
 from explain_engine.schema.graph import ExplanationGraph
+from explain_engine.schema.state import CognitiveState
 
 
-def graph_to_cytoscape(graph: ExplanationGraph) -> dict[str, Any]:
-    """ExplanationGraph → Cytoscape elements (nodes/edges)."""
+def graph_to_cytoscape(
+    graph: ExplanationGraph,
+    state: CognitiveState | None = None,
+) -> dict[str, Any]:
+    """ExplanationGraph → Cytoscape elements (nodes/edges).
+
+    Phase G: 传入 state 时附带证据字段 — tier (fact/inference/hypothesis/
+    contested, 由 grounding.compute_tiers 按图结构计算) + evidence 来源列表
+    (节点抽屉显示)。不传 state 保持旧行为 (backward compat)。
+    """
+    tiers: dict[str, str] = {}
+    if state is not None:
+        from explain_engine.engines.grounding import compute_tiers
+        tiers = compute_tiers(state)
+
+    def _evidence_of(obj) -> list[dict[str, str]]:
+        if state is None or not obj.evidence_ids:
+            return []
+        return [
+            {"url": ev.url, "title": ev.title, "stance": ev.stance}
+            for ev_id in obj.evidence_ids
+            if (ev := state.evidence.get(ev_id)) is not None
+        ]
+
     nodes = [
         {"data": {
             "id": n.id,
@@ -20,6 +43,9 @@ def graph_to_cytoscape(graph: ExplanationGraph) -> dict[str, Any]:
             "lifecycle": n.lifecycle_state,
             "activation": n.activation,
             "stability": n.stability,
+            "evidence_state": n.evidence_state,
+            "tier": tiers.get(n.id, ""),
+            "evidence": _evidence_of(n),
         }}
         for n in graph.nodes.values()
     ]
@@ -31,6 +57,9 @@ def graph_to_cytoscape(graph: ExplanationGraph) -> dict[str, Any]:
             "relation": e.relation_type,
             "confidence": e.confidence,
             "mechanism": e.mechanism_description,
+            "evidence_state": e.evidence_state,
+            "tier": tiers.get(e.id, ""),
+            "evidence": _evidence_of(e),
         }}
         for e in graph.edges.values()
     ]

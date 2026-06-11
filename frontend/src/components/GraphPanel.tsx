@@ -99,6 +99,31 @@ function buildCyStyle(showEdgeLabels: boolean): cytoscape.StylesheetStyle[] {
       },
     },
     { selector: 'edge[relation = "manifests_as"]', style: { "line-style": "dashed" } },
+    // Phase G 证据等级 (后置选择器覆盖 relation 样式: 证据状态优先于关系类型)
+    {
+      selector: 'edge[tier = "fact"]',
+      style: {
+        "line-color": "#16a34a",
+        "target-arrow-color": "#16a34a",
+        "line-style": "solid",
+      },
+    },
+    {
+      selector: 'edge[tier = "hypothesis"]',
+      style: { "line-color": "#d7dce3", "target-arrow-color": "#d7dce3", "line-style": "dashed" },
+    },
+    {
+      selector: 'edge[tier = "contested"]',
+      style: { "line-color": "#dc2626", "target-arrow-color": "#dc2626", "line-style": "dashed" },
+    },
+    {
+      selector: 'node[evidence_state = "verified"]',
+      style: { "border-color": "#16a34a", "border-width": 3 },
+    },
+    {
+      selector: 'node[evidence_state = "contested"]',
+      style: { "border-color": "#dc2626", "border-width": 3 },
+    },
     // 悬停高亮: 非邻域淡出
     { selector: ".faded", style: { opacity: 0.12, "text-opacity": 0.12 } },
     { selector: ".hl-node", style: { "border-color": "#111114", "border-width": 3 } },
@@ -228,6 +253,23 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
                 {LEVEL_NAMES[lv]}
               </div>
             ))}
+            <div className="graph-legend-title graph-legend-sub">证据等级 (边)</div>
+            <div className="graph-legend-row">
+              <span className="graph-legend-line" style={{ background: "#16a34a" }} />
+              实证
+            </div>
+            <div className="graph-legend-row">
+              <span className="graph-legend-line" style={{ background: "#c4cad3" }} />
+              推断
+            </div>
+            <div className="graph-legend-row">
+              <span className="graph-legend-line graph-legend-dashed" style={{ background: "#d7dce3" }} />
+              假设
+            </div>
+            <div className="graph-legend-row">
+              <span className="graph-legend-line graph-legend-dashed" style={{ background: "#dc2626" }} />
+              争议
+            </div>
           </div>
 
           {/* 实时更新指示 */}
