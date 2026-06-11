@@ -1460,6 +1460,98 @@ def migrate_lexicon_pg_cmd(
 
 
 @app.command()
+def report(
+    session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+    out: str = typer.Option(None, "--out", help="写入文件路径 (默认打印到终端)"),
+) -> None:
+    """Phase V 叙事层: 把收敛后的 session 生成多层级叙事报告。
+
+    报告严格基于图谱档案 (防伪深刻), 关键断言带节点 id 引用, 措辞按
+    epistemic 等级分级。协议见 docs/设计预期-修正版.md §九。
+    """
+    from pathlib import Path
+
+    from explain_engine.report.narrative import generate_report
+
+    store = _get_store()
+    try:
+        session = store.load(session_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if session.meta.stage not in ("done", "converged"):
+        console.print(
+            f"[red]session stage={session.meta.stage!r}, 需 done/converged "
+            f"才能出报告 (先跑 explain compress / explain run)。[/red]"
+        )
+        raise typer.Exit(4)
+
+    llm = make_llm_client()
+    console.print("[INFO] 生成叙事报告 (1 次 LLM 调用)...")
+    try:
+        text = asyncio.run(generate_report(session.state, llm))
+    except (LLMError, SchemaValidationError) as exc:
+        console.print(f"[red]报告生成失败: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if out:
+        Path(out).write_text(text, encoding="utf-8")
+        console.print(f"[green]报告已写入 {out}[/green]")
+    else:
+        console.print(text)
+
+
+@app.command()
+def bench(
+    questions_file: str = typer.Argument(
+        ..., help="题库文件: 每行一个问题, # 开头为注释",
+    ),
+    out: str = typer.Option("bench_results", "--out", help="输出目录"),
+    budget: int = typer.Option(20, "--budget", help="A 组推理 tick 上限"),
+    seed: int = typer.Option(42, "--seed", help="盲化随机种子 (确定性)"),
+) -> None:
+    """H1 盲评实验: A 组(完整管线+报告) vs B 组(单次深度 prompt)。
+
+    协议与判定线见 docs/设计预期-修正版.md §四 H1。输出匿名化的
+    X.md/Y.md + 评分表, 揭盲映射在各题 .key.json。
+    """
+    from pathlib import Path
+
+    from explain_engine.bench.harness import run_bench
+
+    qpath = Path(questions_file)
+    if not qpath.is_file():
+        console.print(f"[red]题库文件不存在: {questions_file}[/red]")
+        raise typer.Exit(1)
+    questions = [
+        ln.strip() for ln in qpath.read_text(encoding="utf-8").splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+    if not questions:
+        console.print("[red]题库为空。[/red]")
+        raise typer.Exit(1)
+
+    llm = make_llm_client()
+    light_llm = make_light_llm_client()
+    console.print(
+        f"[INFO] H1 盲评: {len(questions)} 题, budget={budget}, seed={seed}。"
+        f"A 组每题约需数分钟与几十次 LLM 调用。"
+    )
+    manifest = asyncio.run(run_bench(
+        questions, Path(out),
+        llm=llm, light_llm=light_llm, budget=budget, seed=seed,
+    ))
+    n_ok = sum(1 for q in manifest["questions"] if q.get("status") == "ok")
+    n_err = len(manifest["questions"]) - n_ok
+    console.print(
+        f"\n[green]bench 完成: {n_ok} 题成功, {n_err} 题失败。[/green]\n"
+        f"评委材料: {out}/qNN/X.md|Y.md + {out}/评分表.md\n"
+        f"[dim]评分完成前不要查看 .key.json / .answers.json[/dim]"
+    )
+
+
+@app.command()
 def serve(
     host: str = "127.0.0.1",
     port: int = 8800,
