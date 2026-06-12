@@ -1427,9 +1427,10 @@ async def _handle_compress(chat: ChatSession, args: list[str]) -> list[ChatEvent
         chat.persist()
         _console.print(INFO_MID_STAGE_SAVED)
 
-    # HITL async review (走 chat.input_provider, None 时 accept-all). 不包 spinner
-    # — HITL 期间 prompt 显式 wait user, spinner 会撞.
-    await review_insights_async(chat.state, chat.input_provider)
+    # Phase X2: 候选默认全采纳, 不再逐条阻塞审查 (兑现交互成本预算). 用户随时
+    # /review 回看修订. 传 input_provider=None 走 review_insights_async 的
+    # accept-all 路径 (全 keep + 清空 insight_candidates).
+    await review_insights_async(chat.state, None)
 
     # persist sidecar + flush lexicon (best-effort — lexicon 失败不该 fail compress)
     chat.persist()
@@ -2310,9 +2311,20 @@ async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
         return events
 
     events.append(ChatEvent(type="status_end", content=None))
+    # Phase X2: 现象默认全采纳, promote 消息追加一行采纳提示 + /review 修订入口
+    # (验收标准 #1). 合进同一 event content, 避免第二个 slash_deepen_promoted
+    # 触发 tui _switch_to_chat_session 缺 sid 报错.
+    from explain_engine.chat.chat_copy import msg_phenomena_auto_accepted
+    n_phen = sum(
+        1 for n in real_chat.state.graph.nodes.values()
+        if n.abstraction_level == 0
+    )
     events.append(ChatEvent(
         type="slash_deepen_promoted",
-        content=msg_deepen_promote_start(question),
+        content=(
+            msg_deepen_promote_start(question)
+            + "\n" + msg_phenomena_auto_accepted(n_phen)
+        ),
         metadata={"sid": real_chat.sid},
     ))
     return events
@@ -2444,6 +2456,51 @@ async def _handle_llm(chat, args: list[str]) -> list[ChatEvent]:
     )]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Phase X2: /review — 随时回看现象/洞察, 按编号编辑/删除/新增 (事后修订)。
+# 兑现"默认全采纳 + 事后可修订": bootstrap/compress 不再阻塞主流程, 用户用
+# /review 修订。复用 hitl.review_graph_async (编辑后 source 升级 user)。
+# 不需 LLM, 不改 stage; 任意 stage 可调; ephemeral reject (无真 graph)。
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def _handle_review(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
+    """Phase X2: /review — 回看 + 修订现象与洞察。
+
+    - ephemeral → reject (没真 session 的 graph 可修订)。
+    - input_provider 非 None (`explain chat <sid>` prompt_toolkit 路径) →
+      交互 loop: 编号编辑 / d<编号> 删除 / a 新增现象 / q 退出; 有改动则 persist。
+    - input_provider None (TUI / test) → 只读返回列表 + 提示。
+    """
+    del args
+    from explain_engine.chat.chat_copy import (
+        REVIEW_READONLY_HINT,
+        msg_review_done,
+    )
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.hitl.cli_interactive import (
+        format_review_listing,
+        review_graph_async,
+    )
+
+    if getattr(chat, "is_ephemeral", False):
+        return _ephemeral_reject("review")
+
+    # 无输入通道: 只读列出 (TUI 无 sub-prompt 通道, 跟 /predict 同限制)。
+    if chat.input_provider is None:
+        listing = format_review_listing(chat.state)
+        return [ChatEvent(
+            type="slash_review",
+            content=f"{listing}\n{REVIEW_READONLY_HINT}",
+        )]
+
+    # 交互修订 (console 走 Rich, 跟 /budget 同 pattern — prompt_toolkit 路径可见)。
+    changed = await review_graph_async(chat.state, chat.input_provider)
+    if changed:
+        chat.persist()
+    return [ChatEvent(type="slash_review", content=msg_review_done(changed))]
+
+
 # Registry — 25 default slash commands + 1 alias (/cf → counterfactual).
 # 顺序决定 /help 列出顺序, 按"管理 → inspection → 操作 → engines → cross-session"分组.
 #
@@ -2482,6 +2539,8 @@ DEFAULT_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("migrate",        COMMAND_DESCRIPTIONS["migrate"],        _wrap_handler("migrate", _handle_migrate)),
     # Phase 18 Task 9: /deepen — ephemeral 显式触发 promote_to_persistent.
     SlashCommand("deepen",         COMMAND_DESCRIPTIONS["deepen"],         _wrap_handler("deepen", _handle_deepen)),
+    # Phase X2: /review — 回看 + 修订现象/洞察 (默认全采纳后的事后修订入口).
+    SlashCommand("review",         COMMAND_DESCRIPTIONS["review"],         _wrap_handler("review", _handle_review)),
     # Phase 19 Task 21: /thinking on|off — 切 tui_app thinking Collapsible 折叠.
     SlashCommand("thinking",       COMMAND_DESCRIPTIONS["thinking"],       _wrap_handler("thinking", _handle_thinking)),
     SlashCommand("llm",            COMMAND_DESCRIPTIONS["llm"],            _wrap_handler("llm", _handle_llm)),

@@ -1308,13 +1308,15 @@ class TestWave3Registry:
         for name in ["compress", "run", "check", "predict", "counterfactual", "rescore", "cf"]:
             assert name in names, f"/{name} not registered"
 
-    def test_total_count_is_26(self):
+    def test_total_count_is_27(self):
         """8 base + 6 Wave 3 + 1 alias (cf) + 3 Wave 4 + 1 Phase 12 (graph) +
         2 Phase 16 (theories + theory) + 1 Phase 16.2 (history) +
         1 Phase 17.2 (delete) + 1 Phase 18 (deepen) +
-        1 Phase 19 Wave 4 (thinking) + 1 Phase 20.4 (llm) = 26."""
-        assert len(DEFAULT_COMMANDS) == 26
+        1 Phase 19 Wave 4 (thinking) + 1 Phase 20.4 (llm) +
+        1 Phase X2 (review) = 27."""
+        assert len(DEFAULT_COMMANDS) == 27
         assert "llm" in {c.name for c in DEFAULT_COMMANDS}
+        assert "review" in {c.name for c in DEFAULT_COMMANDS}
 
     def test_help_lists_all_wave3_commands(self):
         """/help 自动遍历 DEFAULT_COMMANDS — 验 Wave 3 6+1 都列出."""

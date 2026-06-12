@@ -100,12 +100,15 @@ class TestCliNew:
     def test_new_drop_all(
         self, runner, setup_env, mock_llm_chat, mock_review_phenomena
     ):
-        """HITL drop 全部后，session 仍然落地（含 0 phenomena）。"""
+        """--interactive HITL drop 全部后，session 仍然落地（含 0 phenomena）。
+
+        Phase X2: drop 只在 --interactive 逃生门下发生 (默认全采纳)。
+        """
         del setup_env
         mock_llm_chat([{"name": "x", "description": "y"}])
         mock_review_phenomena("none")
 
-        result = runner.invoke(app, ["new", "why?", "--no-chat"])
+        result = runner.invoke(app, ["new", "why?", "--no-chat", "--interactive"])
 
         assert result.exit_code == 0
         store = SessionStore()
@@ -113,6 +116,32 @@ class TestCliNew:
         assert len(metas) == 1
         loaded = store.load(metas[0].session_id)
         assert len(loaded.state.graph.nodes) == 0
+
+    def test_new_default_auto_accepts_no_review(
+        self, runner, setup_env, mock_llm_chat, monkeypatch
+    ):
+        """Phase X2 验收 #1: 默认 (无 --interactive) 全采纳, 不调 review_phenomena,
+        打印"已自动采纳 N 个现象"提示。"""
+        del setup_env
+        mock_llm_chat([
+            {"name": "房价上涨", "description": "..."},
+            {"name": "收入停滞", "description": "..."},
+        ])
+
+        # review_phenomena 不该被调用 — 调用即报错
+        def _boom(phenomena, console=None):
+            raise AssertionError("默认路径不该调 review_phenomena")
+
+        monkeypatch.setattr("explain_engine.cli.review_phenomena", _boom)
+
+        result = runner.invoke(app, ["new", "为什么", "--no-chat"])
+
+        assert result.exit_code == 0, result.output
+        assert "已自动采纳 2 个现象" in result.output
+        assert "/review" in result.output
+        store = SessionStore()
+        loaded = store.load(store.list()[0].session_id)
+        assert len(loaded.state.graph.nodes) == 2
 
     def test_new_llm_failure_exits_1(
         self, runner, setup_env, mock_review_phenomena, monkeypatch

@@ -244,11 +244,9 @@ class EphemeralChatSession:
                 light_llm=light_llm,  # Phase 17.2 Feature A
             )
 
-        # HITL — Wave 1 stub: 全 accept. Wave 2 接 input_provider + k/e/d.
-        final_phenomena = await review_phenomena_async(
-            phenomena,
-            self.input_provider,
-        )
+        # Phase X2: 现象默认全采纳 (不阻塞 promote). 传 input_provider=None 走
+        # review_phenomena_async 的 accept-all 路径; 用户进 chat 后 /review 修订.
+        final_phenomena = await review_phenomena_async(phenomena, None)
 
         # Build state + meta + save
         from explain_engine.config import Settings

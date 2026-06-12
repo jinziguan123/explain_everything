@@ -226,6 +226,238 @@ def review_predicted_l0(
     return kept
 
 
+def accept_all_insights(
+    state: CognitiveState,
+    console: Console | None = None,
+) -> int:
+    """Phase X2: compress 候选默认全采纳 (非交互逃生门外的默认路径)。
+
+    跟 review_insights 的"完成态"对齐: 不 drop 任何候选, 仅清空
+    insight_candidates (候选已落 graph 成 L1, 清 list 表示审查完成)。
+
+    Returns:
+        采纳的候选数 (调用方据此打印 chat_copy.msg_insights_auto_accepted)。
+    """
+    from explain_engine.chat.chat_copy import msg_insights_auto_accepted
+
+    console = console or Console()
+    n = len(state.insight_candidates)
+    state.insight_candidates = []
+    console.print(msg_insights_auto_accepted(n))
+    return n
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase X2: /review — 随时回看现象/洞察, 按编号编辑/删除/新增 (事后修订)。
+# 复用本模块既有的 graph mutate 逻辑 (replace_node / remove_node / _next_p_id_num),
+# 编辑后 source 升级为 "user"。文案集中在 chat/chat_copy.py。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _review_items(state: CognitiveState) -> list[tuple[str, int]]:
+    """返回 (node_id, level) 列表: L0 现象在前, L1 洞察在后, 各自按 id 排序。
+
+    列表顺序 = 用户看到的编号顺序 (1-based)。
+    """
+    l0 = sorted(
+        n.id for n in state.graph.nodes.values() if n.abstraction_level == 0
+    )
+    l1 = sorted(
+        n.id for n in state.graph.nodes.values() if n.abstraction_level == 1
+    )
+    return [(nid, 0) for nid in l0] + [(nid, 1) for nid in l1]
+
+
+def format_review_listing(state: CognitiveState) -> str:
+    """渲染现象 + 洞察的编号列表 (供交互 console 与 TUI 只读 event 共用)。
+
+    编号跟 _review_items 顺序一致 (L0 先 L1 后)。user 来源的节点标 [user]。
+    """
+    from explain_engine.chat.chat_copy import REVIEW_EMPTY
+
+    items = _review_items(state)
+    if not items:
+        return REVIEW_EMPTY
+
+    lines: list[str] = []
+    idx = 1
+
+    def _emit(section_title: str, level: int) -> None:
+        nonlocal idx
+        lines.append(section_title)
+        section = [nid for nid, lv in items if lv == level]
+        if not section:
+            lines.append("  (无)")
+            return
+        for nid in section:
+            n = state.graph.nodes[nid]
+            src = " [user]" if n.source == "user" else ""
+            lines.append(f"  {idx}. {nid}{src} 「{n.name}」: {n.description}")
+            idx += 1
+
+    _emit("现象 (L0):", 0)
+    _emit("洞察 / 模式 (L1):", 1)
+    return "\n".join(lines)
+
+
+def _parse_review_command(raw: str) -> tuple[str, int | None]:
+    """解析 /review 子命令 → (action, idx)。
+
+    支持: 'N' (编辑) / 'eN' / 'e N' / 'dN' / 'd N' (删除)。
+    无法解析编号时 idx=None。
+    """
+    s = raw.strip()
+    action = "e"
+    if s and s[0].lower() in ("e", "d"):
+        action = s[0].lower()
+        s = s[1:].strip()
+    try:
+        return action, int(s)
+    except ValueError:
+        return action, None
+
+
+async def _review_edit_node(
+    state: CognitiveState,
+    nid: str,
+    input_provider: Callable[[str], Awaitable[str]],
+    console: Console,
+) -> bool:
+    """编辑单节点 name/description, 至少改一项才 replace + 升级 source=user。"""
+    from explain_engine.chat.chat_copy import (
+        REVIEW_EDIT_DESC_PROMPT,
+        REVIEW_EDIT_NAME_PROMPT,
+        REVIEW_NO_CHANGE,
+        msg_review_edited,
+    )
+
+    node = state.graph.nodes.get(nid)
+    if node is None:
+        return False
+    try:
+        new_name = (await input_provider(REVIEW_EDIT_NAME_PROMPT)).strip()
+        new_desc = (await input_provider(REVIEW_EDIT_DESC_PROMPT)).strip()
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    updates: dict = {}
+    if new_name:
+        updates["name"] = new_name
+    if new_desc:
+        updates["description"] = new_desc
+    if not updates:
+        console.print(REVIEW_NO_CHANGE)
+        return False
+    updates["source"] = "user"
+    state.graph.replace_node(nid, node.model_copy(update=updates))
+    console.print(msg_review_edited(nid))
+    return True
+
+
+async def _review_add_phenomenon(
+    state: CognitiveState,
+    input_provider: Callable[[str], Awaitable[str]],
+    console: Console,
+) -> bool:
+    """新增一个 L0 现象 (source=user), id 用 p_NNN 顺延已存最大 +1。"""
+    from explain_engine.chat.chat_copy import (
+        REVIEW_ADD_DESC_PROMPT,
+        REVIEW_ADD_NAME_PROMPT,
+        msg_review_added,
+    )
+
+    try:
+        name = (await input_provider(REVIEW_ADD_NAME_PROMPT)).strip()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if not name or name.lower() in ("q", "quit"):
+        return False
+    try:
+        desc = (await input_provider(REVIEW_ADD_DESC_PROMPT)).strip()
+    except (EOFError, KeyboardInterrupt):
+        desc = ""
+
+    next_id = _next_p_id_num(list(state.graph.nodes.values()))
+    nid = f"p_{next_id:03d}"
+    state.graph.add_node(
+        VariableNode(
+            id=nid,
+            name=name,
+            description=desc or name,
+            abstraction_level=0,
+            confidence=0.7,
+            epistemic="observation",
+            source="user",
+        )
+    )
+    console.print(msg_review_added(nid, name))
+    return True
+
+
+async def review_graph_async(
+    state: CognitiveState,
+    input_provider: Callable[[str], Awaitable[str]] | None,
+    console: Console | None = None,
+) -> bool:
+    """Phase X2 /review: 回看现象 + 洞察, 编号编辑/删除、新增现象。
+
+    input_provider=None (无输入通道, e.g. TUI / test) → 仅渲染列表, 返 False。
+    否则进交互循环, 返回是否有改动 (调用方据此 persist)。
+
+    Side effects (input_provider 非 None 时):
+      - 编辑: graph.replace_node + source="user"
+      - 删除: graph.remove_node (级联删 edges)
+      - 新增: graph.add_node (L0, source="user")
+    """
+    from explain_engine.chat.chat_copy import (
+        REVIEW_BAD_INDEX,
+        REVIEW_HEADER,
+        REVIEW_MENU_PROMPT,
+        msg_review_deleted,
+    )
+
+    console = console or Console()
+
+    if input_provider is None:
+        console.print(format_review_listing(state))
+        return False
+
+    changed = False
+    while True:
+        console.print(f"\n{REVIEW_HEADER}")
+        console.print(format_review_listing(state))
+        try:
+            raw = (await input_provider(REVIEW_MENU_PROMPT)).strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        low = raw.lower()
+        if low in ("q", "quit", ""):
+            break
+        if low in ("a", "add"):
+            if await _review_add_phenomenon(state, input_provider, console):
+                changed = True
+            continue
+
+        action, idx = _parse_review_command(raw)
+        items = _review_items(state)
+        if idx is None or not (1 <= idx <= len(items)):
+            console.print(REVIEW_BAD_INDEX)
+            continue
+        nid = items[idx - 1][0]
+        if action == "d":
+            name = state.graph.nodes[nid].name
+            state.graph.remove_node(nid)
+            state.last_gains.pop(nid, None)
+            console.print(msg_review_deleted(nid, name))
+            changed = True
+        else:
+            if await _review_edit_node(state, nid, input_provider, console):
+                changed = True
+
+    return changed
+
+
 async def review_phenomena_async(
     phenomena: list[VariableNode],
     input_provider: Callable[[str], Awaitable[str]] | None,

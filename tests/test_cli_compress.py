@@ -71,9 +71,10 @@ def _score_response(s: int = 4) -> Response:
 
 
 class TestCompress:
-    def test_full_flow_keep_all(
+    def test_full_flow_keep_all_interactive(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """--interactive 逃生门: 逐条审查 (Prompt.ask), 全 keep → 2 L1。"""
         sid = _setup_bootstrap_session(tmp_path)
         _mock_settings_to_tmp(monkeypatch, tmp_path)
 
@@ -83,8 +84,35 @@ class TestCompress:
 
         with patch("explain_engine.cli.make_llm_client", return_value=fake_llm), \
              patch("rich.prompt.Prompt.ask", side_effect=["k", "k"]):
+            result = runner.invoke(app, ["compress", sid, "--interactive"])
+        assert result.exit_code == 0, result.output
+
+        store = SessionStore(directory=tmp_path)
+        s = store.load(sid)
+        assert s.meta.stage == "done"
+        assert sum(1 for n in s.state.graph.nodes.values()
+                   if n.abstraction_level == 1) == 2
+
+    def test_full_flow_default_auto_accepts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Phase X2 默认: 候选全采纳, 不调 review_insights / Prompt.ask → 2 L1。"""
+        sid = _setup_bootstrap_session(tmp_path)
+        _mock_settings_to_tmp(monkeypatch, tmp_path)
+
+        fake_llm = AsyncMock()
+        fake_llm.chat.side_effect = [_comp_response()] + [_score_response()] * 4
+
+        # review_insights (interactive) 不该被调用
+        def _boom(state, console=None):
+            raise AssertionError("默认路径不该调 review_insights")
+
+        monkeypatch.setattr("explain_engine.cli.review_insights", _boom)
+
+        with patch("explain_engine.cli.make_llm_client", return_value=fake_llm):
             result = runner.invoke(app, ["compress", sid])
         assert result.exit_code == 0, result.output
+        assert "已自动采纳 2 个候选模式" in result.output
 
         store = SessionStore(directory=tmp_path)
         s = store.load(sid)

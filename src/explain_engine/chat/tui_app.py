@@ -1378,6 +1378,28 @@ class ExplainChatApp(App):
             "/help 看 slash, /quit 退出. "
             "[dim](滚轮翻历史; 鼠标拖选 + Ctrl+C 复制)[/dim]"
         )
+        # Phase X2: 预测台账有到期未结算项 → 启动横幅提醒一句 (验收标准 #4).
+        await self._maybe_warn_due_predictions()
+
+    async def _maybe_warn_due_predictions(self) -> None:
+        """Phase X2: 台账有已到期仍 pending 的预测时, 写一行 yellow 提醒.
+
+        best-effort: 任何异常 (storage 不可达 / ledger 损坏 / mock chat) 完全
+        静默 — 提醒是 nice-to-have, 绝不能阻断 chat 启动。
+        """
+        try:
+            from explain_engine.chat.chat_copy import banner_due_predictions
+            from explain_engine.engines.theory.ledger import (
+                due_predictions,
+                load_ledger,
+            )
+            from explain_engine.persistence.storage_v2 import StorageV2
+
+            due = due_predictions(load_ledger(StorageV2()))
+            if due:
+                await self._write(banner_due_predictions(len(due)))
+        except Exception:
+            pass
 
     # ─── Wave 4 review I-1 (DRY): 抽 _sync_thinking_collapsibles helper ───
     def _sync_thinking_collapsibles(self) -> None:

@@ -35,7 +35,11 @@ from explain_engine.engines.errors import InsufficientObservationsError
 from explain_engine.engines.evaluation import score_all
 from explain_engine.engines.input_validation import MIN_OVERLAP_SCORE
 from explain_engine.engines.input_validation import validate as validate_input
-from explain_engine.hitl.cli_interactive import review_insights, review_phenomena
+from explain_engine.hitl.cli_interactive import (
+    accept_all_insights,
+    review_insights,
+    review_phenomena,
+)
 from explain_engine.llm.errors import LLMError, SchemaValidationError
 from explain_engine.persistence.session import Session, SessionMeta, SessionStore
 from explain_engine.schema.state import CognitiveState
@@ -96,21 +100,28 @@ def new(
         20, "--lexicon-top-k",
         help="bootstrap 拉 top-K lexicon var 作 prior (默认 20, 0 跳过)",
     ),
+    interactive: bool = typer.Option(
+        False, "--interactive",
+        help="Phase X2 逃生门: 逐条审查 bootstrap 现象 (旧阻塞行为). "
+             "默认全采纳不阻塞, 进 chat 后 /review 可修订.",
+    ),
 ) -> None:
-    """启动新 session: Bootstrap + HITL + (默认) 直接进 chat REPL.
+    """启动新 session: Bootstrap + (默认全采纳) + 直接进 chat REPL.
 
     `--no-chat` 仅 print sid 退出 (脚本/CI 场景).
+    `--interactive` 恢复旧的逐条 HITL 审查行为 (Phase X2 逃生门).
 
     Phase 11 Wave 2.5: 删除 tool budget cli flag — 改通过 chat 内 /budget
     slash interactive 配置.
     """
-    asyncio.run(_run_new(question, no_chat, lexicon_top_k))
+    asyncio.run(_run_new(question, no_chat, lexicon_top_k, interactive))
 
 
 async def _run_new(
     question: str,
     no_chat: bool = False,
     lexicon_top_k: int = 20,
+    interactive: bool = False,
 ) -> None:
     settings = Settings()
     llm = make_llm_client()
@@ -144,8 +155,14 @@ async def _run_new(
         console.print(f"[red]LLM 调用失败: {exc}[/red]")
         raise typer.Exit(1) from exc
 
-    console.print(f"[INFO] 生成 {len(phenomena)} 个现象，请审查。")
-    final_phenomena = review_phenomena(phenomena, console=console)
+    # Phase X2: 默认全采纳 (不阻塞主流程); --interactive 恢复逐条审查逃生门.
+    if interactive:
+        console.print(f"[INFO] 生成 {len(phenomena)} 个现象，请审查。")
+        final_phenomena = review_phenomena(phenomena, console=console)
+    else:
+        from explain_engine.chat.chat_copy import msg_phenomena_auto_accepted
+        final_phenomena = phenomena
+        console.print(msg_phenomena_auto_accepted(len(phenomena)))
 
     # 构造 session
     state = CognitiveState.bootstrap(question, budget=settings.default_budget)
@@ -237,12 +254,20 @@ def show(
 @app.command()
 def compress(
     session_id: str = typer.Argument(..., help="session id (s_xxxxxxxx)"),
+    interactive: bool = typer.Option(
+        False, "--interactive",
+        help="Phase X2 逃生门: 逐条审查洞察候选 (旧阻塞行为). "
+             "默认全采纳, 进 chat 后 /review 可修订.",
+    ),
 ) -> None:
-    """对已 bootstrap 的 session 跑 Compression + Evaluation + HITL 2。"""
-    asyncio.run(_run_compress(session_id))
+    """对已 bootstrap 的 session 跑 Compression + Evaluation + (默认全采纳)。
+
+    `--interactive` 恢复旧的逐条 HITL 审查行为 (Phase X2 逃生门)。
+    """
+    asyncio.run(_run_compress(session_id, interactive))
 
 
-async def _run_compress(session_id: str) -> None:
+async def _run_compress(session_id: str, interactive: bool = False) -> None:
     store = _get_store()
     try:
         session = store.load(session_id)
@@ -306,8 +331,12 @@ async def _run_compress(session_id: str) -> None:
         console.print("[INFO] 检测到 stage=insight_pending，跳过 LLM 直接进入审查。")
         # Phase 5: gain 已持久化进 state.last_gains，重入也能正确显示
 
-    # HITL 2 — Phase 5 起从 state.last_gains 读
-    review_insights(session.state, console=console)
+    # Phase X2: 默认全采纳洞察候选 (不阻塞); --interactive 恢复逐条审查逃生门.
+    # HITL 2 — Phase 5 起从 state.last_gains 读.
+    if interactive:
+        review_insights(session.state, console=console)
+    else:
+        accept_all_insights(session.state, console=console)
 
     session.meta.stage = "done"
     try:

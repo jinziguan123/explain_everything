@@ -81,6 +81,7 @@ COMMAND_DESCRIPTIONS: dict[str, str] = {
 
     # 管理 session
     "deepen":   "触发深度建模 (/deepen [问题], 不带参取最近 user 输入)",
+    "review":   "回看 + 修订现象/洞察 (编号编辑/删除, a 新增现象)",
     "new":      "重置当前 chat, 回到刚启动的空白状态",
     "resume":   "切换到历史 session (/resume <sid>; 先 /list 看 sid)",
     "list":     "列出当前项目所有 session",
@@ -108,7 +109,7 @@ HELP_GROUPS_ZH: list[tuple[str, list[str]]] = [
     ("推进 session",              ["compress", "run", "rescore"]),
     ("干预分析 (需先 /compress)", ["predict", "counterfactual"]),
     ("查看状态 (只读)",           ["show", "graph", "check"]),
-    ("管理 session",              ["deepen", "new", "resume", "list", "delete", "lexicon", "theories", "theory", "history"]),
+    ("管理 session",              ["deepen", "review", "new", "resume", "list", "delete", "lexicon", "theories", "theory", "history"]),
     ("其他",                      ["budget", "compact", "save", "migrate", "thinking", "llm"]),
     ("帮助 / 退出",               ["help", "quit"]),
 ]
@@ -366,3 +367,66 @@ def msg_thinking_off() -> str:
 def err_thinking_usage() -> str:
     """/thinking 无参 / 错参用法提示."""
     return "用法: /thinking on  或  /thinking off  (跟 Ctrl+O 等价)"
+
+
+# ── Phase X2 (HITL 异步化): 默认全采纳 + /review 事后修订 文案 ──
+# 兑现设计预期-修正版 §二 交互成本预算: bootstrap 现象 / compress 候选默认全
+# 采纳不阻塞主流程, 用户随时 /review 回看修订 (编辑/删除/新增, source 升级 user).
+
+
+def msg_phenomena_auto_accepted(n: int) -> str:
+    """explain new / promote 后, 现象默认全采纳的一行提示 (验收标准 #1)."""
+    return f"已自动采纳 {n} 个现象，/review 可修订 (编辑 / 删除 / 新增)。"
+
+
+def msg_insights_auto_accepted(n: int) -> str:
+    """compress 候选默认全采纳的一行提示. n=0 时给空候选提示."""
+    if n == 0:
+        return "无候选模式可采纳 (可重跑 compress)。"
+    return f"已自动采纳 {n} 个候选模式，/review 可修订 (编辑 / 删除)。"
+
+
+# /review 交互文案 (仅在有 input 通道, 即 `explain chat <sid>` prompt_toolkit
+# 路径下可编辑; TUI 无 input 通道时退化为只读列表).
+REVIEW_HEADER = "── /review 回看与修订 ──"
+REVIEW_EMPTY = "(当前 session 暂无现象与洞察可修订)"
+REVIEW_MENU_PROMPT = "操作: 输编号编辑 / d<编号> 删除 / a 新增现象 / q 退出 > "
+REVIEW_BAD_INDEX = "[yellow]无效编号，请按列表序号重新输入。[/yellow]"
+REVIEW_NO_CHANGE = "[dim]未修改。[/dim]"
+REVIEW_READONLY_HINT = (
+    "[dim](当前无输入通道, 仅展示。在 `explain chat <sid>` 下运行 /review "
+    "可编辑 / 删除 / 新增。)[/dim]"
+)
+REVIEW_EDIT_NAME_PROMPT = "新名称 (回车保持原值): "
+REVIEW_EDIT_DESC_PROMPT = "新描述 (回车保持原值): "
+REVIEW_ADD_NAME_PROMPT = "新现象名称 (q 取消): "
+REVIEW_ADD_DESC_PROMPT = "新现象描述 (回车用名称): "
+
+
+def msg_review_done(changed: bool) -> str:
+    """/review 退出后的总结消息."""
+    return "已保存修订 (现象 / 洞察已更新, source 标记为 user)。" if changed \
+        else "未做改动。"
+
+
+def msg_review_deleted(nid: str, name: str) -> str:
+    return f"已删除 {nid} 「{name}」。"
+
+
+def msg_review_edited(nid: str) -> str:
+    return f"已更新 {nid} (source → user)。"
+
+
+def msg_review_added(nid: str, name: str) -> str:
+    return f"已新增现象 {nid} 「{name}」 (source = user)。"
+
+
+# ── Phase X2: TUI 启动时到期预测提醒 (台账须结算才可证伪, 设计 §七.2) ──
+
+
+def banner_due_predictions(n: int) -> str:
+    """TUI 启动横幅: 预测台账有到期未结算项时提醒一句 (验收标准 #4)."""
+    return (
+        f"[yellow]⏰ 预测台账有 {n} 条已到期仍未结算 — "
+        f"理论须结算才可证伪。退出后用 `explain predictions` 查看 / 结算。[/yellow]"
+    )
