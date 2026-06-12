@@ -268,6 +268,84 @@ def test_ground_state_search_failure_is_not_fatal():
     assert state.graph.edges["e_003"].confidence == pytest.approx(0.34)
 
 
+# ─── 增量接地 (Phase A 机器提案) ───────────────────────────
+
+
+def test_ground_state_incremental_skips_already_grounded():
+    """第二次增量接地: 已接地对象不再检索, 但置信公式仍应用。"""
+    state = _state()
+    targets = ["p_001", "p_002", "e_001", "e_002", "e_003"]
+    search_calls = []
+
+    async def counting_search(q: str):
+        search_calls.append(q)
+        return await _two_domain_search(q)
+
+    s1 = asyncio.run(ground_state(
+        state, FakeGroundingLLM(targets), search_fn=counting_search,
+    ))
+    assert s1.targets_total == 3
+    assert state.graph.nodes["p_001"].grounded_at is not None
+    n_first = len(search_calls)
+
+    s2 = asyncio.run(ground_state(
+        state, FakeGroundingLLM(targets), search_fn=counting_search,
+    ))
+    assert s2.targets_total == 0          # 无新对象
+    assert len(search_calls) == n_first   # 零检索
+    assert s2.edges_reweighted >= 0       # 公式仍跑 (图结构可能变了)
+
+
+def test_ground_state_incremental_picks_up_new_objects():
+    """图演化出新 L0 后, 增量接地只处理新对象。"""
+    state = _state()
+    targets = ["p_001", "p_002", "e_001", "e_002", "e_003", "p_003"]
+    asyncio.run(ground_state(
+        state, FakeGroundingLLM(targets), search_fn=_two_domain_search,
+    ))
+    # 模拟推理循环长出新现象
+    state.graph.add_node(_node("p_003", "新现象", 0))
+    s2 = asyncio.run(ground_state(
+        state, FakeGroundingLLM(targets), search_fn=_two_domain_search,
+    ))
+    assert s2.targets_total == 1
+    assert state.graph.nodes["p_003"].evidence_state == "verified"
+
+
+def test_ground_state_failed_search_retried_next_round():
+    """检索失败的对象 grounded_at 保持 None, 下轮增量重试。"""
+    state = _state()
+    targets = ["p_001", "p_002", "e_001", "e_002", "e_003"]
+
+    async def broken_search(_q: str):
+        raise RuntimeError("rate limited")
+
+    asyncio.run(ground_state(
+        state, FakeGroundingLLM(targets), search_fn=broken_search,
+    ))
+    assert state.graph.nodes["p_001"].grounded_at is None
+
+    s2 = asyncio.run(ground_state(
+        state, FakeGroundingLLM(targets), search_fn=_two_domain_search,
+    ))
+    assert s2.targets_total == 3  # 全部重试
+    assert s2.verified == 3
+
+
+def test_ground_state_all_mode_regrounds():
+    """incremental=False 全量重接地 (CLI --all)。"""
+    state = _state()
+    targets = ["p_001", "p_002", "e_001", "e_002", "e_003"]
+    asyncio.run(ground_state(
+        state, FakeGroundingLLM(targets), search_fn=_two_domain_search,
+    ))
+    s2 = asyncio.run(ground_state(
+        state, FakeGroundingLLM(targets), search_fn=_two_domain_search,
+        incremental=False,
+    ))
+    assert s2.targets_total == 3
+
+
 # ─── 持久化 roundtrip ──────────────────────────────────────
 
 

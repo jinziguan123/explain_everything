@@ -52,6 +52,9 @@ class Prediction(BaseModel):
     created_at: str = ""
     resolved_at: str | None = None
     note: str | None = None
+    origin: Literal["user", "llm"] = "user"
+    """登记来源: user = 人工登记; llm = 机器提案 (prediction_draft 自动起草)。
+    结算永远留给人 (除 retrodiction 自动结算) — "机器提案、人签字"。"""
 
 
 @dataclass(frozen=True)
@@ -124,6 +127,7 @@ def add_prediction(
     assertion: str,
     method: PredictionMethod = "search",
     deadline: str | None = None,
+    origin: Literal["user", "llm"] = "user",
 ) -> Prediction:
     """登记一条预测。time_window 必须带 deadline (YYYY-MM-DD)。"""
     if method == "time_window" and not deadline:
@@ -138,6 +142,7 @@ def add_prediction(
         method=method,
         deadline=deadline,
         created_at=_now_iso(),
+        origin=origin,
     )
     predictions.append(pred)
     _save_ledger(storage, predictions)

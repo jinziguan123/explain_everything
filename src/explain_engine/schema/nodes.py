@@ -72,4 +72,8 @@ class VariableNode(BaseModel):
     展示层 tier (实证/推断/假设/争议) 由 engines.grounding.compute_tiers
     结合图结构计算, 不在此存储。证据本体经 evidence_ids 指向 state.evidence。"""
 
+    grounded_at: str | None = None
+    """最近一次接地尝试完成的时间 (iso8601)。None = 从未接地 — 增量接地
+    (机器提案) 只处理 None 的对象; 检索失败保持 None 以便下轮重试。"""
+
     model_config = {"frozen": False}  # MVP 可变，v0.2 可考虑 frozen + new_with()

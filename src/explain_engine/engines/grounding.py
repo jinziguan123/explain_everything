@@ -196,8 +196,14 @@ class GroundingSummary:
 
 def ground_targets(
     state: CognitiveState, top_k: int = GROUND_TOP_K,
+    incremental: bool = False,
 ) -> tuple[list[str], list[str]]:
-    """选择接地对象 (§六.1 成本控制): (全部 L0 节点 id, 核心变量入边 id)。"""
+    """选择接地对象 (§六.1 成本控制): (全部 L0 节点 id, 核心变量入边 id)。
+
+    incremental=True 时只返回从未接地的对象 (grounded_at is None) —
+    图演化后自动补接地的"脏标记"机制: 新长出来的现象/核心边才检索,
+    已接地的不重复消耗。
+    """
     from explain_engine.report.dossier import core_variables
 
     l0_ids = sorted(
@@ -208,6 +214,13 @@ def ground_targets(
     edge_ids = sorted(
         eid for eid, e in state.graph.edges.items() if e.target_node in core
     )
+    if incremental:
+        l0_ids = [
+            nid for nid in l0_ids if state.graph.nodes[nid].grounded_at is None
+        ]
+        edge_ids = [
+            eid for eid in edge_ids if state.graph.edges[eid].grounded_at is None
+        ]
     return l0_ids, edge_ids
 
 
@@ -305,8 +318,13 @@ async def ground_state(
     top_k: int = GROUND_TOP_K,
     max_results: int = 5,
     concurrency: int = 4,
+    incremental: bool = True,
 ) -> GroundingSummary:
     """接地管线主入口 (§六.1)。原地修改 state, 返回执行摘要。
+
+    incremental=True (默认): 只接地从未尝试过的对象 (机器提案的脏标记机制);
+    False = 全量重接地 (CLI --all)。成功尝试后对象打 grounded_at 时间戳,
+    检索失败保持 None 留待下轮重试。
 
     流程: 选 targets → 声明抽取 (1 LLM call) → 每 target 检索 + 立场判定
     (1 search + 1 light-LLM call, Semaphore 限 concurrency 路并发)
@@ -327,9 +345,11 @@ async def ground_state(
         from explain_engine.chat.web_search import web_search as search_fn
 
     summary = GroundingSummary()
-    l0_ids, edge_ids = ground_targets(state, top_k=top_k)
+    l0_ids, edge_ids = ground_targets(state, top_k=top_k, incremental=incremental)
     summary.targets_total = len(l0_ids) + len(edge_ids)
     if summary.targets_total == 0:
+        # 无新对象 (全部已接地) — 置信公式仍要应用 (图结构可能变了影响 tier)
+        summary.edges_reweighted = apply_grounded_confidence(state)
         return summary
 
     try:
@@ -393,6 +413,7 @@ async def ground_state(
             state.graph.replace_node(target_id, node.model_copy(update={
                 "evidence_state": verdict,
                 "evidence_ids": [*node.evidence_ids, *ev_ids],
+                "grounded_at": now,
                 # verified 现象升级 epistemic → fact (措辞分级用)
                 **({"epistemic": "fact"} if verdict == "verified"
                    and node.abstraction_level == 0 else {}),
@@ -402,6 +423,7 @@ async def ground_state(
             state.graph.replace_edge(target_id, edge.model_copy(update={
                 "evidence_state": verdict,
                 "evidence_ids": [*edge.evidence_ids, *ev_ids],
+                "grounded_at": now,
             }))
 
         summary.evidence_added += len(evs)

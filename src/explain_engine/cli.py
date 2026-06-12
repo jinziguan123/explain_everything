@@ -340,6 +340,10 @@ def run(
         False, "--no-input-check",
         help="Phase 8 Wave 3: 跳过 input validation fail-fast (兜底用)",
     ),
+    no_ground: bool = typer.Option(
+        False, "--no-ground",
+        help="跳过收敛后的自动增量接地与预测起草 (离线/省成本用)",
+    ),
 ) -> None:
     """Phase 5 reasoning loop: 上溯 driver,自动收敛。
 
@@ -432,6 +436,42 @@ def run(
         f"{len(session.state.graph.edges)} edges"
     )
     console.print(f"driver layer: {len(drivers)} drivers added")
+
+    # ── Phase A 机器提案: 收敛后自动增量接地 + 预测起草 (人只负责结算) ──
+    if not no_ground:
+        from explain_engine.engines.grounding import ground_state
+        from explain_engine.persistence.storage_v2 import StorageV2
+
+        light_llm = make_light_llm_client()
+        console.print("[INFO] 自动接地新对象 (增量, --no-ground 可关)...")
+        try:
+            gsum = asyncio.run(ground_state(session.state, light_llm))
+            store.save(session)
+            console.print(
+                f"接地: {gsum.targets_total} 个新对象 — 实证 {gsum.verified} / "
+                f"争议 {gsum.contested} / 未验证 {gsum.unverified}; "
+                f"{gsum.edges_reweighted} 条边按证据等级重新加权"
+            )
+        except Exception as exc:
+            console.print(
+                f"[yellow]自动接地失败 (非关键, 可 explain ground 重试): "
+                f"{type(exc).__name__}: {exc}[/yellow]"
+            )
+        try:
+            from explain_engine.engines.theory.prediction_draft import (
+                auto_draft_predictions,
+            )
+            drafted = asyncio.run(auto_draft_predictions(StorageV2(), light_llm))
+            if drafted:
+                console.print(
+                    f"已为 {len({p.theory_id for p in drafted})} 个理论自动起草 "
+                    f"{len(drafted)} 条预测 (origin=llm)。"
+                    f"查看/结算: explain predictions"
+                )
+        except Exception as exc:
+            console.print(
+                f"[yellow]预测起草失败 (非关键): {type(exc).__name__}: {exc}[/yellow]"
+            )
 
 
 @app.command()
@@ -1594,9 +1634,10 @@ def predictions_cmd(
     table = Table(title=f"预测台账 ({len(predictions)} 条)")
     table.add_column("ID", style="cyan")
     table.add_column("理论", style="dim")
-    table.add_column("断言", max_width=46)
+    table.add_column("断言", max_width=42)
     table.add_column("方式")
     table.add_column("期限")
+    table.add_column("来源")
     table.add_column("状态")
     for p in predictions:
         status = status_zh[p.status]
@@ -1608,9 +1649,64 @@ def predictions_cmd(
             status = f"[red]{status}[/red]"
         table.add_row(
             p.id, p.theory_id, p.assertion,
-            method_zh[p.method], p.deadline or "—", status,
+            method_zh[p.method], p.deadline or "—",
+            "机器" if p.origin == "llm" else "人工",
+            status,
         )
     console.print(table)
+
+
+@app.command("prediction-draft")
+def prediction_draft_cmd(
+    theory_id: str = typer.Argument(
+        None, help="理论 ID (t_xxx); 不传则对所有无台账记录的理论起草",
+    ),
+) -> None:
+    """机器提案: LLM 为理论起草可检验预测并自动登记 (origin=llm)。
+
+    explain run 收敛后会自动触发, 本命令用于手动补跑。
+    结算仍需人: explain prediction-resolve / predictions --settle-retro。
+    """
+    from explain_engine.engines.theory.cache import get_active_theories
+    from explain_engine.engines.theory.ledger import add_prediction
+    from explain_engine.engines.theory.prediction_draft import (
+        auto_draft_predictions,
+        draft_for_theory,
+    )
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2()
+    light_llm = make_light_llm_client()
+
+    if theory_id:
+        cache = get_active_theories(storage, embedder=None)
+        match = next(
+            (t for t in [*cache.stable_theories, *cache.tentative_theories]
+             if t.id == theory_id), None,
+        )
+        if match is None:
+            console.print(f"[red]理论 {theory_id} 不存在 (explain theories 查看)。[/red]")
+            raise typer.Exit(1)
+        with console.status("[bold green]起草预测中..."):
+            items = asyncio.run(draft_for_theory(match, light_llm))
+        drafted = [
+            add_prediction(storage, theory_id, it.assertion,
+                           method=it.method, deadline=it.deadline, origin="llm")
+            for it in items
+        ]
+    else:
+        with console.status("[bold green]为无台账理论起草预测中..."):
+            drafted = asyncio.run(auto_draft_predictions(storage, light_llm))
+
+    if not drafted:
+        console.print("没有起草出新预测 (理论都已有台账记录, 或 LLM 判断无可检验断言)。")
+        return
+    for p in drafted:
+        console.print(f"  [cyan]{p.id}[/cyan] ({p.theory_id}) {p.assertion}")
+    console.print(
+        f"[green]已登记 {len(drafted)} 条机器提案。[/green]"
+        f"结算: explain prediction-resolve <id> --hit/--miss"
+    )
 
 
 @app.command("migrate-lexicon-pg")
@@ -1691,9 +1787,15 @@ def ground(
     top_k: int = typer.Option(
         3, "--top-k", help="对中心度 top-K 核心变量的入边接地 (L0 总是全部接地)",
     ),
+    ground_all: bool = typer.Option(
+        False, "--all",
+        help="全量重接地 (默认增量: 只处理从未接地的新对象)",
+    ),
 ) -> None:
     """Phase G 证据接地: 声明抽取 → web 检索 → 立场判定 → evidence 落盘。
 
+    默认增量 (只接地图演化后新长出的对象); explain run 收敛后会自动调用
+    本管线, 手动跑通常只在 --all 重接地或补救失败时需要。
     完成后应用置信度公式 confidence = base(认知等级) × LLM 原始置信
     (docs/设计预期-修正版.md §五.3 / §六)。需要联网 (DuckDuckGo 免费端点)。
     """
@@ -1720,10 +1822,18 @@ def ground(
     light_llm = make_light_llm_client()
     console.print("[INFO] 接地管线: 声明抽取 → 检索 → 判定 (走 light model)...")
     try:
-        summary = asyncio.run(ground_state(session.state, light_llm, top_k=top_k))
+        summary = asyncio.run(ground_state(
+            session.state, light_llm, top_k=top_k,
+            incremental=not ground_all,
+        ))
     except (LLMError, SchemaValidationError) as exc:
         console.print(f"[red]接地失败: {exc}[/red]")
         raise typer.Exit(1) from exc
+
+    if summary.targets_total == 0:
+        console.print(
+            "[dim]无新对象需要接地 (全部已接地; 用 --all 全量重接地)。[/dim]"
+        )
 
     store.save(session)
     tiers = compute_tiers(session.state)

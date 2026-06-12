@@ -35,6 +35,9 @@ class RelationEdge(BaseModel):
     """LLM 原始合理性置信 (plausibility 映射)。None = 尚未应用接地公式。
     接地公式可重复应用 (幂等): 始终从 llm_confidence 重算 confidence。"""
 
+    grounded_at: str | None = None
+    """最近一次接地尝试完成的时间 (iso8601)。None = 从未接地 (增量接地依据)。"""
+
     @model_validator(mode="after")
     def _no_self_loop(self) -> "RelationEdge":
         if self.source_node == self.target_node:

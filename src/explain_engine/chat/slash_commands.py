@@ -1510,9 +1510,32 @@ async def _handle_run(chat: ChatSession, args: list[str]) -> list[ChatEvent]:
         return [ChatEvent(type="slash_error", content=err_failed("run", exc))]
 
     chat.persist()
+
+    # ── Phase A 机器提案: 收敛后自动增量接地 (best-effort, 失败不阻断) ──
+    ground_note = ""
+    try:
+        from explain_engine.config import make_light_llm_client
+        from explain_engine.engines.grounding import ground_state
+
+        async with _spinner(chat, "自动接地新对象 (增量)"):
+            gsum = await ground_state(chat.state, make_light_llm_client())
+        chat.persist()
+        if gsum.targets_total:
+            ground_note = (
+                f"\n已自动接地 {gsum.targets_total} 个新对象: "
+                f"实证 {gsum.verified} / 争议 {gsum.contested} / "
+                f"未验证 {gsum.unverified}; "
+                f"{gsum.edges_reweighted} 条边按证据等级重新加权。"
+            )
+    except Exception as exc:
+        ground_note = (
+            f"\n(自动接地失败, 可稍后用 explain ground 重试: "
+            f"{type(exc).__name__})"
+        )
+
     return [ChatEvent(
         type="slash_run",
-        content=msg_run_done(stop_reason=reason, tick=chat.state.tick),
+        content=msg_run_done(stop_reason=reason, tick=chat.state.tick) + ground_note,
     )]
 
 
