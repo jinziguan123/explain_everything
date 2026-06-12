@@ -1404,7 +1404,15 @@ def theories(
         )
         return
 
+    # Phase T (§七.3): 按竞争序展示 (predictive_power → 综合分 → 复现数)
+    from explain_engine.engines.theory.ledger import load_ledger, stats_by_theory
+    from explain_engine.engines.theory.ranking import competition_rank
+
+    visible = competition_rank(visible, n_sessions)
+    ledger_stats = stats_by_theory(load_ledger(storage))
+
     type_zh_map = {"chain": "因果链", "star": "星型", "cycle": "环路"}
+    status_zh_map = {"stable": "已稳定", "tentative": "待观察", "weakened": "已削弱"}
     table = Table(title=(
         f"跨 session 因果模式 (stable: {len(cache.stable_theories)}, "
         f"tentative: {len(cache.tentative_theories)}, "
@@ -1419,13 +1427,188 @@ def theories(
 
     for t in visible:
         type_zh = type_zh_map.get(t.motif_type, t.motif_type)
-        status_zh = "已稳定" if t.stability_status == "stable" else "待观察"
+        status_zh = status_zh_map.get(t.stability_status, t.stability_status)
         rejected_mark = " (已拒绝)" if t.id in cache.rejected_theory_ids else ""
+        st = ledger_stats.get(t.id)
+        # §七.1 准入: 没有任何登记预测 = 叙事级 (motif ≠ theory)
+        if st is None or st.total == 0:
+            status_zh += " ·叙事级"
+        if t.predictive_power_source == "ledger" and st is not None:
+            pp_text = f"{t.predictive_power:.0%} (台账 {st.hits}/{st.resolved})"
+        else:
+            pp_text = f"{t.predictive_power:.0%} (回溯)"
         table.add_row(
             t.id, type_zh, t.natural_language_summary,
             f"{len(t.supporting_sessions)}/{n_sessions}",
-            f"{t.predictive_power:.0%}",
+            pp_text,
             status_zh + rejected_mark,
+        )
+    console.print(table)
+    console.print(
+        "[dim]提示: 用 explain prediction-add <理论ID> \"<断言>\" 给理论登记可检验"
+        "预测; 无预测的理论永远停留叙事级 (设计预期-修正版 §七.1)。[/dim]"
+    )
+
+
+@app.command("prediction-add")
+def prediction_add(
+    theory_id: str = typer.Argument(..., help="理论 ID (t_xxxxxxxxxx, 见 explain theories)"),
+    assertion: str = typer.Argument(..., help="具体、可观察的断言 (不是理论复述)"),
+    method: str = typer.Option(
+        "search", "--method",
+        help="检验方式: retrodiction (回溯, 可自动结算) / search (检索可证) / "
+             "time_window (等时间窗, 需 --deadline)",
+    ),
+    deadline: str = typer.Option(
+        None, "--deadline", help="期限 YYYY-MM-DD (time_window 必填)",
+    ),
+) -> None:
+    """Phase T 预测台账: 给理论登记一条可检验预测 (设计预期-修正版 §七.2)。
+
+    理论必须可失败 — 登记不出预测的理论永远停留叙事级, 不会晋升 stable。
+    """
+    from explain_engine.engines.theory.cache import get_active_theories
+    from explain_engine.engines.theory.ledger import add_prediction
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    if method not in ("retrodiction", "search", "time_window"):
+        console.print(f"[red]未知检验方式: {method}[/red]")
+        raise typer.Exit(2)
+
+    storage = StorageV2()
+    cache = get_active_theories(storage, embedder=None)
+    known = {t.id for t in [*cache.stable_theories, *cache.tentative_theories]}
+    if theory_id not in known:
+        console.print(
+            f"[red]理论 {theory_id} 不存在 (explain theories --all 查看)。[/red]"
+        )
+        raise typer.Exit(1)
+    if theory_id in cache.rejected_theory_ids:
+        console.print(f"[yellow]注意: {theory_id} 已被拒绝, 仍允许登记。[/yellow]")
+
+    try:
+        pred = add_prediction(
+            storage, theory_id, assertion, method=method, deadline=deadline,  # type: ignore[arg-type]
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+    console.print(
+        f"[green]已登记 {pred.id}[/green] → {theory_id}\n"
+        f"  断言: {pred.assertion}\n"
+        f"  方式: {pred.method}"
+        + (f" / 期限: {pred.deadline}" if pred.deadline else "")
+        + "\n  结算: explain prediction-resolve "
+        + pred.id + " --hit|--miss"
+        + (" (retrodiction 可用 explain predictions --settle-retro 自动结算)"
+           if pred.method == "retrodiction" else "")
+    )
+
+
+@app.command("prediction-resolve")
+def prediction_resolve(
+    prediction_id: str = typer.Argument(..., help="预测 ID (p_NNN)"),
+    hit: bool = typer.Option(..., "--hit/--miss", help="命中 / 落空"),
+    note: str = typer.Option(None, "--note", help="结算依据 (来源/事件)"),
+) -> None:
+    """结算一条预测。连续 2 次落空的理论将在下次重算时降级"已削弱"。"""
+    from explain_engine.engines.theory.ledger import (
+        WEAKEN_MISS_STREAK,
+        load_ledger,
+        resolve_prediction,
+        stats_for,
+    )
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2()
+    try:
+        pred = resolve_prediction(storage, prediction_id, hit=hit, note=note)
+    except (KeyError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    st = stats_for(load_ledger(storage), pred.theory_id)
+    pp = st.predictive_power
+    console.print(
+        f"[green]{pred.id} 已结算: {'命中' if hit else '落空'}[/green]\n"
+        f"  理论 {pred.theory_id} 台账: {st.hits} 中 / {st.resolved} 结算"
+        + (f" (命中率 {pp:.0%})" if pp is not None else "")
+    )
+    if st.weakened:
+        console.print(
+            f"[yellow]⚠ 该理论已连续落空 {st.consecutive_misses} 次 "
+            f"(≥{WEAKEN_MISS_STREAK}), 下次重算将降级为\"已削弱\" "
+            f"(explain theories --force 立即生效)。[/yellow]"
+        )
+
+
+@app.command("predictions")
+def predictions_cmd(
+    theory: str = typer.Option(None, "--theory", help="只看某理论的台账"),
+    settle_retro: bool = typer.Option(
+        False, "--settle-retro",
+        help="自动结算 pending 的 retrodiction 预测 (需 embedding 模型)",
+    ),
+) -> None:
+    """查看预测台账; 到期未结算的标红 (设计预期-修正版 §七.2)。"""
+    from explain_engine.engines.theory.ledger import (
+        due_predictions,
+        load_ledger,
+        settle_retrodictions,
+    )
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    storage = StorageV2()
+
+    if settle_retro:
+        try:
+            from explain_engine.embedding.bge_m3 import get_embedder
+            embedder = get_embedder()
+        except Exception as exc:
+            console.print(f"[red]embedding 模型不可用, 无法自动结算: {exc}[/red]")
+            raise typer.Exit(1) from exc
+        with console.status("[bold green]回溯结算中..."):
+            settled = settle_retrodictions(storage, embedder)
+        if settled:
+            for pred, hit in settled:
+                console.print(
+                    f"  {pred.id} ({pred.theory_id}): "
+                    f"{'[green]命中[/green]' if hit else '[red]落空[/red]'}"
+                )
+            console.print(f"[INFO] 自动结算 {len(settled)} 条。")
+        else:
+            console.print("[INFO] 没有可自动结算的 retrodiction 预测。")
+
+    predictions = load_ledger(storage)
+    if theory:
+        predictions = [p for p in predictions if p.theory_id == theory]
+    if not predictions:
+        console.print(
+            "台账为空。用 explain prediction-add <理论ID> \"<断言>\" 登记预测。"
+        )
+        return
+
+    due_ids = {p.id for p in due_predictions(predictions)}
+    status_zh = {"pending": "待结算", "hit": "命中", "miss": "落空"}
+    method_zh = {"retrodiction": "回溯", "search": "检索", "time_window": "时间窗"}
+    table = Table(title=f"预测台账 ({len(predictions)} 条)")
+    table.add_column("ID", style="cyan")
+    table.add_column("理论", style="dim")
+    table.add_column("断言", max_width=46)
+    table.add_column("方式")
+    table.add_column("期限")
+    table.add_column("状态")
+    for p in predictions:
+        status = status_zh[p.status]
+        if p.id in due_ids:
+            status = f"[red]{status} (已到期)[/red]"
+        elif p.status == "hit":
+            status = f"[green]{status}[/green]"
+        elif p.status == "miss":
+            status = f"[red]{status}[/red]"
+        table.add_row(
+            p.id, p.theory_id, p.assertion,
+            method_zh[p.method], p.deadline or "—", status,
         )
     console.print(table)
 

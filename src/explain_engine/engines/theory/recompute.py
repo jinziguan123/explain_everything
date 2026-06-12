@@ -104,39 +104,48 @@ def _recompute_all(sessions, storage, embedder, preserve_rejected):
             predictive_power=predictive_power,
         ))
 
-    # Step 6: promote stable / tentative (JEPA b)
+    # Step 5.5 (Phase T, §七.2): 预测台账叠加 — 有已结算预测的理论,
+    # predictive_power 改用台账命中率 (覆盖回溯估计), 来源标 "ledger"。
+    from dataclasses import replace
+
+    from explain_engine.engines.theory.ledger import (
+        apply_ledger_overlay,
+        decide_stability,
+        load_ledger,
+        stats_by_theory,
+    )
+    ledger_stats = stats_by_theory(load_ledger(storage))
+    enriched = apply_ledger_overlay(enriched, ledger_stats)
+
+    # Step 6: promote stable / tentative / weakened (JEPA b + Phase T §七.1/.2)
+    # 决策规则见 ledger.decide_stability: 连败→weakened; 无预测→叙事级
+    # tentative (准入门槛, motif ≠ theory); 有预测且窗口满足→stable。
     from explain_engine.engines.theory.ranking import (
-        compute_score,
+        competition_rank,
         maybe_promote_to_stable,
         rank_topk_with_mmr,
     )
     tentative: list[Theory] = []
     stable: list[Theory] = []
     for t in enriched:
-        if maybe_promote_to_stable(t, sessions, window_size):
-            # 复制 stability_status 升级 (Theory frozen, 构造新实例)
-            stable.append(Theory(
-                id=t.id,
-                motif_type=t.motif_type,
-                theme_ids=t.theme_ids,
-                node_ids=t.node_ids,
-                edges=t.edges,
-                supporting_sessions=t.supporting_sessions,
-                natural_language_summary=t.natural_language_summary,
-                structure_complexity=t.structure_complexity,
-                first_seen_session=t.first_seen_session,
-                last_seen_session=t.last_seen_session,
-                predictive_power=t.predictive_power,
+        status = decide_stability(
+            ledger_stats.get(t.id),
+            maybe_promote_to_stable(t, sessions, window_size),
+        )
+        if status == "stable":
+            stable.append(replace(
+                t,
                 stability_status="stable",
                 stable_promoted_at_session=sessions[-1],
             ))
         else:
-            tentative.append(t)
+            tentative.append(replace(t, stability_status=status))
 
-    # Step 7: MMR ranking — 只对 stable 排, tentative 全保留 (按 score 排)
+    # Step 7: MMR ranking — 只对 stable 排; tentative 按竞争序 (§七.3:
+    # predictive_power → 综合分 → 复现数 字典序) 排, 排名仅影响展示。
     n_total = len(sessions)
     stable = rank_topk_with_mmr(stable, k=20, lambda_=0.7, n_sessions_total=n_total)
-    tentative = sorted(tentative, key=lambda t: -compute_score(t, n_total))[:20]
+    tentative = competition_rank(tentative, n_total)[:20]
 
     return TheoriesCache(
         themes=themes,

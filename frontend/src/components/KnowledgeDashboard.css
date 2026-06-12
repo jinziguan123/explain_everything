@@ -186,3 +186,14 @@
 .kd-theory-reject:active {
   transform: translateY(1px) scale(0.99);
 }
+
+/* ── Phase T 理论可证伪 (设计预期-修正版 §七) ───────────── */
+
+.kd-theory-weakened {
+  opacity: 0.55;
+}
+
+.kd-tag-narrative {
+  color: #8a93a0;
+  border-style: dashed;
+}

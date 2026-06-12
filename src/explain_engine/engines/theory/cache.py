@@ -148,6 +148,7 @@ def _theory_to_dict(t: Theory) -> dict:
         "first_seen_session": t.first_seen_session,
         "last_seen_session": t.last_seen_session,
         "predictive_power": t.predictive_power,
+        "predictive_power_source": t.predictive_power_source,
         "stability_status": t.stability_status,
         "stable_promoted_at_session": t.stable_promoted_at_session,
     }
@@ -164,6 +165,7 @@ def _theory_from_dict(d: dict) -> Theory:
         first_seen_session=d["first_seen_session"],
         last_seen_session=d["last_seen_session"],
         predictive_power=d.get("predictive_power", 0.0),
+        predictive_power_source=d.get("predictive_power_source", "retrodiction"),
         stability_status=d.get("stability_status", "tentative"),
         stable_promoted_at_session=d.get("stable_promoted_at_session"),
     )

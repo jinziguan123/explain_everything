@@ -19,6 +19,7 @@ function levelLabel(level: number): string {
 const STATUS_LABELS: Record<string, string> = {
   stable: "稳定",
   tentative: "暂定",
+  weakened: "已削弱",
 };
 
 function statusLabel(status: string): string {
@@ -90,13 +91,25 @@ export default function KnowledgeDashboard({
         ) : (
           <div className="kd-theories">
             {theories.map((t) => (
-              <div className="kd-theory" key={t.id} data-testid="theory-card">
+              <div
+                className={`kd-theory${t.stability_status === "weakened" ? " kd-theory-weakened" : ""}`}
+                key={t.id}
+                data-testid="theory-card"
+              >
                 <div className="kd-theory-summary">{t.summary}</div>
                 <div className="kd-theory-meta">
                   <span className="kd-tag">{t.motif_type}</span>
                   <span className="kd-tag">状态: {statusLabel(t.stability_status)}</span>
-                  <span className="kd-tag">准确度: {fmtPower(t.predictive_power)}</span>
+                  <span className="kd-tag">
+                    准确度: {fmtPower(t.predictive_power)}
+                    {t.predictive_power_source === "ledger"
+                      ? ` (台账 ${t.predictions?.hits ?? 0}/${(t.predictions?.hits ?? 0) + (t.predictions?.misses ?? 0)})`
+                      : " (回溯)"}
+                  </span>
                   <span className="kd-tag">支持 {t.supporting_session_count} 个 session</span>
+                  {(t.predictions?.total ?? 0) === 0 && (
+                    <span className="kd-tag kd-tag-narrative">叙事级 · 未登记预测</span>
+                  )}
                 </div>
                 <button
                   className="kd-theory-reject"

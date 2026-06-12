@@ -63,7 +63,9 @@ export async function createSession(question: string): Promise<{ sid: string }> 
 export interface KnowledgeOverview {
   session_count: number;
   variable_count: number;
-  theory_count: { stable: number; tentative: number };
+  theory_count: { stable: number; tentative: number; weakened?: number };
+  /** Phase T: H3 复用率持续测量 (复用 ≥2 次变量占比) */
+  h3_reuse?: { vars_reused: number; reuse_rate: number };
   top_variables: {
     global_id: string;
     name: string;
@@ -75,8 +77,11 @@ export interface KnowledgeOverview {
     summary: string;
     motif_type: string;
     predictive_power: number;
+    /** "ledger" = 预测台账命中率, "retrodiction" = 回溯估计 */
+    predictive_power_source?: string;
     stability_status: string;
     supporting_session_count: number;
+    predictions?: { total: number; pending: number; hits: number; misses: number };
   }[];
 }
 

@@ -60,9 +60,28 @@ describe("KnowledgeDashboard", () => {
     expect(card).toBeInTheDocument();
     expect(screen.getByText("高负载导致拖延")).toBeInTheDocument();
     expect(screen.getByText("feedback_loop")).toBeInTheDocument();
-    expect(screen.getByText("准确度: 0.82")).toBeInTheDocument();
+    // Phase T: 准确度标来源 (无台账 → 回溯); 无登记预测 → 叙事级标记
+    expect(screen.getByText(/准确度: 0\.82/)).toBeInTheDocument();
+    expect(screen.getByText(/回溯/)).toBeInTheDocument();
+    expect(screen.getByText(/叙事级/)).toBeInTheDocument();
     expect(screen.getByText("状态: 稳定")).toBeInTheDocument();
     expect(screen.getByText("支持 4 个 session")).toBeInTheDocument();
+  });
+
+  it("weakened 理论显示已削弱并淡化", () => {
+    const weakened = {
+      ...overview,
+      theories: [{
+        ...overview.theories[0],
+        stability_status: "weakened",
+        predictive_power_source: "ledger",
+        predictions: { total: 3, pending: 1, hits: 0, misses: 2 },
+      }],
+    };
+    render(<KnowledgeDashboard overview={weakened} onRejectTheory={vi.fn()} />);
+    expect(screen.getByText("状态: 已削弱")).toBeInTheDocument();
+    expect(screen.getByText(/台账 0\/2/)).toBeInTheDocument();
+    expect(screen.getByTestId("theory-card").className).toContain("kd-theory-weakened");
   });
 
   it("点击拒绝按钮以 theory id 调用回调", () => {

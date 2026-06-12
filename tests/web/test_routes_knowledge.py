@@ -20,7 +20,9 @@ def test_overview_empty() -> None:
     assert isinstance(body["session_count"], int)
     assert body["session_count"] >= 0
     assert body["variable_count"] == 0
-    assert body["theory_count"] == {"stable": 0, "tentative": 0}
+    # Phase T: theory_count 加 weakened; overview 加 H3 复用率
+    assert body["theory_count"] == {"stable": 0, "tentative": 0, "weakened": 0}
+    assert body["h3_reuse"] == {"vars_reused": 0, "reuse_rate": 0.0}
     assert body["top_variables"] == []
     assert body["theories"] == []
 

@@ -52,6 +52,30 @@ def rank_topk_with_mmr(
     return selected
 
 
+def overlap_ratio(t1: Theory, t2: Theory) -> float:
+    """node_ids Jaccard — §七.3 竞争对判定 (>0.5 即同一现象域上的竞争理论)。"""
+    s1, s2 = set(t1.node_ids), set(t2.node_ids)
+    return len(s1 & s2) / max(len(s1 | s2), 1)
+
+
+def competition_rank(
+    theories: list[Theory], n_sessions_total: int,
+) -> list[Theory]:
+    """Phase T (设计预期-修正版 §七.3) 竞争排序: 按字典序
+    predictive_power → 综合分 (压缩值代理) → 复现 session 数。
+
+    仅影响展示顺序与推荐, 不删除败者 (多解释共存原则)。
+    覆盖重叠 >0.5 的竞争对在此序下自然分出先后; 不重叠的理论
+    也用同一全序, 保持列表稳定可比。
+    """
+    return sorted(theories, key=lambda t: (
+        -t.predictive_power,
+        -compute_score(t, n_sessions_total),
+        -len(t.supporting_sessions),
+        t.id,
+    ))
+
+
 def maybe_promote_to_stable(
     theory: Theory,
     all_sessions: list[str],

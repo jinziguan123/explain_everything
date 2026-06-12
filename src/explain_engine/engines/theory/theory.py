@@ -28,8 +28,12 @@ class Theory:
     last_seen_session: str
     # JEPA (a) — falsifiability
     predictive_power: float = 0.0
-    # JEPA (b) — slow-fast
-    stability_status: Literal["tentative", "stable"] = "tentative"
+    # Phase T (设计预期-修正版 §七.2): predictive_power 来源 —
+    # "retrodiction" = falsifiability.py leave-one-out 回溯估计 (默认);
+    # "ledger" = 预测台账命中率 (有已结算预测时覆盖回溯估计)。
+    predictive_power_source: Literal["retrodiction", "ledger"] = "retrodiction"
+    # JEPA (b) — slow-fast; Phase T 加 "weakened" (台账连败 ≥2 → 已削弱)
+    stability_status: Literal["tentative", "stable", "weakened"] = "tentative"
     stable_promoted_at_session: str | None = None
 
 

@@ -56,14 +56,23 @@ def _fetch_normalized_variables() -> list[dict[str, Any]]:
     ]
 
 
-def _theory_to_slim(theory: Any) -> dict[str, Any]:
+def _theory_to_slim(theory: Any, ledger_stats: dict[str, Any] | None = None) -> dict[str, Any]:
+    st = (ledger_stats or {}).get(theory.id)
     return {
         "id": theory.id,
         "summary": theory.natural_language_summary,
         "motif_type": theory.motif_type,
         "predictive_power": theory.predictive_power,
+        "predictive_power_source": theory.predictive_power_source,
         "stability_status": theory.stability_status,
         "supporting_session_count": len(theory.supporting_sessions),
+        # Phase T (§七): 台账聚合 — 无登记预测 = 叙事级 (motif ≠ theory)
+        "predictions": {
+            "total": st.total if st else 0,
+            "pending": st.pending if st else 0,
+            "hits": st.hits if st else 0,
+            "misses": st.misses if st else 0,
+        },
     }
 
 
@@ -79,9 +88,17 @@ def _active_theories(cache: Any) -> tuple[list[Any], list[Any]]:
 
 
 def _slim_theories() -> list[dict[str, Any]]:
-    cache = get_active_theories(StorageV2(), embedder=None)
+    from explain_engine.engines.theory.ledger import load_ledger, stats_by_theory
+    from explain_engine.engines.theory.ranking import competition_rank
+
+    storage = StorageV2()
+    cache = get_active_theories(storage, embedder=None)
     stable, tentative = _active_theories(cache)
-    return [_theory_to_slim(t) for t in stable + tentative]
+    ledger_stats = stats_by_theory(load_ledger(storage))
+    n_total = max(len(cache.session_ids_snapshot), 1)
+    # §七.3: 竞争序展示 (predictive_power → 综合分 → 复现数)
+    ordered = competition_rank(stable + tentative, n_total)
+    return [_theory_to_slim(t, ledger_stats) for t in ordered]
 
 
 @router.get("/knowledge/overview")
@@ -92,14 +109,24 @@ async def knowledge_overview() -> dict[str, Any]:
 
     cache = get_active_theories(StorageV2(), embedder=None)
     stable, tentative = _active_theories(cache)
-    theories = [_theory_to_slim(t) for t in stable + tentative]
+    theories = _slim_theories()
+
+    # Phase T: H3 复用率持续测量 (设计预期-修正版 §四 H3) —
+    # 复用 ≥2 次的变量占比是"跨 session 累积价值"的最便宜代理。
+    reused = sum(1 for v in variables if v.get("reuse_count", 0) >= 2)
+    weakened = sum(1 for t in tentative if t.stability_status == "weakened")
 
     return {
         "session_count": session_count,
         "variable_count": len(variables),
         "theory_count": {
             "stable": len(stable),
-            "tentative": len(tentative),
+            "tentative": len(tentative) - weakened,
+            "weakened": weakened,
+        },
+        "h3_reuse": {
+            "vars_reused": reused,
+            "reuse_rate": round(reused / len(variables), 3) if variables else 0.0,
         },
         "top_variables": variables[:30],
         "theories": theories,
