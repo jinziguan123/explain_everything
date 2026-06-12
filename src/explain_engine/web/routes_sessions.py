@@ -86,6 +86,59 @@ async def get_transcript(sid: str) -> list[dict[str, Any]]:
     return chat.transcript
 
 
+@router.post("/{sid}/report")
+async def generate_session_report(sid: str) -> dict[str, Any]:
+    """Phase X1: 叙事报告 Web 化 — 滩头用户的一等交付物。
+
+    1 次 LLM 调用 (数十秒), 前端 loading 等待; 失败返 502。
+    """
+    from fastapi import HTTPException
+
+    from explain_engine.config import make_llm_client
+    from explain_engine.report.narrative import generate_report
+
+    chat = load_chat_or_404(sid)
+    try:
+        text = await generate_report(chat.state, make_llm_client())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"报告生成失败: {type(exc).__name__}: {exc}",
+        ) from exc
+    return {"markdown": text}
+
+
+@router.post("/{sid}/ground")
+async def ground_session(sid: str) -> dict[str, Any]:
+    """Phase X1: 证据接地 Web 化 (增量, 与 explain ground 同管线)。
+
+    需要联网; 走 light model。耗时与新对象数成正比 (通常 <1 分钟)。
+    """
+    from fastapi import HTTPException
+
+    from explain_engine.config import make_light_llm_client
+    from explain_engine.engines.grounding import (
+        TIER_LABELS,
+        compute_tiers,
+        ground_state,
+    )
+
+    chat = load_chat_or_404(sid)
+    try:
+        summary = await ground_state(chat.state, make_light_llm_client())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"接地失败: {type(exc).__name__}: {exc}",
+        ) from exc
+    chat.persist()
+
+    tiers = compute_tiers(chat.state)
+    dist: dict[str, int] = {}
+    for t in tiers.values():
+        label = TIER_LABELS[t]
+        dist[label] = dist.get(label, 0) + 1
+    return {"summary": summary.as_dict(), "tier_distribution": dist}
+
+
 @router.post("/{sid}/autotitle")
 async def autotitle(sid: str, body: AutotitleBody | None = None) -> dict[str, str]:
     """用 light LLM 据首条用户消息为会话生成简短标题, 写回 meta.question。

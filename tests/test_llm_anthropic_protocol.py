@@ -105,6 +105,36 @@ class TestAnthropicProtocolClient:
         assert call_kwargs["tools"][0]["name"] == "_DemoSchema"
         assert call_kwargs["tool_choice"] == {"type": "tool", "name": "_DemoSchema"}
 
+    async def test_schema_call_omits_thinking(self, mock_anthropic):
+        """Phase X0: 结构化调用不带 thinking — 与强制 tool_choice 互斥,
+        deepseek 兼容端点对并存直接 400 (H2 实测请求数翻倍的根因)。"""
+        _set_stream_returns(
+            mock_anthropic,
+            _mock_tool_use_response({"answer": "yes", "confidence": 0.9}),
+        )
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="claude-opus-4-7",
+            enable_thinking=True,
+        )
+        await client.chat([Message(role="user", content="hi")], schema=_DemoSchema)
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
+        assert "thinking" not in kwargs
+        assert kwargs["tool_choice"] == {"type": "tool", "name": "_DemoSchema"}
+
+    async def test_plain_chat_keeps_thinking(self, mock_anthropic):
+        """X0 回归保护: 普通对话 (schema=None) 仍然带 thinking。"""
+        _set_stream_returns(mock_anthropic, _mock_message_response("ok"))
+        client = AnthropicProtocolClient(
+            api_key="sk-test", default_model="claude-opus-4-7",
+            enable_thinking=True,
+        )
+        await client.chat([Message(role="user", content="hi")])
+        kwargs = mock_anthropic.messages.stream.call_args.kwargs
+        assert kwargs["thinking"] == {
+            "type": "enabled",
+            "budget_tokens": AnthropicProtocolClient.THINKING_BUDGET_TOKENS,
+        }
+
     async def test_system_message_extracted(self, mock_anthropic):
         _set_stream_returns(mock_anthropic, _mock_message_response("ok"))
         client = AnthropicProtocolClient(api_key="sk-test", default_model="claude-opus-4-7")

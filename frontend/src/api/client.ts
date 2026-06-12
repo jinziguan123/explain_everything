@@ -102,3 +102,93 @@ export async function rejectTheory(id: string): Promise<{ rejected: boolean }> {
   if (!r.ok) throw new Error(`rejectTheory ${r.status}`);
   return r.json();
 }
+
+// ── Phase X1: 报告 / 接地 / 预测台账 ──────────────────────────
+
+export async function generateReport(sid: string): Promise<{ markdown: string }> {
+  const r = await fetch(`/api/sessions/${sid}/report`, { method: "POST" });
+  if (!r.ok) throw new Error(`generateReport ${r.status}`);
+  return r.json();
+}
+
+export interface GroundResult {
+  summary: {
+    targets_total: number;
+    verified: number;
+    contested: number;
+    unverified: number;
+    evidence_added: number;
+    edges_reweighted: number;
+    errors: string[];
+  };
+  tier_distribution: Record<string, number>;
+}
+
+export async function groundSession(sid: string): Promise<GroundResult> {
+  const r = await fetch(`/api/sessions/${sid}/ground`, { method: "POST" });
+  if (!r.ok) throw new Error(`groundSession ${r.status}`);
+  return r.json();
+}
+
+export interface PredictionItem {
+  id: string;
+  theory_id: string;
+  assertion: string;
+  method: "retrodiction" | "search" | "time_window";
+  deadline: string | null;
+  status: "pending" | "hit" | "miss";
+  origin: "user" | "llm";
+  note: string | null;
+  due: boolean;
+}
+
+export async function listPredictions(theory?: string): Promise<PredictionItem[]> {
+  const qs = theory ? `?theory=${encodeURIComponent(theory)}` : "";
+  const r = await fetch(`/api/predictions${qs}`);
+  if (!r.ok) throw new Error(`listPredictions ${r.status}`);
+  return r.json();
+}
+
+export async function addPrediction(body: {
+  theory_id: string;
+  assertion: string;
+  method?: string;
+  deadline?: string | null;
+}): Promise<PredictionItem> {
+  const r = await fetch("/api/predictions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`addPrediction ${r.status}`);
+  return r.json();
+}
+
+export async function resolvePrediction(
+  id: string,
+  hit: boolean,
+  note?: string,
+): Promise<{
+  prediction: PredictionItem;
+  theory_stats: { weakened: boolean; predictive_power: number | null };
+}> {
+  const r = await fetch(`/api/predictions/${id}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hit, note: note ?? null }),
+  });
+  if (!r.ok) throw new Error(`resolvePrediction ${r.status}`);
+  return r.json();
+}
+
+export async function draftPredictions(
+  theoryId?: string,
+): Promise<PredictionItem[]> {
+  const r = await fetch("/api/predictions/draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ theory_id: theoryId ?? null }),
+  });
+  if (!r.ok) throw new Error(`draftPredictions ${r.status}`);
+  return r.json();
+}

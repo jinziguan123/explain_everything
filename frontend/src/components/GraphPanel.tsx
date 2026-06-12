@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import cytoscape from "cytoscape";
-import { getGraph } from "../api/client";
+import { getGraph, groundSession } from "../api/client";
 import { COLA_LAYOUT, ensureColaLayout } from "../lib/cyLayout";
 import NodeDrawer from "./NodeDrawer";
 import type { NodeData } from "./NodeDrawer";
+import ReportModal from "./ReportModal";
 import "./GraphPanel.css";
 
 export interface GraphPanelProps {
@@ -135,6 +136,8 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
   const cyRef = useRef<cytoscape.Core | null>(null);
   const [selected, setSelected] = useState<NodeData | null>(null);
   const [showEdgeLabels, setShowEdgeLabels] = useState(true);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [groundNote, setGroundNote] = useState<string | null>(null);
   const showEdgeLabelsRef = useRef(showEdgeLabels);
   showEdgeLabelsRef.current = showEdgeLabels;
 
@@ -148,6 +151,22 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
   useEffect(() => {
     if (refreshKey !== undefined) void refetch();
   }, [refreshKey, refetch]);
+
+  // Phase X1: 证据接地 (增量) — 完成后重拉图 (边变色)
+  const groundMut = useMutation({
+    mutationFn: () => groundSession(sid),
+    onSuccess: (res) => {
+      const s = res.summary;
+      setGroundNote(
+        s.targets_total === 0
+          ? "无新对象需要接地"
+          : `已接地 ${s.targets_total} 个新对象: 实证 ${s.verified} / 争议 ${s.contested} / 未验证 ${s.unverified}`,
+      );
+      void refetch();
+    },
+    onError: (e) =>
+      setGroundNote(`接地失败: ${e instanceof Error ? e.message : String(e)}`),
+  });
 
   const nodes = data?.elements?.nodes ?? [];
   const edges = data?.elements?.edges ?? [];
@@ -225,7 +244,7 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
 
       {hasNodes && (
         <>
-          {/* 顶部工具条: 边标签开关 */}
+          {/* 顶部工具条: 边标签开关 + 报告 / 接地 (Phase X1) */}
           <div className="graph-toolbar">
             <button
               type="button"
@@ -239,7 +258,29 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
               </span>
               关系标签
             </button>
+            <button
+              type="button"
+              className="graph-action-btn"
+              onClick={() => groundMut.mutate()}
+              disabled={groundMut.isPending}
+              title="对新增的现象与核心因果边检索证据 (增量)"
+            >
+              {groundMut.isPending ? "接地中…" : "证据接地"}
+            </button>
+            <button
+              type="button"
+              className="graph-action-btn"
+              onClick={() => setReportOpen(true)}
+              title="把图谱生成叙事报告 (可下载 markdown)"
+            >
+              生成报告
+            </button>
           </div>
+          {groundNote && (
+            <div className="graph-ground-note" onClick={() => setGroundNote(null)}>
+              {groundNote}
+            </div>
+          )}
 
           {/* 图例 */}
           <div className="graph-legend">
@@ -289,6 +330,7 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
         data-testid="graph-canvas"
       />
       <NodeDrawer node={selected} onClose={() => setSelected(null)} />
+      <ReportModal sid={sid} open={reportOpen} onClose={() => setReportOpen(false)} />
     </div>
   );
 }

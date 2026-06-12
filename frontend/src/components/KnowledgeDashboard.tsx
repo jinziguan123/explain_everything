@@ -56,6 +56,14 @@ export default function KnowledgeDashboard({
           <div className="kd-card-num">{theory_count.tentative}</div>
           <div className="kd-card-label">暂定理论</div>
         </div>
+        <div className="kd-card" title="复用 ≥2 次的变量占比 — 跨 session 累积价值 (H3) 的代理指标">
+          <div className="kd-card-num">
+            {overview.h3_reuse ? `${Math.round(overview.h3_reuse.reuse_rate * 100)}%` : "—"}
+          </div>
+          <div className="kd-card-label">
+            变量复用率{overview.h3_reuse ? ` (${overview.h3_reuse.vars_reused} 个)` : ""}
+          </div>
+        </div>
       </div>
 
       <section className="kd-section">

@@ -326,3 +326,120 @@
   border-color: #dc2626;
   color: #dc2626;
 }
+
+/* ── Phase X1: 图谱工具条动作 + 接地提示 + 报告浮层 ─────────── */
+
+.graph-action-btn {
+  border: 1px solid #d7dce3;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text, #1f2937);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.graph-action-btn:hover:not(:disabled) {
+  border-color: #111114;
+}
+
+.graph-action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.graph-ground-note {
+  position: absolute;
+  top: 42px;
+  left: 12px;
+  z-index: 6;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text, #1f2937);
+  box-shadow: 0 4px 16px rgba(17, 17, 20, 0.08);
+  cursor: pointer;
+  animation: fadeIn 0.2s ease;
+}
+
+.report-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(17, 17, 20, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease;
+}
+
+.report-modal {
+  width: min(860px, 92vw);
+  max-height: 86vh;
+  background: #ffffff;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(17, 17, 20, 0.25);
+}
+
+.report-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid #ececef;
+}
+
+.report-modal-title {
+  font-weight: 600;
+}
+
+.report-modal-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.report-btn {
+  border: 1px solid #d7dce3;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.report-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.report-modal-body {
+  overflow-y: auto;
+  padding: 18px 22px;
+}
+
+.report-markdown {
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.report-markdown h1 {
+  font-size: 20px;
+}
+
+.report-markdown h2 {
+  font-size: 16px;
+  margin-top: 1.4em;
+}
+
+.report-markdown a {
+  color: var(--text, #1f2937);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

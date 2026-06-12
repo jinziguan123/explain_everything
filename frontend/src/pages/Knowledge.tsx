@@ -9,6 +9,7 @@ import {
 import type { KnowledgeOverview } from "../api/client";
 import { COLA_LAYOUT } from "../lib/cyLayout";
 import KnowledgeDashboard from "../components/KnowledgeDashboard";
+import PredictionsPanel from "../components/PredictionsPanel";
 import CytoGraph from "../components/CytoGraph";
 import NodeDrawer from "../components/NodeDrawer";
 import type { NodeData } from "../components/NodeDrawer";
@@ -153,6 +154,8 @@ export default function Knowledge() {
           onRejectTheory={(id) => rejectMutation.mutate(id)}
         />
       )}
+
+      <PredictionsPanel />
 
       <section className="knowledge-graph-section">
         <h3 className="knowledge-graph-title">跨 session 知识图</h3>

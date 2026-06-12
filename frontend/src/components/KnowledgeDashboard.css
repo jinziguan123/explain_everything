@@ -197,3 +197,90 @@
   color: #8a93a0;
   border-style: dashed;
 }
+
+/* ── Phase X1: 预测台账面板 ─────────────────────────────────── */
+
+.kd-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kd-draft-btn {
+  border: 1px solid #d7dce3;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.kd-draft-btn:hover:not(:disabled) {
+  border-color: #111114;
+}
+
+.kd-draft-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.kd-note {
+  margin: 8px 0;
+  padding: 6px 10px;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  background: #fafafa;
+}
+
+.kd-pred-assertion {
+  max-width: 360px;
+}
+
+.kd-dim {
+  color: #8a93a0;
+}
+
+.kd-pred-due td,
+.kd-pred-due {
+  background: #fff7f7;
+}
+
+.kd-due-mark {
+  color: #dc2626;
+  font-size: 11px;
+}
+
+.kd-pred-hit {
+  color: #16a34a;
+}
+
+.kd-pred-miss {
+  color: #dc2626;
+}
+
+.kd-resolve-btns {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.kd-resolve-hit,
+.kd-resolve-miss {
+  border: 1px solid #d7dce3;
+  background: #ffffff;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.kd-resolve-hit:hover:not(:disabled) {
+  border-color: #16a34a;
+  color: #16a34a;
+}
+
+.kd-resolve-miss:hover:not(:disabled) {
+  border-color: #dc2626;
+  color: #dc2626;
+}

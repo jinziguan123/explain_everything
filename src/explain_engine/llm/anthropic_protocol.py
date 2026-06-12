@@ -229,7 +229,11 @@ class AnthropicProtocolClient:
 
         # Phase 19 Task 3: extended thinking — vendor 返 thinking block 由
         # _single_chat_call 解析填 Response.reasoning (见 Task 2 实装).
-        if self._enable_thinking:
+        # Phase X0: schema 调用不带 thinking — Anthropic 语义里 extended
+        # thinking 与强制 tool_choice ({"type": "tool"}) 互斥, deepseek 兼容
+        # 端点对二者并存直接 400 (H2 实测: 每个结构化调用先吃一个 400 再
+        # fallback auto 重试, 请求数翻倍)。结构化抽取也不需要思考链。
+        if self._enable_thinking and schema is None:
             call_kwargs["thinking"] = {
                 "type": "enabled",
                 "budget_tokens": self.THINKING_BUDGET_TOKENS,

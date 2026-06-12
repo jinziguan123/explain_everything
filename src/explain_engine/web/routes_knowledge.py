@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from explain_engine.engines.lexicon import get_lexicon_top_k_for_compress
 from explain_engine.engines.theory.cache import get_active_theories, reject_theory
@@ -150,3 +151,135 @@ async def list_theories() -> list[dict[str, Any]]:
 async def reject(theory_id: str) -> dict[str, bool]:
     rejected = reject_theory(StorageV2(), theory_id)
     return {"rejected": rejected}
+
+
+# ── Phase X1: 预测台账 Web 化 (机器提案、人签字) ──────────────────
+
+
+class PredictionAddBody(BaseModel):
+    theory_id: str
+    assertion: str
+    method: str = "search"
+    deadline: str | None = None
+
+
+class PredictionResolveBody(BaseModel):
+    hit: bool
+    note: str | None = None
+
+
+class PredictionDraftBody(BaseModel):
+    theory_id: str | None = None
+
+
+def _prediction_to_dict(p: Any, due_ids: set[str]) -> dict[str, Any]:
+    d = p.model_dump()
+    d["due"] = p.id in due_ids
+    return d
+
+
+@router.get("/predictions")
+async def list_predictions(theory: str | None = None) -> list[dict[str, Any]]:
+    from explain_engine.engines.theory.ledger import due_predictions, load_ledger
+
+    predictions = load_ledger(StorageV2())
+    if theory:
+        predictions = [p for p in predictions if p.theory_id == theory]
+    due_ids = {p.id for p in due_predictions(predictions)}
+    return [_prediction_to_dict(p, due_ids) for p in predictions]
+
+
+@router.post("/predictions")
+async def add_prediction_endpoint(body: PredictionAddBody) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    from explain_engine.engines.theory.ledger import add_prediction
+
+    storage = StorageV2()
+    cache = get_active_theories(storage, embedder=None)
+    known = {t.id for t in cache.stable_theories + cache.tentative_theories}
+    if body.theory_id not in known:
+        raise HTTPException(status_code=404, detail=f"理论 {body.theory_id} 不存在")
+    if body.method not in ("retrodiction", "search", "time_window"):
+        raise HTTPException(status_code=422, detail=f"非法 method: {body.method}")
+    try:
+        pred = add_prediction(
+            storage, body.theory_id, body.assertion,
+            method=body.method, deadline=body.deadline,  # type: ignore[arg-type]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return pred.model_dump()
+
+
+@router.post("/predictions/{prediction_id}/resolve")
+async def resolve_prediction_endpoint(
+    prediction_id: str, body: PredictionResolveBody,
+) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    from explain_engine.engines.theory.ledger import (
+        load_ledger,
+        resolve_prediction,
+        stats_for,
+    )
+
+    storage = StorageV2()
+    try:
+        pred = resolve_prediction(storage, prediction_id, hit=body.hit, note=body.note)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    st = stats_for(load_ledger(storage), pred.theory_id)
+    return {
+        "prediction": pred.model_dump(),
+        "theory_stats": {
+            "hits": st.hits, "misses": st.misses, "pending": st.pending,
+            "predictive_power": st.predictive_power,
+            "weakened": st.weakened,
+        },
+    }
+
+
+@router.post("/predictions/draft")
+async def draft_predictions_endpoint(body: PredictionDraftBody) -> list[dict[str, Any]]:
+    """机器提案: LLM 起草并登记 (origin=llm)。LLM 调用, 数十秒。"""
+    from fastapi import HTTPException
+
+    from explain_engine.config import make_light_llm_client
+    from explain_engine.engines.theory.ledger import add_prediction
+    from explain_engine.engines.theory.prediction_draft import (
+        auto_draft_predictions,
+        draft_for_theory,
+    )
+
+    storage = StorageV2()
+    light = make_light_llm_client()
+    try:
+        if body.theory_id:
+            cache = get_active_theories(storage, embedder=None)
+            match = next(
+                (t for t in [*cache.stable_theories, *cache.tentative_theories]
+                 if t.id == body.theory_id), None,
+            )
+            if match is None:
+                raise HTTPException(
+                    status_code=404, detail=f"理论 {body.theory_id} 不存在",
+                )
+            items = await draft_for_theory(match, light)
+            drafted = [
+                add_prediction(storage, body.theory_id, it.assertion,
+                               method=it.method, deadline=it.deadline, origin="llm")
+                for it in items
+            ]
+        else:
+            drafted = await auto_draft_predictions(storage, light)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"起草失败: {type(exc).__name__}: {exc}",
+        ) from exc
+    return [p.model_dump() for p in drafted]
