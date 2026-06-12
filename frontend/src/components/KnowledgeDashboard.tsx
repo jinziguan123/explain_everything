@@ -63,6 +63,18 @@ export default function KnowledgeDashboard({
           <div className="kd-card-label">
             变量复用率{overview.h3_reuse ? ` (${overview.h3_reuse.vars_reused} 个)` : ""}
           </div>
+          {(overview.h3_sessions?.length ?? 0) > 0 && (
+            <div
+              className="kd-card-sub"
+              title="最近 session 的 flush 复用率 (per-session 真埋点, H3 判定线: 第 10 个 session ≥20%)"
+            >
+              最近 session:{" "}
+              {overview.h3_sessions!
+                .slice(-3)
+                .map((s) => `${Math.round(s.reuse_rate * 100)}%`)
+                .join(" → ")}
+            </div>
+          )}
         </div>
       </div>
 

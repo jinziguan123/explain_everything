@@ -275,6 +275,22 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
             >
               生成报告
             </button>
+            <button
+              type="button"
+              className="graph-action-btn"
+              onClick={() => {
+                const cy = cyRef.current;
+                if (!cy || typeof cy.png !== "function") return;
+                const uri = cy.png({ full: true, scale: 2, bg: "#ffffff" });
+                const a = document.createElement("a");
+                a.href = uri;
+                a.download = `graph-${sid}.png`;
+                a.click();
+              }}
+              title="导出当前图谱为 PNG"
+            >
+              导出 PNG
+            </button>
           </div>
           {groundNote && (
             <div className="graph-ground-note" onClick={() => setGroundNote(null)}>

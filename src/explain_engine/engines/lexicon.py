@@ -124,7 +124,7 @@ def _upsert_var(
     sid: str,
     embedding: list[float] | None = None,
     log_dir: Path | None = None,
-) -> None:
+) -> str:
     """Insert or update var entry. Idempotent w.r.t. (global_id, sid).
 
     Phase 13 Wave 2 Task 3: cosine-first lookup. 当 embedding 给定时,
@@ -147,6 +147,10 @@ def _upsert_var(
             Validated: must be exactly 1024 elements if provided.
         log_dir: Phase 13 audit log directory. If provided AND merge happens via
             embedding (not hash), append JSONL record via write_merge_audit.
+
+    Returns:
+        Phase X3 H3 埋点: "created" (新词条) / "merged" (并入已有, 真复用) /
+        "refreshed" (同 sid 重复 flush, 不算复用)。
     """
     if embedding is not None and len(embedding) != EMBEDDING_DIM:
         raise ValueError(
@@ -209,12 +213,12 @@ def _upsert_var(
             "source_sessions": [sid],
             "embedding": embedding,  # Phase 13: None for legacy / disabled-env
         })
-        return
+        return "created"
 
     if sid in matched_var["source_sessions"]:
         # 同 session 重复 flush — 仅 update last_seen
         matched_var["fitness"]["last_seen_at"] = now
-        return
+        return "refreshed"
 
     # 新 sid → ++ reuse_count
     matched_var["source_sessions"].append(sid)
@@ -240,6 +244,7 @@ def _upsert_var(
             sim=sim_value,
             evidence_ids=[sid],
         )
+    return "merged"
 
 
 async def _build_canonical_mechanism(
@@ -417,21 +422,77 @@ async def flush_to_lexicon(
     # log_dir 在前面 retroactive_dedup 处已计算, 这里复用.
 
     promoted = 0
+    outcomes: list[str] = []
     for node, canonical_mech, embedding in zip(
         candidates, canonicals, embeddings, strict=True,
     ):
-        _upsert_var(
+        outcomes.append(_upsert_var(
             lexicon, node, canonical_mech, session.meta.session_id,
             embedding=embedding,
             log_dir=log_dir,
-        )
+        ))
         promoted += 1
 
     if promoted > 0:
         lexicon["updated_at"] = _now_iso()
         _save_lexicon(path, lexicon)
+        # Phase X3 H3 真埋点: 本 session 的变量复用率直接测量
+        # (设计预期-修正版 §四 H3 的判定需要 per-session 数据, 全局
+        # reuse≥2 占比只是代理)。refreshed = 同 sid 重复 flush, 不记。
+        record_h3(storage, session.meta.session_id, outcomes)
 
     return promoted
+
+
+# ── Phase X3: H3 per-session 复用率埋点 ──────────────────────────────────────
+
+
+def record_h3(storage: StorageV2, sid: str, outcomes: list[str]) -> None:
+    """flush 后追加一条 H3 记录到 knowledge/h3_log.jsonl (best-effort)。
+
+    outcomes 来自 _upsert_var: created / merged / refreshed。
+    全 refreshed (同 sid 幂等重 flush) 不记 — 不能把重复 flush 算成复用。
+    读取端按 sid 取最后一条 (append-only, 修正自动覆盖)。
+    """
+    created = outcomes.count("created")
+    merged = outcomes.count("merged")
+    if created + merged == 0:
+        return
+    record = {
+        "sid": sid,
+        "ts": _now_iso(),
+        "flushed": created + merged,
+        "reused": merged,
+        "created": created,
+        "reuse_rate": round(merged / (created + merged), 3),
+    }
+    try:
+        path = storage.knowledge_dir() / "h3_log.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        logging.warning(f"h3_log 写入失败 (非关键): {exc}")
+
+
+def read_h3_log(storage: StorageV2) -> list[dict[str, Any]]:
+    """读 H3 记录, 按 sid 去重保留最后一条, 按时间序返回。"""
+    path = storage.knowledge_dir() / "h3_log.jsonl"
+    if not path.exists():
+        return []
+    by_sid: dict[str, dict[str, Any]] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            by_sid[rec.get("sid", "")] = rec
+    except OSError:
+        return []
+    return sorted(by_sid.values(), key=lambda r: r.get("ts", ""))
 
 
 # ── Wave 3: prior selection + prompt rendering ───────────────────────────────

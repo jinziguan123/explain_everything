@@ -1709,6 +1709,89 @@ def prediction_draft_cmd(
     )
 
 
+@app.command("audit-evidence")
+def audit_evidence(
+    sample: int = typer.Option(20, "--sample", help="抽样条数"),
+    seed: int = typer.Option(42, "--seed", help="抽样种子 (同种子同样本, 可复现)"),
+) -> None:
+    """证据审计: 抽查实证级证据的来源真伪 (H2 协议运营化, Phase X3)。
+
+    逐条展示断言 + 来源, 人工核对后按键判定:
+    [v] 真实可信 / [f] 伪造或与断言不符 / [s] 跳过 / [q] 提前结束。
+    伪造率 > 10% 判接地管线不合格。结果无论好坏都落盘 (诚实条款)。
+    """
+    from rich.prompt import Prompt
+
+    from explain_engine.engines.evidence_audit import (
+        FAKE_RATE_THRESHOLD,
+        AuditResult,
+        collect_evidence_pool,
+        record_audit,
+        sample_evidence,
+    )
+    from explain_engine.persistence.storage_v2 import StorageV2
+
+    store = _get_store()
+    with console.status("[bold green]收集证据池..."):
+        pool = collect_evidence_pool(store)
+    if not pool:
+        console.print("证据池为空 — 还没有接地过的 session (explain ground / run)。")
+        raise typer.Exit(0)
+
+    items = sample_evidence(pool, sample, seed=seed)
+    console.print(
+        f"[INFO] 证据池 {len(pool)} 条, 抽样 {len(items)} 条 (seed={seed})。\n"
+        "请打开 URL 核对: 来源是否真实存在、内容是否确实支持该断言。\n"
+    )
+
+    result = AuditResult(sampled=len(items))
+    for i, item in enumerate(items, start=1):
+        console.print(f"[bold cyan][{i}/{len(items)}][/bold cyan] {item.evidence_id} "
+                      f"(session {item.sid}, 支撑 {item.target_id})")
+        console.print(f"  断言: {item.claim}")
+        console.print(f"  来源: {item.title}")
+        console.print(f"  URL:  {item.url}")
+        console.print(f"  摘录: [dim]{item.snippet[:160]}[/dim]")
+        choice = Prompt.ask(
+            r"  \[v] 真实 / \[f] 伪造或不符 / \[s] 跳过 / \[q] 结束",
+            choices=["v", "f", "s", "q"], default="v",
+        )
+        if choice == "q":
+            break
+        verdict = {"v": "genuine", "f": "fake", "s": "skipped"}[choice]
+        result.items.append({
+            "evidence_id": item.evidence_id, "sid": item.sid,
+            "url": item.url, "verdict": verdict,
+        })
+        if choice == "v":
+            result.genuine += 1
+            result.checked += 1
+        elif choice == "f":
+            result.fake += 1
+            result.checked += 1
+        else:
+            result.skipped += 1
+        console.print()
+
+    record_audit(StorageV2(), result, seed=seed)
+    if result.checked == 0:
+        console.print("未核对任何条目, 无结论 (记录已存档)。")
+        return
+    rate = result.fake_rate or 0.0
+    console.print(
+        f"\n核对 {result.checked} 条: 真实 {result.genuine} / 伪造 {result.fake} "
+        f"(跳过 {result.skipped}) — 伪造率 [bold]{rate:.0%}[/bold]"
+    )
+    if result.passed:
+        console.print(f"[green]✓ 通过 (≤ {FAKE_RATE_THRESHOLD:.0%}), 接地管线合格。[/green]")
+    else:
+        console.print(
+            f"[red]✗ 伪造率超过 {FAKE_RATE_THRESHOLD:.0%} — 按 H2 协议接地管线"
+            f"不合格, 需要重做 (检索源/立场判定 prompt)。[/red]"
+        )
+    console.print("[dim]审计记录已存档: knowledge/evidence_audits.json[/dim]")
+
+
 @app.command("migrate-lexicon-pg")
 def migrate_lexicon_pg_cmd(
     dry_run: bool = typer.Option(

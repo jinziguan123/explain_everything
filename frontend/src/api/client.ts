@@ -66,6 +66,15 @@ export interface KnowledgeOverview {
   theory_count: { stable: number; tentative: number; weakened?: number };
   /** Phase T: H3 复用率持续测量 (复用 ≥2 次变量占比) */
   h3_reuse?: { vars_reused: number; reuse_rate: number };
+  /** Phase X3: per-session 复用率真埋点 (flush 时记录), 最近 10 条 */
+  h3_sessions?: {
+    sid: string;
+    ts: string;
+    flushed: number;
+    reused: number;
+    created: number;
+    reuse_rate: number;
+  }[];
   top_variables: {
     global_id: string;
     name: string;

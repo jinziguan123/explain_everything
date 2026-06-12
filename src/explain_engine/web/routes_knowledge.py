@@ -102,6 +102,12 @@ def _slim_theories() -> list[dict[str, Any]]:
     return [_theory_to_slim(t, ledger_stats) for t in ordered]
 
 
+def _h3_sessions(limit: int = 10) -> list[dict[str, Any]]:
+    from explain_engine.engines.lexicon import read_h3_log
+
+    return read_h3_log(StorageV2())[-limit:]
+
+
 @router.get("/knowledge/overview")
 async def knowledge_overview() -> dict[str, Any]:
     session_count = len(SessionStore().list())
@@ -129,6 +135,9 @@ async def knowledge_overview() -> dict[str, Any]:
             "vars_reused": reused,
             "reuse_rate": round(reused / len(variables), 3) if variables else 0.0,
         },
+        # Phase X3: per-session 复用率真埋点 (flush 时记录), 最近 10 条。
+        # 判定线 (§四 H3): 第 10 个 session 复用率 ≥ 20%。
+        "h3_sessions": _h3_sessions(),
         "top_variables": variables[:30],
         "theories": theories,
     }
