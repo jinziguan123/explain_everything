@@ -89,16 +89,16 @@ async def hitl_gate(
         # llm_inferred → ask user
         name = getattr(parsed_input, "name", "<unknown>")
         if prompt_fn is None:
-            # P-1: textual 模式无 interactive prompt → safe deny. 不可调
-            # _default_prompt (会 hold stdin 死锁). LLM 收 "user denied via
-            # HITL gate" 反馈自决下步.
-            logger.warning(
-                "HITL gate: LLM 推测 add_observation %r 但无 input_provider "
-                "(textual 模式或 caller 未注入), 自动拒. 如需 approve, 用户"
-                "可显式 /add_observation 或在 REPL 模式 (cli) 走 prompt 确认.",
+            # Phase X2: textual 模式无 interactive prompt → 自动采纳.
+            # (P-1 原为 safe deny 防死锁; X2 改为全采纳 + /review 事后修订,
+            #  与 bootstrap/compress 全采纳策略一致. 不调 _default_prompt,
+            #  仍避免 hold stdin 死锁.)
+            logger.info(
+                "HITL gate: LLM 推测 add_observation %r, 无 input_provider "
+                "(textual 模式), 自动采纳 (Phase X2). /review 可事后修订.",
                 name,
             )
-            return False
+            return True
         prompt_text = (
             f"\nLLM wants to add observation: {name!r}. Approve? (y/n): "
         )

@@ -1,4 +1,4 @@
-"""免费 web 搜索 / 网页正文抓取 (无 API key, 走 DuckDuckGo HTML 端点)。
+"""免费 web 搜索 / 网页正文抓取 (无 API key, 走 DuckDuckGo HTML 端点).
 
 给 chat tools (web_search / web_read) 用, 让 agent 能取实时/事实性信息,
 弥补底层模型"知识截止 + 无联网"的短板 (e.g. 最新非农数据、近期事件)。
@@ -8,17 +8,22 @@
 - 代价: 非官方 API, 可能限速 / 偶发结构变动; 失败时由调用方 (tools.py) 优雅
   降级成错误文本回给 LLM, 不让整轮 crash。
 - 仅依赖项目已有的 httpx + beautifulsoup4, 不新增第三方依赖。
+- 主端点 html.duckduckgo.com 失败时自动 fallback 到 lite.duckduckgo.com。
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 
+_log = logging.getLogger(__name__)
+
 _DDG_HTML = "https://html.duckduckgo.com/html/"
+_DDG_LITE = "https://lite.duckduckgo.com/lite/"
 # 给一个常见浏览器 UA, 降低被当成 bot 直接拒的概率。
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -47,7 +52,7 @@ def _unwrap_ddg_url(href: str) -> str:
 
 
 def _parse_results(html: str, max_results: int) -> list[SearchResult]:
-    """从 DDG HTML 解析结果列表 (抽出供测试直接喂 HTML, 不走网络)。"""
+    """从 DDG HTML (html.duckduckgo.com) 解析结果列表。"""
     soup = BeautifulSoup(html, "html.parser")
     results: list[SearchResult] = []
     for block in soup.select("div.result"):
@@ -65,17 +70,63 @@ def _parse_results(html: str, max_results: int) -> list[SearchResult]:
     return results
 
 
+def _parse_results_lite(html: str, max_results: int) -> list[SearchResult]:
+    """从 DDG Lite (lite.duckduckgo.com) 解析结果列表。
+
+    Lite 版用 table 布局: a.result-link 是标题链接, td.result-snippet 是摘要。
+    每条结果的 link 和 snippet 在相邻的 <tr> 中。
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[SearchResult] = []
+    links = soup.select("a.result-link")
+    snippets = soup.select("td.result-snippet")
+    for i, a in enumerate(links):
+        url = a.get("href", "")
+        title = a.get_text(" ", strip=True)
+        snippet = snippets[i].get_text(" ", strip=True) if i < len(snippets) else ""
+        if url and title:
+            results.append(SearchResult(title=title, url=url, snippet=snippet))
+        if len(results) >= max_results:
+            break
+    return results
+
+
+async def _fetch_and_parse(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    query: str,
+    max_results: int,
+    parser: callable,
+) -> list[SearchResult]:
+    resp = await client.post(endpoint, data={"q": query})
+    resp.raise_for_status()
+    return parser(resp.text, max_results)
+
+
 async def web_search(query: str, max_results: int = 5) -> list[SearchResult]:
     """搜 DuckDuckGo, 返回 [SearchResult]。
 
-    网络/HTTP 错误向上抛 (httpx.HTTPError), 由 tools 层 catch 成文本给 LLM。
+    主端点 html.duckduckgo.com 失败时自动 fallback 到 lite.duckduckgo.com。
+    两个都失败则向上抛最后一个异常, 由 tools 层 catch 成文本给 LLM。
     """
     async with httpx.AsyncClient(
         timeout=_TIMEOUT, headers={"User-Agent": _UA}, follow_redirects=True
     ) as client:
-        resp = await client.post(_DDG_HTML, data={"q": query})
-        resp.raise_for_status()
-    return _parse_results(resp.text, max_results)
+        # 主端点
+        try:
+            results = await _fetch_and_parse(
+                client, _DDG_HTML, query, max_results, _parse_results,
+            )
+            if results:
+                return results
+            _log.warning("web_search: html endpoint returned 0 results, trying lite")
+        except Exception as exc:
+            _log.warning("web_search: html endpoint failed (%s), trying lite", exc)
+
+        # 备用端点
+        return await _fetch_and_parse(
+            client, _DDG_LITE, query, max_results, _parse_results_lite,
+        )
 
 
 def _extract_text(html: str, max_chars: int) -> str:

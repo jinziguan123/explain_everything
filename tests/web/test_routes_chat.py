@@ -63,10 +63,11 @@ def test_get_stream_no_active_run():
     assert "no_active_run" in body
 
 
-def test_get_stream_done_run_is_no_active_run():
-    """已完成的 run 不再回放 (以 transcript 为准), GET → no_active_run。
+def test_get_stream_done_run_replays_frames():
+    """已完成的 run 回放缓冲帧 (修复 slash 快速完成的竞态)。
 
-    防回归: 刷新后若重放已完成轮次, 会盖掉历史聊天内容。
+    前端依赖 turn_complete 退出 streaming; 若 _drive 在 GET 到达前完成,
+    必须回放帧而非返 no_active_run, 否则前端永远卡在 streaming 状态。
     """
     run = chat_runs.ChatRun("s_a1b2c3d9")
     run.append(sse_pack("run_start", {"content": None}))
@@ -77,8 +78,8 @@ def test_get_stream_done_run_is_no_active_run():
     client = TestClient(create_app())
     with client.stream("GET", "/api/sessions/s_a1b2c3d9/chat/stream") as resp:
         body = "".join(resp.iter_text())
-    assert "no_active_run" in body
-    assert "turn_complete" not in body  # 不回放已完成轮
+    assert "turn_complete" in body
+    assert "run_start" in body
 
 
 def test_stop_no_active_run_is_noop():

@@ -16,6 +16,13 @@
   gap: 16px;
 }
 
+/* 草稿态空提示: 居中淡色 */
+.chat-draft-hint {
+  margin: auto;
+  color: var(--text-subtle);
+  font-size: 0.92rem;
+}
+
 .chat-msg {
   display: flex;
   animation: fadeInUp var(--dur-slow) var(--ease) both;

@@ -218,6 +218,22 @@ STATUS_PREDICT          = "[bold green]正在预测干预影响...[/bold green]"
 STATUS_COUNTERFACTUAL   = "[bold green]正在做反事实分析...[/bold green]"
 STATUS_RESCORE          = "[bold green]正在重评因果关系...[/bold green]"
 STATUS_THEORIES_COMPUTE = "[bold green]正在分析跨 session 模式...[/bold green]"
+STATUS_AUTO_COMPRESS    = "[bold green]自动管线 1/3 — 归纳模式...[/bold green]"
+STATUS_AUTO_RUN         = "[bold green]自动管线 2/3 — 推理循环...[/bold green]"
+STATUS_AUTO_GROUND      = "[bold green]自动管线 3/3 — 证据接地...[/bold green]"
+
+
+def msg_auto_pipeline_done(
+    n_l1: int,
+    stop_reason: str,
+    tick: int,
+    ground_note: str,
+) -> str:
+    return (
+        f"✅ 自动分析完成 — 归纳出 {n_l1} 个模式, "
+        f"推理 {tick} 步 ({stop_reason}){ground_note}\n"
+        f"输入自然语言继续追问, 或 /show 查看全图, /review 修订现象/模式。"
+    )
 
 # Phase 19: spinner labels for status_start ChatEvent type.
 STATUS_THINKING         = "思考中..."

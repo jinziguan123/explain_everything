@@ -29,14 +29,19 @@ class ChatBody(BaseModel):
 @router.post("/{sid}/chat")
 async def chat(sid: str, body: ChatBody) -> dict[str, bool]:
     """启动一轮后台生成。缺失 session → 404; 已有进行中的生成 → 409。"""
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    _log.info("[chat POST] sid=%s message=%r", sid, body.message[:60])
     llm = make_llm_client()
     chat_session = load_chat_or_404(sid)  # 缺失/损坏 → 404 (在 200 前)
     try:
         start_run(sid, body.message, chat_session, llm)
     except RunInProgress as exc:
+        _log.warning("[chat POST] sid=%s RunInProgress!", sid)
         raise HTTPException(
             status_code=409, detail="本会话已有进行中的生成, 请等待完成或先停止"
         ) from exc
+    _log.info("[chat POST] sid=%s started OK", sid)
     return {"started": True}
 
 
@@ -44,15 +49,21 @@ async def chat(sid: str, body: ChatBody) -> dict[str, bool]:
 async def chat_stream(sid: str) -> StreamingResponse:
     """订阅当前轮的事件流。
 
-    仅订阅"进行中"(未 done) 的 run; 无 run 或已完成 → 立即发 no_active_run。
-    已完成的轮次以 transcript 为准 (生成结束时已 persist), 不再回放, 避免刷新后
-    重放盖掉历史。
+    进行中的 run → subscribe() 实时续传;
+    已完成但有缓冲帧 → 回放缓冲帧 (修复 slash 命令等快速完成场景的竞态:
+    _drive 在前端 GET 到达前已 finish, 旧逻辑返 no_active_run 导致前端
+    永远卡在 streaming 状态);
+    无 run → no_active_run (刷新后无活动轮)。
     """
     run = get_run(sid)
 
     async def gen() -> AsyncIterator[str]:
-        if run is None or run.done:
+        if run is None:
             yield sse_pack("no_active_run", {"content": None})
+            return
+        if run.done:
+            for frame in run.frames:
+                yield frame
             return
         async for frame in run.subscribe():
             yield frame

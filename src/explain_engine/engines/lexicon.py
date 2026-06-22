@@ -30,6 +30,7 @@ knowledge/variables.json schema:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -374,18 +375,17 @@ async def flush_to_lexicon(
 
     # Phase 13 Wave 2 Task 3: 先 build canonicals 全部, 再 batch embed,
     # 然后 upsert 时 cosine-first merge.
-    canonicals: list[str] = []
-    for i, node in enumerate(candidates):
-        # Top-K 用 真 llm; 其余传 None 走 edge fallback
+    async def _build_one_canonical(i: int, node: VariableNode) -> str:
         effective_llm = llm if i < llm_canonical_top_k else None
-        # Phase 17.2 Task 7 (final review fix): light_llm 仅在用真 llm 的 top-K
-        # 名额上下文里生效 (effective_llm 非 None). 其余 idx 走 edge fallback,
-        # light_llm 一并跟 effective_llm=None, 不引出额外 LLM call.
         effective_light = light_llm if effective_llm is not None else None
-        canonical_mech = await _build_canonical_mechanism(
+        return await _build_canonical_mechanism(
             node, session, effective_llm, light_llm=effective_light,
         )
-        canonicals.append(canonical_mech)
+
+    canonicals = list(await asyncio.gather(*[
+        _build_one_canonical(i, node)
+        for i, node in enumerate(candidates)
+    ]))
 
     # Phase 13 Wave 2: batch embed canonicals (best-effort, optional).
     # Embedder load / encode failure → log warning, fall back to None for all.
@@ -395,8 +395,6 @@ async def flush_to_lexicon(
         and os.environ.get("EXPLAIN_EMBEDDING_DISABLED") != "1"
     ):
         try:
-            import asyncio
-
             from explain_engine.embedding.bge_m3 import get_embedder
             embedder = get_embedder()
             # BGE-M3 embed 是同步 torch 前向 (秒级, 占 GIL). flush 跑在 chat REPL

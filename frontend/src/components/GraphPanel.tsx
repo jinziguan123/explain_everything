@@ -128,6 +128,10 @@ function buildCyStyle(showEdgeLabels: boolean): cytoscape.StylesheetStyle[] {
     // 悬停高亮: 非邻域淡出
     { selector: ".faded", style: { opacity: 0.12, "text-opacity": 0.12 } },
     { selector: ".hl-node", style: { "border-color": "#111114", "border-width": 3 } },
+    {
+      selector: ".search-hit",
+      style: { "border-color": "#f59e0b", "border-width": 4, "border-style": "double" },
+    },
   ] as unknown as cytoscape.StylesheetStyle[];
 }
 
@@ -138,6 +142,9 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
   const [showEdgeLabels, setShowEdgeLabels] = useState(true);
   const [reportOpen, setReportOpen] = useState(false);
   const [groundNote, setGroundNote] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   const showEdgeLabelsRef = useRef(showEdgeLabels);
   showEdgeLabelsRef.current = showEdgeLabels;
 
@@ -168,9 +175,33 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
       setGroundNote(`接地失败: ${e instanceof Error ? e.message : String(e)}`),
   });
 
+  const focusNode = (nodeId: string) => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    const node = cy.getElementById(nodeId);
+    if (node.empty()) return;
+    cy.elements().removeClass("faded").removeClass("hl-node").removeClass("search-hit");
+    node.addClass("search-hit");
+    cy.animate({ center: { eles: node }, zoom: cy.zoom() }, { duration: 300 });
+    setSelected(node.data() as NodeData);
+    setSearchQuery("");
+  };
+
   const nodes = data?.elements?.nodes ?? [];
   const edges = data?.elements?.edges ?? [];
   const hasNodes = nodes.length > 0;
+
+  const searchResults = searchQuery.trim()
+    ? nodes
+        .filter((n) => {
+          const d = n.data as Record<string, unknown>;
+          const q = searchQuery.trim().toLowerCase();
+          const id = String(d.id ?? "").toLowerCase();
+          const label = String(d.label ?? "").toLowerCase();
+          return id.includes(q) || label.includes(q);
+        })
+        .slice(0, 8)
+    : [];
 
   useEffect(() => {
     const container = containerRef.current;
@@ -199,9 +230,12 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
     cy.on("tap", "node", (evt) => {
       setSelected(evt.target.data() as NodeData);
     });
-    // 点击空白处关闭抽屉
+    // 点击空白处关闭抽屉 + 清除搜索高亮
     cy.on("tap", (evt) => {
-      if (evt.target === cy) setSelected(null);
+      if (evt.target === cy) {
+        setSelected(null);
+        cy.elements().removeClass("search-hit");
+      }
     });
     // 悬停高亮当前节点 + 邻域, 其余淡出
     cy.on("mouseover", "node", (evt) => {
@@ -244,8 +278,54 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
 
       {hasNodes && (
         <>
-          {/* 顶部工具条: 边标签开关 + 报告 / 接地 (Phase X1) */}
+          {/* 顶部工具条: 搜索 + 边标签开关 + 报告 / 接地 */}
           <div className="graph-toolbar">
+            <div className="graph-search">
+              <input
+                ref={searchRef}
+                type="text"
+                className="graph-search-input"
+                placeholder="搜索节点…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setTimeout(() => setSearchFocused(false), 150)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setSearchQuery("");
+                    searchRef.current?.blur();
+                  } else if (e.key === "Enter" && searchResults.length > 0) {
+                    focusNode(String((searchResults[0].data as Record<string, unknown>).id));
+                  }
+                }}
+              />
+              {searchFocused && searchResults.length > 0 && (
+                <ul className="graph-search-results">
+                  {searchResults.map((n) => {
+                    const d = n.data as Record<string, unknown>;
+                    const level = String(d.level ?? "0");
+                    return (
+                      <li
+                        key={String(d.id)}
+                        className="graph-search-item"
+                        onMouseDown={() => focusNode(String(d.id))}
+                      >
+                        <span
+                          className="graph-search-dot"
+                          style={{ background: LEVEL_COLORS[level] ?? "#9aa0a6" }}
+                        />
+                        <span className="graph-search-id">{String(d.id)}</span>
+                        <span className="graph-search-label">{String(d.label ?? "")}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {searchFocused && searchQuery.trim() && searchResults.length === 0 && (
+                <div className="graph-search-results graph-search-empty">无匹配节点</div>
+              )}
+            </div>
+            <div className="graph-toolbar-spacer" />
             <button
               type="button"
               className={`graph-toggle${showEdgeLabels ? " on" : ""}`}

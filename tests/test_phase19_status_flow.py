@@ -207,7 +207,15 @@ async def test_handle_deepen_status_classify_mount_unmount(
         ephemeral.transcript.append({"role": "user", "content": "为什么烧水"})
 
         # 跑 /deepen — 返 list[ChatEvent]
-        events = await dispatch_slash(ephemeral, "/deepen")
+        # mock _auto_pipeline: 不真跑管线, 只返占位 event
+        from unittest.mock import patch
+        from explain_engine.chat.session import ChatEvent
+        with patch(
+            "explain_engine.chat.slash_commands._auto_pipeline",
+            new_callable=AsyncMock,
+            return_value=[ChatEvent(type="slash_auto_pipeline", content="done")],
+        ):
+            events = await dispatch_slash(ephemeral, "/deepen")
         assert len(events) >= 3, f"events 太少: {[e.type for e in events]}"
         types_in_order = [e.type for e in events]
         assert types_in_order[0] == "status_start"

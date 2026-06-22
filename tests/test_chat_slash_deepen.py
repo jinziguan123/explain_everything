@@ -136,8 +136,8 @@ async def test_deepen_no_llm_at_all(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deepen_in_persistent_session_rejected(tmp_path, monkeypatch):
-    """已 promote 的 ChatSession 内 /deepen → err_deepen_already_promoted + 提示 /new."""
+async def test_deepen_in_persistent_session_reruns_pipeline(tmp_path, monkeypatch):
+    """已完成管线的 ChatSession (stage=done) 内 /deepen → 重跑 _auto_pipeline."""
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
@@ -145,26 +145,25 @@ async def test_deepen_in_persistent_session_rejected(tmp_path, monkeypatch):
     from explain_engine.persistence.session import Session, SessionMeta, SessionStore
     from explain_engine.schema.state import CognitiveState
 
-    # 预存一个 persistent session
     state = CognitiveState.bootstrap("已建模问题", budget=20)
     meta = SessionMeta.new("已建模问题")
+    meta.stage = "done"
     SessionStore().save(Session(meta=meta, state=state))
 
     chat = ChatSession(meta.session_id, llm=MagicMock())
 
+    from explain_engine.chat.session import ChatEvent
+
     cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
-    events = await cmd.handler(chat, ["别的问题"])
+    with patch(
+        "explain_engine.chat.slash_commands._auto_pipeline",
+        new_callable=AsyncMock,
+        return_value=[ChatEvent(type="slash_auto_pipeline", content="管线完成")],
+    ) as mock_pipeline:
+        events = await cmd.handler(chat, [])
 
-    error_events = [e for e in events if e.type == "slash_error"]
-    assert len(error_events) == 1
-    content = error_events[0].content
-    # 拒绝文案 — 包含 "已建模" 或 "已 /deepen" 任一, 必含 /new + 当前 question
-    assert "已 /deepen" in content or "已建模" in content
-    assert "/new" in content
-    assert "已建模问题" in content
-
-    # 不该触发 promote
-    assert not any(e.type == "slash_deepen_promoted" for e in events)
+    mock_pipeline.assert_called_once_with(chat)
+    assert any(e.type == "slash_auto_pipeline" for e in events)
 
 
 @pytest.mark.asyncio
@@ -331,24 +330,31 @@ async def test_deepen_yields_status_end_on_promote_failure(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_deepen_no_status_when_already_promoted(tmp_path, monkeypatch):
-    """ChatSession 内 /deepen 直接拒绝 (无 promote 调用), 不 yield status (无 spinner 必要)."""
+async def test_deepen_already_promoted_runs_pipeline_with_status(tmp_path, monkeypatch):
+    """ChatSession 内 /deepen 重跑管线, 事件中包含 status_start/status_end 进度反馈."""
     monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
     monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
 
-    # 构造一个 fake "已 promote" 的 chat (is_ephemeral=False)
+    from explain_engine.chat.session import ChatEvent
+
     chat = MagicMock(is_ephemeral=False)
-    chat._session = MagicMock()
-    chat._session.meta = MagicMock(question="已建模问题")
+    chat.llm = MagicMock()
 
     cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
-    events = await cmd.handler(chat, ["别的问题"])
+    with patch(
+        "explain_engine.chat.slash_commands._auto_pipeline",
+        new_callable=AsyncMock,
+        return_value=[
+            ChatEvent(type="status_start", content="压缩中..."),
+            ChatEvent(type="status_end", content=None),
+            ChatEvent(type="slash_auto_pipeline", content="管线完成"),
+        ],
+    ):
+        events = await cmd.handler(chat, [])
 
     types = [e.type for e in events]
-    assert "status_start" not in types
-    assert "status_end" not in types
-    # 只有 slash_error 拒绝
-    assert "slash_error" in types
+    assert "status_start" in types
+    assert "slash_auto_pipeline" in types
 
 
 @pytest.mark.asyncio
@@ -386,3 +392,132 @@ async def test_deepen_no_status_when_llm_not_configured(tmp_path, monkeypatch):
     assert "status_start" not in types
     assert "status_end" not in types
     assert "slash_error" in types
+
+
+# ---- 自动管线 _auto_pipeline ----
+
+
+@pytest.mark.asyncio
+async def test_auto_pipeline_success_path(tmp_path, monkeypatch):
+    """_auto_pipeline 成功跑完 compress → run → ground, 返 slash_auto_pipeline event."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    from explain_engine.chat.slash_commands import _auto_pipeline
+    from explain_engine.schema.nodes import VariableNode
+
+    l1_node = VariableNode(
+        id="c_001", name="pattern", description="d",
+        abstraction_level=1, confidence=0.8, epistemic="insight",
+    )
+
+    chat = MagicMock()
+    chat.state.graph.nodes.values.return_value = [l1_node]
+    chat.state.budget_remaining = 10
+    chat.state.tick = 3
+    chat.state.insight_candidates = []
+    chat.chat_state.budget_per_session_limit = 0
+    chat._session.meta.stage = "bootstrap_pending"
+    chat.tui_app = None
+
+    with (
+        patch(
+            "explain_engine.engines.lexicon.get_lexicon_top_k_for_compress",
+            return_value=[],
+        ),
+        patch(
+            "explain_engine.engines.compression.propose_candidates",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "explain_engine.engines.evaluation.score_all",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "explain_engine.hitl.cli_interactive.review_insights_async",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "explain_engine.engines.lexicon.flush_to_lexicon",
+            new_callable=AsyncMock,
+            return_value=2,
+        ),
+        patch(
+            "explain_engine.runtime.runtime.run",
+            new_callable=AsyncMock,
+            return_value="budget_exhausted",
+        ),
+        patch(
+            "explain_engine.engines.grounding.ground_state",
+            new_callable=AsyncMock,
+            return_value=MagicMock(
+                targets_total=5, verified=3, contested=1, unverified=1,
+                edges_reweighted=4,
+            ),
+        ),
+        patch(
+            "explain_engine.config.make_light_llm_client",
+            return_value=MagicMock(),
+        ),
+    ):
+        events = await _auto_pipeline(chat)
+
+    types = [e.type for e in events]
+    # 3 对 status_start/end (compress, run, ground) + 1 final
+    assert types.count("status_start") == 3
+    assert types.count("status_end") == 3
+    final = [e for e in events if e.type == "slash_auto_pipeline"]
+    assert len(final) == 1
+    assert "1 个模式" in final[0].content
+    assert "接地" in final[0].content
+    assert chat._session.meta.stage == "converged"
+
+
+@pytest.mark.asyncio
+async def test_auto_pipeline_compress_failure(tmp_path, monkeypatch):
+    """compress 阶段失败 → 返 slash_error, 不继续 run/ground."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    from explain_engine.chat.slash_commands import _auto_pipeline
+
+    chat = MagicMock()
+    chat.tui_app = None
+
+    with patch(
+        "explain_engine.engines.lexicon.get_lexicon_top_k_for_compress",
+        side_effect=RuntimeError("storage broken"),
+    ):
+        events = await _auto_pipeline(chat)
+
+    assert any(e.type == "slash_error" for e in events)
+    assert not any(e.type == "slash_auto_pipeline" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_deepen_chains_auto_pipeline(tmp_path, monkeypatch):
+    """/deepen promote 后自动调 _auto_pipeline, events 包含 promote + pipeline."""
+    monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
+    monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test")
+
+    from explain_engine.chat.session import ChatEvent
+
+    storage = StorageV2()
+    ephemeral = EphemeralChatSession(storage=storage, llm=MagicMock())
+    fake_real_chat = MagicMock(sid="s_test_auto")
+    ephemeral.promote_to_persistent = AsyncMock(return_value=fake_real_chat)
+
+    pipeline_event = ChatEvent(type="slash_auto_pipeline", content="done")
+    with patch(
+        "explain_engine.chat.slash_commands._auto_pipeline",
+        new_callable=AsyncMock,
+        return_value=[pipeline_event],
+    ) as mock_pipeline:
+        cmd = next(c for c in DEFAULT_COMMANDS if c.name == "deepen")
+        events = await cmd.handler(ephemeral, ["为什么 X"])
+
+    mock_pipeline.assert_called_once_with(fake_real_chat)
+    types = [e.type for e in events]
+    assert "slash_deepen_promoted" in types
+    assert "slash_auto_pipeline" in types
+    assert types.index("slash_deepen_promoted") < types.index("slash_auto_pipeline")

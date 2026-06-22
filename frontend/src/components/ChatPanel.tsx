@@ -20,6 +20,8 @@ export interface ChatPanelProps {
   onFirstMessage?: (text: string) => void;
   /** 告知父组件当前会话是否为空 (无任何消息); 用于"空会话不重复新建" */
   onEmptyChange?: (empty: boolean) => void;
+  /** 草稿态创建会话后, 需自动发出的首条消息 (只发一次) */
+  initialMessage?: string;
 }
 
 interface ToolChip {
@@ -255,6 +257,7 @@ export default function ChatPanel({
   onTurnComplete,
   onFirstMessage,
   onEmptyChange,
+  initialMessage,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -455,39 +458,49 @@ export default function ChatPanel({
     };
   }, [sid, subscribe]);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || streaming) return;
+  const sendText = useCallback(
+    async (raw: string) => {
+      const text = raw.trim();
+      if (!text || streaming) return;
 
-    const isFirst = messages.length === 0; // 本会话首条消息
+      const isFirst = messages.length === 0; // 本会话首条消息
+      dirtyRef.current = true;
+      stickToBottomRef.current = true; // 发消息 → 重新贴底跟随
+      // 乐观渲染 user 气泡 (assistant 气泡随后由 run_start 重建为干净目标)
+      setMessages((prev) => [...prev, { role: "user", text }, emptyAssistant()]);
+      setStreaming(true);
+      // 主流程之外并行起标题: 不 await, 与下面的启动同时进行
+      if (isFirst) onFirstMessage?.(text);
+
+      try {
+        // 1) 启动后台生成 (POST, 立即返回); 2) 订阅事件流 (GET)
+        await startChat(sid, text);
+        await subscribe();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        patchLastAssistant((m) => ({ ...m, error: `请求失败：${msg}` }));
+        setStreaming(false);
+        setStatus(null);
+      }
+    },
+    [streaming, sid, messages.length, onFirstMessage, subscribe, patchLastAssistant],
+  );
+
+  const send = useCallback(() => {
+    if (!input.trim() || streaming) return;
+    const text = input;
     setInput("");
-    dirtyRef.current = true;
-    stickToBottomRef.current = true; // 用户主动发消息 → 重新贴底跟随
-    // 乐观渲染 user 气泡 (assistant 气泡随后由 run_start 重建为干净目标)
-    setMessages((prev) => [...prev, { role: "user", text }, emptyAssistant()]);
-    setStreaming(true);
-    // 主流程之外并行起标题: 不 await, 与下面的启动同时进行
-    if (isFirst) onFirstMessage?.(text);
+    void sendText(text);
+  }, [input, streaming, sendText]);
 
-    try {
-      // 1) 启动后台生成 (POST, 立即返回); 2) 订阅事件流 (GET)
-      await startChat(sid, text);
-      await subscribe();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      patchLastAssistant((m) => ({ ...m, error: `请求失败：${msg}` }));
-      setStreaming(false);
-      setStatus(null);
+  // 草稿态创建会话后, 把首条消息自动发出 (只发一次)。
+  const initialSentRef = useRef(false);
+  useEffect(() => {
+    if (initialMessage && !initialSentRef.current) {
+      initialSentRef.current = true;
+      void sendText(initialMessage);
     }
-  }, [
-    input,
-    streaming,
-    sid,
-    messages.length,
-    onFirstMessage,
-    subscribe,
-    patchLastAssistant,
-  ]);
+  }, [initialMessage, sendText]);
 
   const stop = useCallback(() => {
     // 真正取消服务端后台生成 (不只是断订阅), 再断本地订阅。

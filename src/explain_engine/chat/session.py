@@ -292,14 +292,27 @@ class ChatSession:
         - 非 slash + llm 不为 None → C.2: append transcript + bump turn + reset budget
             + dispatch 到 query_loop (LLM ↔ tools while-loop), 最后 persist.
         """
+        # Web 端 llm 通过参数传入; slash handler / _auto_deepen 等通过
+        # chat.llm 访问. 确保注入的 llm 对所有下游路径可见.
+        if llm is not None and self.llm is None:
+            self.llm = llm
+
         if self.is_slash_command(text):
-            # Wave F.1: 本地 dispatch — 6 default commands bypass LLM.
-            from explain_engine.chat.slash_commands import dispatch_slash
-            events = await dispatch_slash(self, text)
-            for ev in events:
-                yield ev
-            # NOTE: slash 不 append transcript / 不 bump turn_count —
-            # 这些是管理命令, 非真正 user→assistant 对话.
+            cmd_name = text.strip().split()[0].lstrip("/")
+            if cmd_name == "deepen":
+                # /deepen 走流式路径: status 事件边产生边推给 web 前端,
+                # 而非等整条管线跑完再一次性返回.
+                async for ev in self._stream_deepen(text):
+                    yield ev
+            else:
+                from explain_engine.chat.slash_commands import dispatch_slash
+                events = await dispatch_slash(self, text)
+                for ev in events:
+                    yield ev
+            # Web SSE 前端依赖 turn_complete 退出 streaming 状态;
+            # slash 路径绕过 query_loop, 需手动补发.
+            # TUI 的 _consume_slash_events 直接调 dispatch_slash, 不走此路径.
+            yield ChatEvent(type="turn_complete", content=None)
             return
 
         # 2026-05-20 hotfix: turn-start budget enforce. 用户设有限值且 session
@@ -420,6 +433,94 @@ class ChatSession:
         # Persist after turn (chat_state + graph 全 flush). I1: 即使 hook 抛
         # 异常也保证执行, 避免 turn_count bump 但 graph 不存的半态.
         self.persist()
+
+        # ── Auto-deepen: 首次对话后自动跑 bootstrap + 分析管线 ──
+        if (
+            llm is not None
+            and not getattr(self, "is_ephemeral", False)
+            and getattr(getattr(self._session, "meta", None), "stage", None) == "bootstrap_pending"
+        ):
+            async for ev in self._auto_deepen(llm):
+                yield ev
+
+    async def _stream_deepen(self, text: str) -> AsyncIterator["ChatEvent"]:
+        """流式 /deepen: 复用 _handle_deepen 的前置检查, 管线部分走 async generator."""
+        from explain_engine.chat.slash_commands import _auto_pipeline_stream
+
+        llm = self.llm
+        if llm is None:
+            yield ChatEvent(
+                type="slash_error",
+                content="LLM 未配置, 无法 /deepen. 设 LLM_* env 后重启.",
+            )
+            return
+
+        async for ev in _auto_pipeline_stream(self):
+            yield ev
+
+    async def _auto_deepen(
+        self, llm: "LLMClient",
+    ) -> AsyncIterator["ChatEvent"]:
+        """首轮对话后自动跑 bootstrap + compress → run → ground.
+
+        条件: session stage == bootstrap_pending. 跑完后 stage → converged.
+        失败不阻断对话 — 用户可随后手动 /deepen 重试.
+        """
+        import logging as _logging
+
+        from explain_engine.chat.chat_copy import STATUS_AUTO_COMPRESS
+        from explain_engine.config import make_light_llm_client
+
+        _log = _logging.getLogger(__name__)
+        question = self._session.meta.question
+
+        yield ChatEvent(type="status_start", content="自动深度分析 — bootstrap 中...")
+        try:
+            # 1. Bootstrap: 用 variable extraction 生成 L0 现象
+            from explain_engine.engines.bootstrap import bootstrap_phenomena
+
+            try:
+                light_llm = make_light_llm_client()
+            except Exception:
+                light_llm = None
+
+            phenomena = await bootstrap_phenomena(
+                question, llm, light_llm=light_llm,
+            )
+
+            # 重编号避免与 query_loop 中 add_observation 产生的 p_NNN 冲突
+            existing_p = [
+                int(nid.split("_")[1])
+                for nid in self.state.graph.nodes
+                if nid.startswith("p_") and nid[2:].isdigit()
+            ]
+            start = (max(existing_p) + 1) if existing_p else 1
+            added = 0
+            for i, node in enumerate(phenomena):
+                node.id = f"p_{start + i:03d}"
+                try:
+                    self.state.graph.add_node(node)
+                    added += 1
+                except ValueError:
+                    pass  # 极端情况下 ID 仍冲突, 跳过
+            self.persist()
+            _log.info("auto-deepen bootstrap: added %d L0 nodes for %r", added, question)
+
+            yield ChatEvent(type="status_end", content=None)
+
+            # 2. Auto-pipeline: compress → run → ground (流式)
+            from explain_engine.chat.slash_commands import _auto_pipeline_stream
+
+            async for ev in _auto_pipeline_stream(self):
+                yield ev
+
+        except Exception as exc:
+            _log.warning("auto-deepen failed: %s: %s", type(exc).__name__, exc)
+            yield ChatEvent(type="status_end", content=None)
+            yield ChatEvent(
+                type="slash_error",
+                content=f"自动深度分析失败 ({type(exc).__name__}), 可手动 /deepen 重试.",
+            )
 
     def persist(self) -> None:
         """Flush chat_state.json + graph (transcript already appended via storage_v2).

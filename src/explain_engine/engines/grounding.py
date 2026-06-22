@@ -435,5 +435,8 @@ async def ground_state(
             summary.unverified += 1
         logger.info("grounding: %s → %s (%d 证据)", target_id, verdict, len(evs))
 
+    logger.info("grounding: applying confidence reweight (%d edges)...",
+                 len(state.graph.edges))
     summary.edges_reweighted = apply_grounded_confidence(state)
+    logger.info("grounding: done (reweighted %d edges)", summary.edges_reweighted)
     return summary

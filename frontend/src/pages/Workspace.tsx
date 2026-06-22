@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import SessionSidebar from "../components/SessionSidebar";
 import ChatPanel from "../components/ChatPanel";
+import DraftChatPanel from "../components/DraftChatPanel";
 import GraphPanel from "../components/GraphPanel";
 import {
   autotitleSession,
@@ -13,6 +14,21 @@ import "./Workspace.css";
 const NEW_SESSION_TITLE = "新会话";
 const LS_SELECTED = "ee.selectedSid";
 const LS_OPEN = "ee.openSids";
+const LS_LEFT_W = "ee.leftWidth";
+const LS_RIGHT_W = "ee.rightWidth";
+const MIN_LEFT = 180;
+const MIN_CENTER = 320;
+const MIN_RIGHT = 200;
+const DEFAULT_LEFT = 280;
+const DEFAULT_RIGHT = 420;
+
+function computeGridCols(lw: number, rw: number, lc: boolean, rc: boolean) {
+  const colLeft = lc ? "0" : `${lw}px`;
+  const colStrip1 = lc ? "30px" : "0";
+  const colStrip2 = rc ? "30px" : "0";
+  const colRight = rc ? "0" : `${rw}px`;
+  return `${colLeft} ${colStrip1} minmax(${MIN_CENTER}px, 1fr) ${colStrip2} ${colRight}`;
+}
 
 export default function Workspace() {
   // 视图状态持久化到 localStorage → 刷新/HMR 后恢复上次会话与历史 (避免"内容不见了")
@@ -35,10 +51,38 @@ export default function Workspace() {
   });
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
-  // 每个会话是否为空 (无任何消息); 由各 ChatPanel 上报, 供"空会话不重复新建"判断
-  const [emptyMap, setEmptyMap] = useState<Record<string, boolean>>({});
-  // 新建但尚未自动生成标题的会话 — 首轮对话完成后触发 autotitle
+  const [leftWidth, setLeftWidth] = useState(() => {
+    const v = localStorage.getItem(LS_LEFT_W);
+    return v ? Math.max(MIN_LEFT, parseInt(v, 10)) : DEFAULT_LEFT;
+  });
+  const [rightWidth, setRightWidth] = useState(() => {
+    const v = localStorage.getItem(LS_RIGHT_W);
+    return v ? Math.max(MIN_RIGHT, parseInt(v, 10)) : DEFAULT_RIGHT;
+  });
+  const dragRef = useRef<{
+    side: "left" | "right";
+    startX: number;
+    startW: number;
+  } | null>(null);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const leftWidthRef = useRef(leftWidth);
+  const rightWidthRef = useRef(rightWidth);
+  const leftCollapsedRef = useRef(leftCollapsed);
+  const rightCollapsedRef = useRef(rightCollapsed);
+  const leftHandleRef = useRef<HTMLDivElement | null>(null);
+  const rightHandleRef = useRef<HTMLDivElement | null>(null);
+  leftWidthRef.current = leftWidth;
+  rightWidthRef.current = rightWidth;
+  leftCollapsedRef.current = leftCollapsed;
+  rightCollapsedRef.current = rightCollapsed;
+  // 草稿态: 点"+新建"后进入, 此时不在后端落任何数据; 用户发出首条消息才 createSession。
+  const [composing, setComposing] = useState(false);
+  // 新建会话待自动发出的首条消息 (草稿 → 实会话的交接); key=sid。
+  const [pendingMsg, setPendingMsg] = useState<Record<string, string>>({});
+  // 新建但尚未自动生成标题的会话 — 首条消息后触发 autotitle
   const needTitleRef = useRef<Set<string>>(new Set());
+  // 防草稿首条消息重复 createSession
+  const creatingRef = useRef(false);
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -49,14 +93,76 @@ export default function Workspace() {
     else localStorage.removeItem(LS_SELECTED);
   }, [selectedSid]);
 
-  // 选中会话: 确保进入 openSids (常驻), 再设为当前
-  const selectSession = useCallback((sid: string) => {
-    setOpenSids((prev) => (prev.includes(sid) ? prev : [...prev, sid]));
-    setSelectedSid(sid);
+  // ── 面板宽度拖拽 ──
+  useEffect(() => {
+    localStorage.setItem(LS_LEFT_W, String(leftWidth));
+  }, [leftWidth]);
+  useEffect(() => {
+    localStorage.setItem(LS_RIGHT_W, String(rightWidth));
+  }, [rightWidth]);
+
+  const startDrag = useCallback(
+    (side: "left" | "right") => (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragRef.current = {
+        side,
+        startX: e.clientX,
+        startW: side === "left" ? leftWidthRef.current : rightWidthRef.current,
+      };
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const total = workspaceRef.current?.clientWidth ?? window.innerWidth;
+      const delta = e.clientX - d.startX;
+      if (d.side === "left") {
+        const otherW = rightCollapsedRef.current ? 30 : rightWidthRef.current;
+        const max = total - otherW - MIN_CENTER;
+        const newW = Math.max(MIN_LEFT, Math.min(max, d.startW + delta));
+        leftWidthRef.current = newW;
+        if (leftHandleRef.current) leftHandleRef.current.style.left = `${newW - 3}px`;
+      } else {
+        const otherW = leftCollapsedRef.current ? 30 : leftWidthRef.current;
+        const max = total - otherW - MIN_CENTER;
+        const newW = Math.max(MIN_RIGHT, Math.min(max, d.startW - delta));
+        rightWidthRef.current = newW;
+        if (rightHandleRef.current) rightHandleRef.current.style.right = `${newW - 3}px`;
+      }
+      if (workspaceRef.current) {
+        workspaceRef.current.style.gridTemplateColumns = computeGridCols(
+          leftWidthRef.current, rightWidthRef.current,
+          leftCollapsedRef.current, rightCollapsedRef.current,
+        );
+      }
+    };
+    const onUp = () => {
+      if (!dragRef.current) return;
+      const side = dragRef.current.side;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      dragRef.current = null;
+      if (side === "left") setLeftWidth(leftWidthRef.current);
+      else setRightWidth(rightWidthRef.current);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
   }, []);
 
-  const setEmpty = useCallback((sid: string, empty: boolean) => {
-    setEmptyMap((m) => (m[sid] === empty ? m : { ...m, [sid]: empty }));
+  // 选中会话: 退出草稿态, 确保进入 openSids (常驻), 再设为当前
+  const selectSession = useCallback((sid: string) => {
+    setComposing(false);
+    setOpenSids((prev) => (prev.includes(sid) ? prev : [...prev, sid]));
+    setSelectedSid(sid);
   }, []);
 
   // 一轮对话完成: 刷新该会话图谱 + 会话列表 (last_user_message_at 已落盘,
@@ -70,7 +176,6 @@ export default function Workspace() {
   );
 
   // 新建会话首条消息发出 → 主流程之外并行用 light LLM 起标题 (不等整轮跑完)。
-  // 把首条文本直传后端, 避免读尚未落盘的 transcript。
   const handleFirstMessage = useCallback(
     (sid: string, text: string) => {
       if (!needTitleRef.current.has(sid)) return;
@@ -82,44 +187,51 @@ export default function Workspace() {
     [queryClient],
   );
 
-  const createMut = useMutation({
-    mutationFn: () => createSession(NEW_SESSION_TITLE),
-    onSuccess: async (res) => {
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      setEmpty(res.sid, true); // 新会话本就空
-      needTitleRef.current.add(res.sid); // 首轮后自动起标题
-      selectSession(res.sid);
-    },
-  });
-
-  // 新建守卫: 当前已是一个空会话 → 留在原地, 不再堆一条空记录
+  // 点"+新建": 仅进入草稿态, 不在后端创建数据 (避免列表里立刻多一条空"新会话")。
   const handleNew = useCallback(() => {
-    if (createMut.isPending) return;
-    if (selectedSid && (emptyMap[selectedSid] ?? true)) return;
-    createMut.mutate();
-  }, [createMut, selectedSid, emptyMap]);
+    if (composing) return; // 已在草稿中
+    setSelectedSid(null);
+    setComposing(true);
+  }, [composing]);
 
-  const deleteMut = useMutation({
-    mutationFn: (sid: string) => deleteSession(sid),
-    onSuccess: async (_res, sid) => {
+  // 草稿首条消息发出 → 此刻才真正 createSession, 挂载实会话面板并把消息自动发出。
+  const handleDraftSend = useCallback(
+    async (text: string) => {
+      if (creatingRef.current) return;
+      creatingRef.current = true;
+      try {
+        const { sid } = await createSession(NEW_SESSION_TITLE);
+        needTitleRef.current.add(sid); // 首条消息后自动起标题
+        setPendingMsg((m) => ({ ...m, [sid]: text })); // 实面板挂载后自动发
+        setOpenSids((prev) => (prev.includes(sid) ? prev : [...prev, sid]));
+        setSelectedSid(sid);
+        setComposing(false);
+        void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      } finally {
+        creatingRef.current = false;
+      }
+    },
+    [queryClient],
+  );
+
+  const handleDelete = useCallback(
+    async (sid: string) => {
+      if (!window.confirm("删除该会话? 此操作不可恢复。")) return;
+      try {
+        await deleteSession(sid);
+      } catch {
+        return; // 失败保持原状
+      }
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       setOpenSids((prev) => prev.filter((s) => s !== sid)); // 卸载其 ChatPanel
-      setEmptyMap((m) => {
+      setPendingMsg((m) => {
         const next = { ...m };
         delete next[sid];
         return next;
       });
       if (sid === selectedSid) setSelectedSid(null); // 删的是当前 → 回到空白
     },
-  });
-
-  const handleDelete = useCallback(
-    (sid: string) => {
-      if (deleteMut.isPending) return;
-      if (!window.confirm("删除该会话? 此操作不可恢复。")) return;
-      deleteMut.mutate(sid);
-    },
-    [deleteMut],
+    [queryClient, selectedSid],
   );
 
   const cls = [
@@ -130,8 +242,10 @@ export default function Workspace() {
     .filter(Boolean)
     .join(" ");
 
+  const gridCols = computeGridCols(leftWidth, rightWidth, leftCollapsed, rightCollapsed);
+
   return (
-    <div className={cls}>
+    <div className={cls} ref={workspaceRef} style={{ gridTemplateColumns: gridCols }}>
       {/* 左: 会话列表 (可折叠) */}
       <aside className="workspace-left">
         <div className="workspace-pane-header">
@@ -147,14 +261,24 @@ export default function Workspace() {
         </div>
         <div className="workspace-pane-body">
           <SessionSidebar
-            selectedSid={selectedSid}
+            selectedSid={composing ? null : selectedSid}
             onSelect={selectSession}
             onNew={handleNew}
             onDelete={handleDelete}
-            creating={createMut.isPending}
+            creating={composing}
           />
         </div>
       </aside>
+
+      {/* 左侧拖拽手柄 */}
+      {!leftCollapsed && (
+        <div
+          ref={leftHandleRef}
+          className="workspace-drag-handle"
+          style={{ left: leftWidth - 3 }}
+          onMouseDown={startDrag("left")}
+        />
+      )}
 
       {/* 左侧折叠后的展开条 */}
       <button
@@ -168,7 +292,12 @@ export default function Workspace() {
       </button>
 
       <section className="workspace-center">
-        {!selectedSid && (
+        {composing && (
+          <div className="chat-host" style={{ display: "flex" }}>
+            <DraftChatPanel onSend={handleDraftSend} />
+          </div>
+        )}
+        {!composing && !selectedSid && (
           <div className="workspace-hint">
             从左侧选择一个 session，或新建一个开始对话。
           </div>
@@ -179,18 +308,30 @@ export default function Workspace() {
           <div
             key={sid}
             className="chat-host"
-            style={{ display: sid === selectedSid ? "flex" : "none" }}
+            style={{
+              display: !composing && sid === selectedSid ? "flex" : "none",
+            }}
           >
             <ChatPanel
               sid={sid}
-              active={sid === selectedSid}
+              active={!composing && sid === selectedSid}
+              initialMessage={pendingMsg[sid]}
               onTurnComplete={() => handleTurnComplete(sid)}
               onFirstMessage={(text) => handleFirstMessage(sid, text)}
-              onEmptyChange={(empty) => setEmpty(sid, empty)}
             />
           </div>
         ))}
       </section>
+
+      {/* 右侧拖拽手柄 */}
+      {!rightCollapsed && (
+        <div
+          ref={rightHandleRef}
+          className="workspace-drag-handle"
+          style={{ right: rightWidth - 3 }}
+          onMouseDown={startDrag("right")}
+        />
+      )}
 
       {/* 右侧折叠后的展开条 */}
       <button
@@ -217,7 +358,7 @@ export default function Workspace() {
           <span className="workspace-pane-title">知识图谱</span>
         </div>
         <div className="workspace-pane-body">
-          {selectedSid ? (
+          {!composing && selectedSid ? (
             <GraphPanel key={selectedSid} sid={selectedSid} />
           ) : (
             <div className="workspace-hint">

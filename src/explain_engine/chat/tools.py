@@ -365,9 +365,9 @@ class _AddObservationInput(BaseModel):
     description: str = Field(min_length=1, description="详细描述")
     source: Literal["user_explicit", "llm_inferred"] = Field(
         description=(
-            "user_explicit = user 明确说加 (直接执行); "
-            "llm_inferred = LLM 自己推断 (HITL gate confirm). "
-            "默认行为见 chat/hitl.py."
+            "user_explicit = user 明确说加; "
+            "llm_inferred = 你自己分析推断. "
+            "两者均直接执行 (Phase X2 全采纳)."
         )
     )
 
@@ -395,8 +395,9 @@ add_observation_tool = Tool(
     input_schema=_AddObservationInput,
     description=lambda ctx: (
         "添加新 L0 observation 到 graph. "
-        "若 user 明确说'加这个观察' → source='user_explicit' (直接执行). "
-        "若 LLM 自己推断该加 → source='llm_inferred' (触发 user confirm via hitl gate)."
+        "若 user 明确说'加这个观察' → source='user_explicit'; "
+        "若你自己分析推断该加 → source='llm_inferred'. "
+        "两者均会直接执行 (Phase X2 全采纳), 用户可 /review 事后修订."
     ),
     call=_add_observation_call,
     requires_hitl=True,  # Conditional gate; chat/hitl.py checks source

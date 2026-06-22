@@ -2240,6 +2240,127 @@ async def _handle_migrate(chat: ChatSession, args: list[str]) -> list[ChatEvent]
 # ─────────────────────────────────────────────────────────────────────────
 
 
+_pipeline_log = logging.getLogger(__name__ + ".auto_pipeline")
+
+
+async def _auto_pipeline_stream(chat):
+    """Post-promote 自动管线 (async generator): compress → run → ground.
+
+    边执行边 yield status_start/status_end 事件, 让 web 前端实时显示进度.
+    TUI 端仍走 _spinner (textual mount / Rich fallback) 做本地 spinner.
+    """
+    import asyncio
+    from collections.abc import AsyncIterator
+
+    from explain_engine.chat.chat_copy import (
+        STATUS_AUTO_COMPRESS,
+        STATUS_AUTO_GROUND,
+        STATUS_AUTO_RUN,
+        msg_auto_pipeline_done,
+    )
+    from explain_engine.chat.session import ChatEvent
+    from explain_engine.config import make_light_llm_client
+    from explain_engine.engines.compression import propose_candidates
+    from explain_engine.engines.evaluation import score_all
+    from explain_engine.engines.grounding import ground_state
+    from explain_engine.engines.lexicon import (
+        flush_to_lexicon,
+        get_lexicon_top_k_for_compress,
+    )
+    from explain_engine.hitl.cli_interactive import review_insights_async
+    from explain_engine.runtime.runtime import run as runtime_run
+
+    # ── 1/3 Compress: propose + score + 全采纳 + lexicon ──
+    yield ChatEvent(type="status_start", content=STATUS_AUTO_COMPRESS)
+    try:
+        top_k = await asyncio.to_thread(
+            get_lexicon_top_k_for_compress, chat.storage, k=20,
+        )
+        await propose_candidates(chat.state, chat.llm, existing_lexicon=top_k)
+        await score_all(chat.state, chat.llm)
+    except Exception as exc:
+        yield ChatEvent(type="status_end", content=None)
+        yield ChatEvent(type="slash_error", content=err_failed("deepen/compress", exc))
+        return
+    yield ChatEvent(type="status_end", content=None)
+
+    await review_insights_async(chat.state, None)
+
+    chat._session.meta.stage = "done"
+    chat.persist()
+
+    try:
+        light_llm = make_light_llm_client()
+    except Exception:
+        light_llm = None
+    _pipeline_log.info("[auto_pipeline] lexicon flush start...")
+    try:
+        await flush_to_lexicon(
+            chat._session, chat.storage,
+            llm=chat.llm, light_llm=light_llm,
+        )
+        _pipeline_log.info("[auto_pipeline] lexicon flush done")
+    except Exception as exc:
+        _pipeline_log.warning("[auto_pipeline] lexicon flush failed: %s", exc)
+
+    # ── 2/3 Run: 推理循环 ──
+    if chat.chat_state.budget_per_session_limit == 0:
+        budget = 10**9
+    else:
+        budget = max(chat.state.budget_remaining, 1)
+
+    yield ChatEvent(type="status_start", content=STATUS_AUTO_RUN)
+    try:
+        reason = await runtime_run(chat.state, chat.llm, budget=budget)
+    except Exception as exc:
+        yield ChatEvent(type="status_end", content=None)
+        yield ChatEvent(type="slash_error", content=err_failed("deepen/run", exc))
+        return
+    yield ChatEvent(type="status_end", content=None)
+
+    chat._session.meta.stage = "converged"
+    chat.persist()
+
+    # ── 3/3 Ground: 证据接地 ──
+    ground_note = ""
+    yield ChatEvent(type="status_start", content=STATUS_AUTO_GROUND)
+    try:
+        gsum = await ground_state(chat.state, make_light_llm_client())
+        _pipeline_log.info("[auto_pipeline] ground_state returned, persisting...")
+        chat.persist()
+        _pipeline_log.info("[auto_pipeline] persist done")
+        if gsum.targets_total:
+            ground_note = (
+                f", 已接地 {gsum.targets_total} 对象 "
+                f"(实证 {gsum.verified} / 争议 {gsum.contested} / "
+                f"未验证 {gsum.unverified})"
+            )
+    except Exception as exc:
+        _pipeline_log.warning("[auto_pipeline] ground phase failed: %s", exc)
+        ground_note = f" (接地失败: {type(exc).__name__})"
+    yield ChatEvent(type="status_end", content=None)
+
+    n_l1 = sum(
+        1 for n in chat.state.graph.nodes.values()
+        if n.abstraction_level == 1
+    )
+    _pipeline_log.info("[auto_pipeline] done")
+    yield ChatEvent(
+        type="slash_auto_pipeline",
+        content=msg_auto_pipeline_done(
+            n_l1=n_l1,
+            stop_reason=reason,
+            tick=chat.state.tick,
+            ground_note=ground_note,
+        ),
+    )
+
+
+async def _auto_pipeline(chat) -> list["ChatEvent"]:
+    """批量版 — 收集 _auto_pipeline_stream 的所有事件为 list (TUI/CLI 兼容)."""
+    return [ev async for ev in _auto_pipeline_stream(chat)]
+
+
 async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
     """Phase 18: /deepen [question] — ephemeral 状态显式触发 bootstrap pipeline.
 
@@ -2257,19 +2378,18 @@ async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
     )
     from explain_engine.chat.session import ChatEvent
 
-    # 已 promote 的 ChatSession 内 /deepen → 拒绝 + 提示 /new
+    # 已 promote 的 persistent ChatSession: 直接重跑管线.
+    # (旧设计限制"一 session 一 /deepen", 但管线本身幂等可重复,
+    # web 端用户追加观测后需要重新分析.)
     if not getattr(chat, "is_ephemeral", False):
-        # ChatSession.state 是 CognitiveState (field=root_question, 非 question);
-        # _handle_show 用 chat._session.meta.question, 这里跟它一致.
-        sess_meta = getattr(chat, "_session", None)
-        if sess_meta is not None and hasattr(sess_meta, "meta"):
-            current_q = sess_meta.meta.question
-        else:
-            current_q = getattr(getattr(chat, "state", None), "root_question", "?")
-        return [ChatEvent(
-            type="slash_error",
-            content=err_deepen_already_promoted(current_q),
-        )]
+        llm = getattr(chat, "llm", None)
+        if llm is None:
+            return [ChatEvent(
+                type="slash_error",
+                content="LLM 未配置, 无法 /deepen. 设 LLM_* env 后重启.",
+            )]
+        pipeline_events = await _auto_pipeline(chat)
+        return pipeline_events
 
     # 取 question: 带参用参; 不带参倒序取 transcript 末 role=user
     if args:
@@ -2327,6 +2447,11 @@ async def _handle_deepen(chat, args: list[str]) -> list[ChatEvent]:
         ),
         metadata={"sid": real_chat.sid},
     ))
+
+    # ── 自动管线: compress → run → ground ──
+    real_chat.tui_app = getattr(chat, "tui_app", None)
+    pipeline_events = await _auto_pipeline(real_chat)
+    events.extend(pipeline_events)
     return events
 
 

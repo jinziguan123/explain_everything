@@ -53,7 +53,9 @@ async def score_all(state: CognitiveState, llm: LLMClient) -> dict[str, float]:
     prompt = load_prompt("scoring")
 
     n_candidates = len(state.insight_candidates)
-    for cand_idx, cid in enumerate(state.insight_candidates):
+    sem = asyncio.Semaphore(LLM_MAX_CONCURRENCY)
+
+    async def _score_candidate(cand_idx: int, cid: str) -> tuple[str, float]:
         cand = state.graph.nodes[cid]
         out_edges = [
             e
@@ -61,8 +63,7 @@ async def score_all(state: CognitiveState, llm: LLMClient) -> dict[str, float]:
             if e.source_node == cid and e.relation_type == "manifests_as"
         ]
         if not out_edges or total_concrete == 0:
-            gains[cid] = 0.0
-            continue
+            return cid, 0.0
 
         covered = len(out_edges)
         representation_reduction = covered / total_concrete
@@ -70,20 +71,15 @@ async def score_all(state: CognitiveState, llm: LLMClient) -> dict[str, float]:
         n_edges = len(out_edges)
         logger.info(
             f"[score_all] candidate {cand_idx+1}/{n_candidates} "
-            f"({cid}): scoring {n_edges} edges concurrently "
+            f"({cid}): scoring {n_edges} edges "
             f"(max {LLM_MAX_CONCURRENCY} parallel)..."
         )
 
-        # Phase 7 Wave C 补丁: 并发 scoring (原 for-await 串行 → asyncio.gather + Semaphore)
-        sem = asyncio.Semaphore(LLM_MAX_CONCURRENCY)
         completed = 0
 
-        # 注: cid / cand / n_edges / sem 通过 default arg 绑当前 loop iteration 的值
-        # (避免 ruff B023 closure 闭包陷阱; 当前 score_all 内只有一个 candidate
-        # 在跑, 但 default arg 是 Python 习惯的安全写法)
-        async def _score_one(e, *, _cid=cid, _cand=cand, _n_edges=n_edges, _sem=sem):
+        async def _score_one(e, *, _cid=cid, _cand=cand, _n_edges=n_edges):
             nonlocal completed
-            async with _sem:
+            async with sem:
                 concrete = state.graph.nodes[e.target_node]
                 score = await _score_edge(
                     llm,
@@ -106,17 +102,23 @@ async def score_all(state: CognitiveState, llm: LLMClient) -> dict[str, float]:
         scores = list(scores_by_edge.values())
 
         explanatory_preservation = (sum(scores) / len(scores)) / 5.0
-        gains[cid] = representation_reduction * explanatory_preservation
+        gain = representation_reduction * explanatory_preservation
 
-        # Wave A (Phase 7 design §4.2): 写回 edge.confidence = score / 5.0
         for edge_id, score in scores_by_edge.items():
             state.graph.edges[edge_id].confidence = score / 5.0
+
+        return cid, gain
+
+    results = await asyncio.gather(*[
+        _score_candidate(i, cid)
+        for i, cid in enumerate(state.insight_candidates)
+    ])
+    gains = dict(results)
 
     # 降序重排
     state.insight_candidates = sorted(
         state.insight_candidates, key=lambda cid: gains[cid], reverse=True
     )
-    # Phase 5: 持久化 last_gains（覆盖旧值），让 HITL 2 重入 + Runtime loop 读得到
     state.last_gains = dict(gains)
     return gains
 

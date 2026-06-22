@@ -2,13 +2,12 @@
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  /* 左面板 | 左展开条 | 中间(聊天) | 右展开条 | 右面板(图谱) */
-  grid-template-columns: 280px 0 minmax(360px, 1.4fr) 0 minmax(0, 1fr);
-  /* 关键: 显式行高铺满容器。否则行按内容撑高, 中间列内容(绝对定位)高度为 0 时
-     行高塌陷 → 聊天区高度归零、内容不显示。minmax(0,1fr) 让三栏始终满高。 */
+  /* 左面板 | 左展开条 | 中间(聊天) | 右展开条 | 右面板(图谱)
+     列宽由 JS inline style 动态生成 (支持拖拽调宽), 此处仅做 fallback。 */
+  grid-template-columns: 280px 0 minmax(320px, 1fr) 0 420px;
   grid-template-rows: minmax(0, 1fr);
+  position: relative;
   background: var(--bg);
-  transition: grid-template-columns var(--dur) var(--ease);
 }
 
 /* 关键: 给每个子项显式 grid-column。展开条平时 display:none, 若不固定列,
@@ -19,19 +18,7 @@
 .workspace-strip-right { grid-column: 4; }
 .workspace-right { grid-column: 5; }
 
-/* 左折叠: 左面板 -> 0, 左展开条 -> 30px */
-.workspace.left-collapsed {
-  grid-template-columns: 0 30px minmax(360px, 1.4fr) 0 minmax(0, 1fr);
-}
-
-/* 右折叠: 右面板 -> 0, 右展开条 -> 30px */
-.workspace.right-collapsed {
-  grid-template-columns: 280px 0 minmax(360px, 1fr) 30px 0;
-}
-
-.workspace.left-collapsed.right-collapsed {
-  grid-template-columns: 0 30px minmax(360px, 1fr) 30px 0;
-}
+/* 折叠态的 grid-template-columns 由 JS inline style 动态生成 */
 
 .workspace-left,
 .workspace-center,
@@ -41,6 +28,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: opacity 120ms ease-out;
 }
 
 .workspace-left {
@@ -72,6 +60,7 @@
 .workspace.right-collapsed .workspace-right {
   border: 0;
   visibility: hidden;
+  opacity: 0;
 }
 
 /* 面板头部: 标题 + 折叠按钮 */
@@ -192,6 +181,43 @@
   font-size: 11px;
   letter-spacing: 0.1em;
   color: var(--text-subtle);
+}
+
+/* 拖拽手柄: 面板边界的透明拖拽条, 悬停显示蓝色指示条 */
+.workspace-drag-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 20;
+  cursor: col-resize;
+  transition: background 0.15s ease;
+}
+
+.workspace-drag-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 32px;
+  border-radius: 1px;
+  background: var(--border-strong, #bcc3cd);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.workspace-drag-handle:hover::after {
+  opacity: 1;
+}
+
+.workspace-drag-handle:hover {
+  background: rgba(47, 109, 246, 0.12);
+}
+
+.workspace-drag-handle:active {
+  background: rgba(47, 109, 246, 0.25);
 }
 
 .workspace-hint {

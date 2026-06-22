@@ -40,6 +40,29 @@ class TestParse:
         html = '<div class="result"><a class="result__a" href="https://x.com">T</a></div>' * 5
         assert len(ws._parse_results(html, 2)) == 2
 
+    def test_parse_results_lite(self) -> None:
+        html = (
+            '<table>'
+            '<tr><td><a class="result-link" href="https://a.com">Title A</a></td></tr>'
+            '<tr><td class="result-snippet">Snippet A</td></tr>'
+            '<tr><td><a class="result-link" href="https://b.com">Title B</a></td></tr>'
+            '<tr><td class="result-snippet">Snippet B</td></tr>'
+            '</table>'
+        )
+        rs = ws._parse_results_lite(html, 5)
+        assert len(rs) == 2
+        assert rs[0].url == "https://a.com"
+        assert rs[0].title == "Title A"
+        assert rs[0].snippet == "Snippet A"
+        assert rs[1].url == "https://b.com"
+
+    def test_parse_results_lite_respects_max(self) -> None:
+        html = (
+            '<a class="result-link" href="https://x.com">T</a>'
+            '<td class="result-snippet">S</td>'
+        ) * 5
+        assert len(ws._parse_results_lite(html, 2)) == 2
+
     def test_unwrap_handles_plain_url(self) -> None:
         assert ws._unwrap_ddg_url("https://plain.com/p") == "https://plain.com/p"
 
@@ -60,6 +83,57 @@ class TestParse:
 
 
 # ───────────────────────── 工具层 ─────────────────────────
+
+class TestWebSearchFallback:
+    """主端点失败时 fallback 到 lite 端点。"""
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_html_error(self, monkeypatch) -> None:
+        """html 端点抛异常 → 自动走 lite。"""
+        call_log = []
+
+        async def fake_fetch(client, endpoint, query, max_results, parser):
+            call_log.append(endpoint)
+            if "html.duckduckgo.com" in endpoint:
+                raise RuntimeError("html down")
+            return [ws.SearchResult("Lite Result", "https://lite.example.com", "from lite")]
+
+        monkeypatch.setattr(ws, "_fetch_and_parse", fake_fetch)
+        results = await ws.web_search("test")
+        assert len(results) == 1
+        assert results[0].title == "Lite Result"
+        assert len(call_log) == 2  # html 先试, lite 兜底
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_empty_results(self, monkeypatch) -> None:
+        """html 端点返回空结果 → 自动走 lite。"""
+        call_log = []
+
+        async def fake_fetch(client, endpoint, query, max_results, parser):
+            call_log.append(endpoint)
+            if "html.duckduckgo.com" in endpoint:
+                return []
+            return [ws.SearchResult("Lite", "https://l.com", "s")]
+
+        monkeypatch.setattr(ws, "_fetch_and_parse", fake_fetch)
+        results = await ws.web_search("test")
+        assert len(results) == 1
+        assert len(call_log) == 2
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_when_html_succeeds(self, monkeypatch) -> None:
+        """html 端点成功 → 不走 lite。"""
+        call_log = []
+
+        async def fake_fetch(client, endpoint, query, max_results, parser):
+            call_log.append(endpoint)
+            return [ws.SearchResult("HTML", "https://h.com", "s")]
+
+        monkeypatch.setattr(ws, "_fetch_and_parse", fake_fetch)
+        results = await ws.web_search("test")
+        assert results[0].title == "HTML"
+        assert len(call_log) == 1  # 只调了 html
+
 
 class TestWebSearchTool:
     @pytest.mark.asyncio

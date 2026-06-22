@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from explain_engine.web.sse import chat_event_to_sse, sid_lock, sse_pack
 
 if TYPE_CHECKING:
-    from explain_engine.chat.session import ChatSession
+    from explain_engine.chat.session import ChatEvent, ChatSession
     from explain_engine.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -114,6 +114,32 @@ def stop_run(sid: str) -> bool:
     return False
 
 
+_SLASH_ERROR_TYPES = frozenset({"slash_error", "slash_unknown"})
+_WEB_PASSTHROUGH = frozenset({
+    "status_start", "status_end", "turn_complete", "run_start",
+    "assistant_text_delta", "thinking_delta", "tool_use", "tool_result",
+    "budget_exhausted", "error",
+})
+
+
+def _to_web_sse(ev: "ChatEvent") -> str:
+    """将 ChatEvent 转为 web 前端能识别的 SSE 帧。
+
+    Web 前端 handleEvent 只处理标准事件类型; slash_* 自定义类型会被
+    default:break 静默忽略. 此函数将 slash 事件转译为前端能渲染的类型.
+    """
+    if ev.type in _WEB_PASSTHROUGH:
+        return chat_event_to_sse(ev)
+    if ev.type in _SLASH_ERROR_TYPES:
+        return sse_pack("error", {"content": ev.content, "metadata": ev.metadata})
+    content = ev.content
+    if isinstance(content, str) and content:
+        return sse_pack("assistant_text_delta", {
+            "content": content, "metadata": ev.metadata,
+        })
+    return ""
+
+
 async def _drive(
     run: ChatRun,
     chat_session: ChatSession,
@@ -126,8 +152,12 @@ async def _drive(
     """
     try:
         async with sid_lock(run.sid):
+            logger.info("[_drive] %s: start handle_user_input(%r)", run.sid, message)
             async for ev in chat_session.handle_user_input(message, llm):
-                run.append(chat_event_to_sse(ev))
+                logger.info("[_drive] %s: event type=%s content=%r", run.sid, ev.type, str(ev.content)[:80] if ev.content else None)
+                frame = _to_web_sse(ev)
+                if frame:
+                    run.append(frame)
     except asyncio.CancelledError:
         run.append(sse_pack("error", {"content": "生成已停止"}))
         raise

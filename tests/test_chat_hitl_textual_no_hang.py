@@ -1,23 +1,11 @@
-"""P-1 hotfix regression: chat/hitl.py textual 死锁修.
+"""P-1 hotfix regression + Phase X2 全采纳: chat/hitl.py textual 行为.
 
-老 bug (复现 path):
-- chat/hitl.py:_default_prompt 用 asyncio.to_thread(input, prompt_text) 收 y/n
-- chat/loop.py:239 调 hitl_gate(tool, parsed_input, ctx) 没传 prompt_fn → 走默
-  _default_prompt
-- LLM 调 add_observation tool with source=llm_inferred → query_loop → hitl_gate
-  → _default_prompt → builtin input
-- textual ExplainChatApp hold stdin raw mode → builtin input 永远 block
-- app 整体死锁, Ctrl+C 也无法退出 (同 9838507 commit 修的 /resume 死锁机理)
+P-1 原 bug: textual hold stdin → builtin input 死锁.
+P-1 修法: prompt_fn=None → safe deny (return False).
+Phase X2 改进: prompt_fn=None → 自动采纳 (return True), 与 bootstrap/compress
+全采纳策略一致, 用户通过 /review 事后修订. 仍不调 _default_prompt, 避免死锁.
 
-修法 (本 hotfix):
-- hitl_gate signature: prompt_fn: PromptFn | None = None (老默 _default_prompt)
-- prompt_fn=None 且需弹 prompt → log warning + return False (safe deny)
-- chat/loop.py:239 显式传 prompt_fn=chat.input_provider:
-  - cli 模式: input_provider = lambda prompt: read_input(pt_session, prompt) →
-    prompt_toolkit safe path → 正常 y/n
-  - textual 模式: input_provider = None → safe deny + log → 永不调 builtin input
-
-参考: 9838507 commit message 段 "其他受影响 slash handler 审计" 标记的 follow-up.
+参考: 9838507 commit + Phase X2 commit 7580209.
 """
 
 from __future__ import annotations
@@ -50,11 +38,10 @@ def _make_ctx() -> ToolContext:
 
 
 class TestHitlGatePromptFnNone:
-    """P-1 fix: prompt_fn=None 是 textual-mode 显式 safe fallback.
+    """Phase X2: prompt_fn=None (textual 模式) → 自动采纳 llm_inferred.
 
     ExplainChatApp 不能弹 builtin input (会 hold stdin 死锁), 所以 textual
-    模式下 chat.input_provider 留 None. query_loop 把它传给 hitl_gate → safe
-    deny.
+    模式下 chat.input_provider 留 None. Phase X2 改为自动采纳 + /review 修订.
     """
 
     @pytest.mark.asyncio
@@ -78,8 +65,8 @@ class TestHitlGatePromptFnNone:
         assert approved is True
 
     @pytest.mark.asyncio
-    async def test_none_prompt_llm_inferred_safe_denies(self) -> None:
-        """关键: llm_inferred + prompt_fn=None → safe deny (False), 不 raise."""
+    async def test_none_prompt_llm_inferred_auto_approved(self) -> None:
+        """Phase X2: llm_inferred + prompt_fn=None → 自动采纳 (True)."""
         ctx = _make_ctx()
         parsed = _AddObservationInput(
             name="x", description="d", source="llm_inferred",
@@ -87,24 +74,23 @@ class TestHitlGatePromptFnNone:
         approved = await hitl_gate(
             add_observation_tool, parsed, ctx, prompt_fn=None,
         )
-        assert approved is False
+        assert approved is True
 
     @pytest.mark.asyncio
-    async def test_none_prompt_llm_inferred_logs_warning(
+    async def test_none_prompt_llm_inferred_logs_info(
         self, caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """safe deny 时 log WARNING, 含 obs name — 用户能从 log 看到发生了啥."""
+        """自动采纳时 log INFO, 含 obs name — 用户能从 log 看到发生了啥."""
         ctx = _make_ctx()
         parsed = _AddObservationInput(
             name="my_obs", description="d", source="llm_inferred",
         )
-        with caplog.at_level(logging.WARNING, logger="explain_engine.chat.hitl"):
+        with caplog.at_level(logging.INFO, logger="explain_engine.chat.hitl"):
             await hitl_gate(
                 add_observation_tool, parsed, ctx, prompt_fn=None,
             )
-        # warning 应提到 obs name (用户能看到 LLM 想加什么)
         assert any("my_obs" in r.message for r in caplog.records), (
-            f"未找到 obs name 'my_obs' 的 warning, records="
+            f"未找到 obs name 'my_obs' 的 info log, records="
             f"{[r.message for r in caplog.records]}"
         )
 
@@ -113,24 +99,23 @@ class TestHitlGatePromptFnNone:
 
 
 class TestHitlGateDefaultIsNone:
-    """P-1 fix: hitl_gate 默 prompt_fn 老是 _default_prompt (→ asyncio.to_thread
-    (input) → textual hang). 修后默 None → safe deny.
+    """P-1 fix + X2: hitl_gate 默 prompt_fn=None (不走 _default_prompt).
+    X2 改为自动采纳.
     """
 
     @pytest.mark.asyncio
-    async def test_default_prompt_fn_no_arg_safe_denies(self) -> None:
-        """不传 prompt_fn (走默) + llm_inferred → safe deny.
+    async def test_default_prompt_fn_no_arg_auto_approves(self) -> None:
+        """不传 prompt_fn (走默) + llm_inferred → 自动采纳 (X2).
 
-        老 bug: 默 _default_prompt 调 input() → 阻塞.
-        修后: 默 None → safe deny 立即返 False.
+        P-1: 默 None 不走 _default_prompt (避免死锁).
+        X2: None → 自动采纳 (True).
         """
         ctx = _make_ctx()
         parsed = _AddObservationInput(
             name="x", description="d", source="llm_inferred",
         )
-        # 关键: 不显式传 prompt_fn — 走默. 修前: 走 _default_prompt 调 input.
         approved = await hitl_gate(add_observation_tool, parsed, ctx)
-        assert approved is False
+        assert approved is True
 
 
 # ─── 3. regression: 模拟 textual hold stdin (老 bug 复现) ───
@@ -138,8 +123,7 @@ class TestHitlGateDefaultIsNone:
 
 class TestHitlGateNoHangWithBlockingInput:
     """P-1 regression: 模拟 textual hold stdin (builtin input 永远 block) — 5s
-    wait_for. 修前: 默 _default_prompt 走 asyncio.to_thread(input) → block →
-    test 超时 fail. 修后: 默 None → safe deny 立即返 → test 通过.
+    wait_for. 默 prompt_fn=None 不走 _default_prompt, 立即返 (X2: 返 True).
     """
 
     @pytest.mark.asyncio
@@ -151,7 +135,6 @@ class TestHitlGateNoHangWithBlockingInput:
         import time
 
         def _blocking_input(prompt: str = "") -> str:
-            # 模拟 textual hold stdin: builtin input 永远 block
             time.sleep(60)
             return "n"
 
@@ -161,14 +144,13 @@ class TestHitlGateNoHangWithBlockingInput:
         parsed = _AddObservationInput(
             name="x", description="d", source="llm_inferred",
         )
-        # 修前: 默 _default_prompt → asyncio.to_thread(_blocking_input) →
-        # 60s sleep → 5s wait_for 超时 → fail.
-        # 修后: 默 None → safe deny → 立即返 False.
+        # P-1: 不走 _default_prompt (不调 input), 立即返.
+        # X2: 返 True (自动采纳).
         approved = await asyncio.wait_for(
             hitl_gate(add_observation_tool, parsed, ctx),
             timeout=5.0,
         )
-        assert approved is False
+        assert approved is True
 
 
 # ─── 4. integration: query_loop 把 chat.input_provider 传给 hitl_gate ───
@@ -279,17 +261,15 @@ class TestQueryLoopPassesInputProvider:
         )
 
     @pytest.mark.asyncio
-    async def test_query_loop_none_input_provider_safe_denies_no_hang(
+    async def test_query_loop_none_input_provider_auto_approves_no_hang(
         self, tmp_path, monkeypatch,
     ) -> None:
-        """textual 模式 simulation: chat.input_provider=None + LLM 推 add_observation
-        llm_inferred → 5s wait_for. 修前: 走 _default_prompt → asyncio.to_thread
-        (input) → textual hold stdin → block. 修后: safe deny 立即返.
+        """Phase X2: textual 模式 chat.input_provider=None + LLM 推 add_observation
+        llm_inferred → 自动采纳 (不阻塞, 不死锁).
         """
         monkeypatch.setenv("EXPLAIN_HOME", str(tmp_path))
         monkeypatch.setenv("EXPLAIN_PROJECT_ID", "test_hitl_p1_no_provider")
 
-        # 模拟 textual hold stdin: monkey patch input 60s block
         import builtins
         import time
 
@@ -302,7 +282,6 @@ class TestQueryLoopPassesInputProvider:
         from explain_engine.chat.loop import ToolResultEvent, query_loop
 
         chat = _make_chat_session("s_b1b00001")
-        # textual 模式: 不设 input_provider (默 None)
         assert chat.input_provider is None, "default 应为 None"
 
         llm = _FakeLLMClient([
@@ -328,13 +307,12 @@ class TestQueryLoopPassesInputProvider:
                 events.append(ev)
             return events
 
-        # 5s wait_for — 修前会 timeout, 修后立即返
         events = await asyncio.wait_for(_run_loop(), timeout=5.0)
 
         tool_results = [ev for ev in events if isinstance(ev, ToolResultEvent)]
         assert len(tool_results) == 1
         assert tool_results[0].tool_name == "add_observation"
-        # safe deny 写入 result 走老 "user denied via HITL gate"
-        assert "denied" in tool_results[0].result.lower(), (
-            f"prompt_fn=None 应 safe deny, 实际 result={tool_results[0].result!r}"
+        # X2: 自动采纳, result 不含 "denied"
+        assert "denied" not in tool_results[0].result.lower(), (
+            f"X2 应自动采纳, 实际 result={tool_results[0].result!r}"
         )
