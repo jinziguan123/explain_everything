@@ -114,8 +114,12 @@ export async function rejectTheory(id: string): Promise<{ rejected: boolean }> {
 
 // ── Phase X1: 报告 / 接地 / 预测台账 ──────────────────────────
 
-export async function generateReport(sid: string): Promise<{ markdown: string }> {
-  const r = await fetch(`/api/sessions/${sid}/report`, { method: "POST" });
+export async function generateReport(sid: string, topic?: string): Promise<{ markdown: string }> {
+  const r = await fetch(`/api/sessions/${sid}/report`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic: topic || null }),
+  });
   if (!r.ok) throw new Error(`generateReport ${r.status}`);
   return r.json();
 }
@@ -133,8 +137,12 @@ export interface GroundResult {
   tier_distribution: Record<string, number>;
 }
 
-export async function groundSession(sid: string): Promise<GroundResult> {
-  const r = await fetch(`/api/sessions/${sid}/ground`, { method: "POST" });
+export async function groundSession(sid: string, incremental = true): Promise<GroundResult> {
+  const r = await fetch(`/api/sessions/${sid}/ground`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ incremental }),
+  });
   if (!r.ok) throw new Error(`groundSession ${r.status}`);
   return r.json();
 }

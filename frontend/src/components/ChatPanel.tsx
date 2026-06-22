@@ -4,6 +4,17 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+
+// CommonMark flanking 规则修复:
+//  1. 汉字**开引号/括号 → 插入空格让 ** 满足 left-flanking
+//  2. 非*标点**汉字  → 插入零宽连接符(ZWJ)让 ** 满足 right-flanking
+//     空格会破坏 right-flanking; ZWJ 既非空白也非标点,不影响解析。
+//     (?!\*) 排除 * 自身(Po 类别),否则 ZWJ 会插入 ** 内部。
+const fixCjkEmphasis = (md: string): string =>
+  md
+    .replace(/(\p{Script=Han})(\*{1,3})(\p{Pi}|\p{Ps})/gu, "$1 $2$3")
+    .replace(/((?!\*)\p{P})(\*{1,3})(\p{Script=Han})/gu, "$1‍$2$3");
+
 import { openChatStream, startChat, stopChat } from "../api/chatStream";
 import type { SSEEvent } from "../api/chatStream";
 import { getTranscript } from "../api/client";
@@ -548,7 +559,7 @@ export default function ChatPanel({
                       remarkPlugins={[remarkGfm, remarkMath]}
                       rehypePlugins={[rehypeKatex]}
                     >
-                      {m.text}
+                      {fixCjkEmphasis(m.text)}
                     </ReactMarkdown>
                   </div>
                 )}

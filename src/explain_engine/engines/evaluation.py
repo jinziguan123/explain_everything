@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
@@ -23,9 +24,8 @@ from explain_engine.schema.state import CognitiveState
 logger = logging.getLogger(__name__)
 
 
-LLM_MAX_CONCURRENCY: int = 5
-"""Max concurrent LLM calls in score_all. Test via monkeypatch.setattr.
-Phase 8 may move to env var."""
+LLM_MAX_CONCURRENCY: int = int(os.environ.get("LLM_MAX_CONCURRENCY", "50"))
+"""Max concurrent LLM calls in score_all."""
 
 
 class _ScoringOutput(BaseModel):

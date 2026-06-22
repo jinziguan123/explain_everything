@@ -7,11 +7,12 @@ import "./GraphPanel.css";
 export interface ReportModalProps {
   sid: string;
   open: boolean;
+  topic?: string;
   onClose: () => void;
 }
 
 /** Phase X1: 叙事报告面板 — 滩头用户的一等交付物 (生成 + 渲染 + 下载)。 */
-export default function ReportModal({ sid, open, onClose }: ReportModalProps) {
+export default function ReportModal({ sid, open, topic, onClose }: ReportModalProps) {
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -22,7 +23,7 @@ export default function ReportModal({ sid, open, onClose }: ReportModalProps) {
     setLoading(true);
     setError(null);
     setMarkdown(null);
-    generateReport(sid)
+    generateReport(sid, topic)
       .then((r) => {
         if (!cancelled) setMarkdown(r.markdown);
       })
@@ -35,7 +36,7 @@ export default function ReportModal({ sid, open, onClose }: ReportModalProps) {
     return () => {
       cancelled = true;
     };
-  }, [open, sid]);
+  }, [open, sid, topic]);
 
   if (!open) return null;
 

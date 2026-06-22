@@ -161,6 +161,15 @@ class _ClaimsOutput(BaseModel):
     claims: list[_ClaimItem]
 
 
+class _ClassifyItem(BaseModel):
+    target_id: str
+    type: Literal["axiomatic", "empirical"]
+
+
+class _ClassifyOutput(BaseModel):
+    classifications: list[_ClassifyItem]
+
+
 class _SourceStance(BaseModel):
     index: int = Field(ge=0)
     stance: Literal["support", "contradict", "irrelevant"]
@@ -287,6 +296,35 @@ async def _extract_claims(
     return {c.target_id: c.claim for c in out.claims if c.target_id in wanted}
 
 
+async def _classify_claims(
+    claims: dict[str, str], llm: LLMClient,
+) -> dict[str, str]:
+    """认知类型分类: 公理/定义类断言直接标 verified, 不走 web 检索。
+
+    Returns: {target_id: "axiomatic"|"empirical"}
+    """
+    if not claims:
+        return {}
+    prompt = load_prompt("grounding_classify")
+    table = "\n".join(f"- [{tid}] {claim}" for tid, claim in claims.items())
+    messages = [
+        Message(role="system", content=prompt["system"]),
+        Message(role="user", content=prompt["user_template"].format(claims_table=table)),
+    ]
+    try:
+        out: _ClassifyOutput = await call_with_retry(
+            llm, messages, _ClassifyOutput,
+            error_prefix="grounding 认知类型分类输出不合规",
+        )
+        result = {c.target_id: c.type for c in out.classifications if c.target_id in claims}
+    except Exception as exc:
+        logger.warning("grounding: claim classification failed (%s), treating all as empirical", exc)
+        result = {}
+    for tid in claims:
+        result.setdefault(tid, "empirical")
+    return result
+
+
 async def _judge_stances(
     claim: str, results: Sequence, llm: LLMClient,
 ) -> list[tuple[int, str]]:
@@ -361,6 +399,30 @@ async def ground_state(
         summary.edges_reweighted = apply_grounded_confidence(state)
         return summary
 
+    # ── 认知类型分类: 公理/定义类断言直接标 verified ──
+    classifications = await _classify_claims(claims, llm)
+    axiomatic_ids: set[str] = set()
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    for tid, ctype in classifications.items():
+        if ctype != "axiomatic":
+            continue
+        axiomatic_ids.add(tid)
+        if tid in state.graph.nodes:
+            node = state.graph.nodes[tid]
+            state.graph.replace_node(tid, node.model_copy(update={
+                "evidence_state": "verified",
+                "grounded_at": now,
+                **({"epistemic": "fact"} if node.abstraction_level == 0 else {}),
+            }))
+        elif tid in state.graph.edges:
+            edge = state.graph.edges[tid]
+            state.graph.replace_edge(tid, edge.model_copy(update={
+                "evidence_state": "verified",
+                "grounded_at": now,
+            }))
+        summary.verified += 1
+        logger.info("grounding: %s → verified (axiomatic: %s)", tid, claims.get(tid, ""))
+
     # ── 并发段: 只做 I/O (检索 + 判定), 不碰 state ──
     sem = asyncio.Semaphore(max(1, concurrency))
 
@@ -376,13 +438,15 @@ async def ground_state(
                 return target_id, [], [], exc
 
     ordered = [*l0_ids, *edge_ids]
-    with_claims = [(t, claims[t]) for t in ordered if claims.get(t)]
+    with_claims = [(t, claims[t]) for t in ordered if claims.get(t) and t not in axiomatic_ids]
     fetched = await asyncio.gather(*[_fetch(t, c) for t, c in with_claims])
     by_target = {t: (results, stances, err) for t, results, stances, err in fetched}
 
     # ── 串行段: 按原顺序落盘 (evidence id 确定性 + 无并发写 state) ──
-    now = datetime.now(UTC).isoformat(timespec="seconds")
-    for target_id in ordered:
+    ordered_all = [*l0_ids, *edge_ids]
+    for target_id in ordered_all:
+        if target_id in axiomatic_ids:
+            continue
         if target_id not in by_target:
             summary.unverified += 1  # 声明抽取没给 claim
             continue

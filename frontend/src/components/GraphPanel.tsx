@@ -141,6 +141,9 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
   const [selected, setSelected] = useState<NodeData | null>(null);
   const [showEdgeLabels, setShowEdgeLabels] = useState(true);
   const [reportOpen, setReportOpen] = useState(false);
+  const [reportTopic, setReportTopic] = useState("");
+  const [showReportConfirm, setShowReportConfirm] = useState(false);
+  const [showGroundConfirm, setShowGroundConfirm] = useState(false);
   const [groundNote, setGroundNote] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
@@ -159,15 +162,14 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
     if (refreshKey !== undefined) void refetch();
   }, [refreshKey, refetch]);
 
-  // Phase X1: 证据接地 (增量) — 完成后重拉图 (边变色)
   const groundMut = useMutation({
-    mutationFn: () => groundSession(sid),
+    mutationFn: (incremental: boolean) => groundSession(sid, incremental),
     onSuccess: (res) => {
       const s = res.summary;
       setGroundNote(
         s.targets_total === 0
           ? "无新对象需要接地"
-          : `已接地 ${s.targets_total} 个新对象: 实证 ${s.verified} / 争议 ${s.contested} / 未验证 ${s.unverified}`,
+          : `已接地 ${s.targets_total} 个对象: 实证 ${s.verified} / 争议 ${s.contested} / 未验证 ${s.unverified}`,
       );
       void refetch();
     },
@@ -341,16 +343,16 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
             <button
               type="button"
               className="graph-action-btn"
-              onClick={() => groundMut.mutate()}
+              onClick={() => setShowGroundConfirm(true)}
               disabled={groundMut.isPending}
-              title="对新增的现象与核心因果边检索证据 (增量)"
+              title="对新增的现象与核心因果边检索证据"
             >
               {groundMut.isPending ? "接地中…" : "证据接地"}
             </button>
             <button
               type="button"
               className="graph-action-btn"
-              onClick={() => setReportOpen(true)}
+              onClick={() => { setReportTopic(""); setShowReportConfirm(true); }}
               title="把图谱生成叙事报告 (可下载 markdown)"
             >
               生成报告
@@ -426,7 +428,72 @@ export default function GraphPanel({ sid, refreshKey }: GraphPanelProps) {
         data-testid="graph-canvas"
       />
       <NodeDrawer node={selected} onClose={() => setSelected(null)} />
-      <ReportModal sid={sid} open={reportOpen} onClose={() => setReportOpen(false)} />
+      <ReportModal sid={sid} open={reportOpen} topic={reportTopic} onClose={() => setReportOpen(false)} />
+
+      {/* 证据接地确认框 */}
+      {showGroundConfirm && (
+        <div className="report-overlay" role="dialog" aria-label="证据接地确认">
+          <div className="confirm-dialog">
+            <div className="confirm-dialog-title">证据接地</div>
+            <p className="confirm-dialog-desc">
+              对图谱中的现象节点和核心因果边进行 web 检索验证。
+              公理和定义类断言会自动标记为已验证, 无需搜索。
+            </p>
+            <div className="confirm-dialog-actions">
+              <button className="graph-action-btn" onClick={() => setShowGroundConfirm(false)}>
+                取消
+              </button>
+              <button
+                className="graph-action-btn confirm-btn-primary"
+                onClick={() => { setShowGroundConfirm(false); groundMut.mutate(true); }}
+              >
+                增量接地
+              </button>
+              <button
+                className="graph-action-btn confirm-btn-warn"
+                onClick={() => { setShowGroundConfirm(false); groundMut.mutate(false); }}
+              >
+                全量重接地
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 生成报告确认框 */}
+      {showReportConfirm && (
+        <div className="report-overlay" role="dialog" aria-label="生成报告确认">
+          <div className="confirm-dialog">
+            <div className="confirm-dialog-title">生成叙事报告</div>
+            <p className="confirm-dialog-desc">
+              基于当前图谱生成因果分析报告 (约半分钟)。可指定报告主题, 留空则使用会话原始问题。
+            </p>
+            <input
+              type="text"
+              className="confirm-dialog-input"
+              placeholder="报告主题 (可选)"
+              value={reportTopic}
+              onChange={(e) => setReportTopic(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { setShowReportConfirm(false); setReportOpen(true); }
+                if (e.key === "Escape") setShowReportConfirm(false);
+              }}
+              autoFocus
+            />
+            <div className="confirm-dialog-actions">
+              <button className="graph-action-btn" onClick={() => setShowReportConfirm(false)}>
+                取消
+              </button>
+              <button
+                className="graph-action-btn confirm-btn-primary"
+                onClick={() => { setShowReportConfirm(false); setReportOpen(true); }}
+              >
+                生成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

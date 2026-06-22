@@ -23,7 +23,7 @@ API 备忘 (engine 实际签名, spec 不一定准):
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -41,10 +41,12 @@ class ToolContext:
 
     state: 当前 CognitiveState, tool 可读可写 (e.g. expand/compress mutate graph).
     llm: 可选 LLM client; readonly tool (e.g. check) 不需要, 传 None 即可.
+    last_search_results: web_search 最近一次返回的结果, 供 add_observation 自动附加证据。
     """
 
     state: CognitiveState
     llm: LLMClient | None = None
+    last_search_results: list | None = field(default=None)
 
 
 @dataclass
@@ -372,21 +374,87 @@ class _AddObservationInput(BaseModel):
     )
 
 
+def _attach_search_evidence(
+    state: CognitiveState,
+    node_id: str,
+    node_name: str,
+    search_results: list,
+) -> tuple[list[str], str, str | None]:
+    """把最近的 web_search 结果作为初始证据附加到新节点。
+
+    搜索结果被视为 support（LLM 基于这些结果创建了节点）。
+    返回 (evidence_ids, evidence_state, grounded_at)。
+    """
+    from datetime import UTC, datetime
+    from urllib.parse import urlparse
+
+    from explain_engine.schema.evidence import Evidence
+
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    ev_ids: list[str] = []
+    domains: set[str] = set()
+
+    existing_ev_nums = [
+        int(eid.split("_")[1])
+        for eid in state.evidence
+        if eid.startswith("ev_") and eid[3:].isdigit()
+    ]
+    next_num = (max(existing_ev_nums) + 1) if existing_ev_nums else 1
+
+    for r in search_results[:5]:
+        eid = f"ev_{next_num:03d}"
+        next_num += 1
+        ev = Evidence(
+            id=eid,
+            claim=node_name,
+            url=r.url,
+            title=r.title,
+            snippet=r.snippet,
+            stance="support",
+            retrieved_at=now,
+        )
+        state.evidence[eid] = ev
+        ev_ids.append(eid)
+        netloc = urlparse(r.url).netloc.lower().removeprefix("www.")
+        domains.add(netloc)
+
+    if len(domains) >= 2:
+        evidence_state = "verified"
+    else:
+        evidence_state = "unverified"
+
+    return ev_ids, evidence_state, now
+
+
 async def _add_observation_call(input: BaseModel, ctx: ToolContext) -> str:
     """Add L0 node to graph. HITL gate (Task D.1) intercepts before this for llm_inferred."""
     assert isinstance(input, _AddObservationInput)
     nid = _next_p_id(ctx.state)
-    # source field reflects authoring agent: user_explicit → user-typed it;
-    # llm_inferred → LLM proposed (may be HITL-confirmed by Task D.1, but author remains LLM)
     node_source = "user" if input.source == "user_explicit" else "llm"
+
+    ev_ids: list[str] = []
+    evidence_state: str = "unverified"
+    grounded_at: str | None = None
+
+    search_results = ctx.last_search_results
+    if search_results:
+        ctx.last_search_results = None
+        ev_ids, evidence_state, grounded_at = _attach_search_evidence(
+            ctx.state, nid, input.name, search_results,
+        )
+
     ctx.state.graph.add_node(VariableNode(
         id=nid, name=input.name, description=input.description,
         abstraction_level=0, confidence=0.7, epistemic="observation",
         source=node_source,
+        evidence_ids=ev_ids,
+        evidence_state=evidence_state,
+        grounded_at=grounded_at,
     ))
+    ev_note = f", {len(ev_ids)} 条搜索证据已附加 → {evidence_state}" if ev_ids else ""
     return (
         f"added L0 observation {nid}: {input.name} "
-        f"(source={input.source}, node_source={node_source})"
+        f"(source={input.source}, node_source={node_source}{ev_note})"
     )
 
 
@@ -460,6 +528,7 @@ async def _web_search_call(input: BaseModel, ctx: ToolContext) -> str:
         return f"web_search 失败: {type(exc).__name__}: {exc}"
     if not results:
         return f"web_search '{input.query}': 无结果"
+    ctx.last_search_results = list(results)
     lines = [f"web_search '{input.query}' — {len(results)} 条结果:"]
     for i, r in enumerate(results, 1):
         lines.append(f"[{i}] {r.title}\n    {r.url}\n    {r.snippet}")

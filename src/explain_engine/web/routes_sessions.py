@@ -86,11 +86,16 @@ async def get_transcript(sid: str) -> list[dict[str, Any]]:
     return chat.transcript
 
 
+class ReportBody(BaseModel):
+    topic: str | None = None
+
+
 @router.post("/{sid}/report")
-async def generate_session_report(sid: str) -> dict[str, Any]:
+async def generate_session_report(sid: str, body: ReportBody | None = None) -> dict[str, Any]:
     """Phase X1: 叙事报告 Web 化 — 滩头用户的一等交付物。
 
     1 次 LLM 调用 (数十秒), 前端 loading 等待; 失败返 502。
+    可传 topic 字段指定报告主题, 否则默认用 session 的 root_question。
     """
     from fastapi import HTTPException
 
@@ -98,8 +103,9 @@ async def generate_session_report(sid: str) -> dict[str, Any]:
     from explain_engine.report.narrative import generate_report
 
     chat = load_chat_or_404(sid)
+    topic = (body.topic or "").strip() if body else ""
     try:
-        text = await generate_report(chat.state, make_llm_client())
+        text = await generate_report(chat.state, make_llm_client(), topic=topic or None)
     except Exception as exc:
         raise HTTPException(
             status_code=502, detail=f"报告生成失败: {type(exc).__name__}: {exc}",
@@ -107,10 +113,15 @@ async def generate_session_report(sid: str) -> dict[str, Any]:
     return {"markdown": text}
 
 
-@router.post("/{sid}/ground")
-async def ground_session(sid: str) -> dict[str, Any]:
-    """Phase X1: 证据接地 Web 化 (增量, 与 explain ground 同管线)。
+class GroundBody(BaseModel):
+    incremental: bool = True
 
+
+@router.post("/{sid}/ground")
+async def ground_session(sid: str, body: GroundBody | None = None) -> dict[str, Any]:
+    """Phase X1: 证据接地 Web 化 (与 explain ground 同管线)。
+
+    incremental=true (默认): 只接地新增对象; false: 全量重接地。
     需要联网; 走 light model。耗时与新对象数成正比 (通常 <1 分钟)。
     """
     from fastapi import HTTPException
@@ -122,9 +133,10 @@ async def ground_session(sid: str) -> dict[str, Any]:
         ground_state,
     )
 
+    incremental = body.incremental if body else True
     chat = load_chat_or_404(sid)
     try:
-        summary = await ground_state(chat.state, make_light_llm_client())
+        summary = await ground_state(chat.state, make_light_llm_client(), incremental=incremental)
     except Exception as exc:
         raise HTTPException(
             status_code=502, detail=f"接地失败: {type(exc).__name__}: {exc}",

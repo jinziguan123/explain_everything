@@ -30,9 +30,9 @@ REPORT_INSTRUCTIONS = """\
    不允许把假设写成事实。
 4. 档案标注了"⚠ 弱链"或"解释残差"的内容必须在第六节如实呈现。
 5. 若档案声明"证据接地: 未执行", 必须在报告开头注明本报告全部内容未经外部验证。
-
+{topic_instruction}
 报告结构 (用这些标题):
-# 解释报告: <问题>
+# 解释报告: {title_placeholder}
 ## 一、结论概要 (200 字内, 给出最核心的解释结构)
 ## 二、表层诱因 (现象之间最直接的关联)
 ## 三、深层机制 (L1/L2 变量如何生成这些现象, 按因果链展开)
@@ -49,11 +49,30 @@ async def generate_report(
     llm: LLMClient,
     prior_causes: list[str] | None = None,
     model: str | None = None,
+    topic: str | None = None,
 ) -> str:
-    """从收敛的 CognitiveState 生成叙事报告 markdown (1 次 LLM call)。"""
+    """从收敛的 CognitiveState 生成叙事报告 markdown (1 次 LLM call)。
+
+    topic: 用户指定的报告主题。若提供, 报告围绕该主题展开并从图谱中
+    筛选相关内容; 否则默认用 state.root_question。
+    """
     dossier = build_dossier(state, prior_causes=prior_causes)
+    if topic:
+        topic_instruction = (
+            f'6. 用户指定了报告主题: “{topic}”。报告必须围绕此主题展开, '
+            "从档案中筛选与该主题最相关的变量和因果链进行分析, "
+            "而非平铺所有档案内容。标题使用用户指定的主题。\n"
+        )
+        title_placeholder = topic
+    else:
+        topic_instruction = ""
+        title_placeholder = "<问题>"
+    instructions = REPORT_INSTRUCTIONS.format(
+        topic_instruction=topic_instruction,
+        title_placeholder=title_placeholder,
+    )
     resp = await llm.chat(
-        [Message(role="user", content=f"{REPORT_INSTRUCTIONS}\n\n---\n\n{dossier}")],
+        [Message(role="user", content=f"{instructions}\n\n---\n\n{dossier}")],
         model=model,
     )
     return resp.text.strip()
